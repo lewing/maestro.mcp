@@ -311,7 +311,7 @@ public class MaestroMcpTools
     }
 
     [McpServerTool(Name = "maestro_clear_cache")]
-    [Description("Clear all cached Maestro data. Use after performing actions or when you need guaranteed fresh data from all tools.")]
+    [Description("Clear all cached Maestro data (shared across all mstro instances). Use after performing actions or when you need guaranteed fresh data from all tools.")]
     public string ClearCache()
     {
         _cache.Clear();

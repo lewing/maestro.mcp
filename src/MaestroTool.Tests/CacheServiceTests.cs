@@ -3,12 +3,30 @@ using Xunit;
 
 namespace MaestroTool.Tests;
 
-public class CacheServiceTests
+public class CacheServiceTests : IDisposable
 {
+    private readonly string _dbPath;
+
+    public CacheServiceTests()
+    {
+        _dbPath = Path.Combine(Path.GetTempPath(), $"mstro-test-{Guid.NewGuid()}.db");
+    }
+
+    public void Dispose()
+    {
+        // Clean up temp database files
+        foreach (var f in Directory.GetFiles(Path.GetTempPath(), Path.GetFileName(_dbPath) + "*"))
+        {
+            try { File.Delete(f); } catch { }
+        }
+    }
+
+    private CacheService CreateCache() => new(_dbPath);
+
     [Fact]
     public async Task GetOrAddAsync_ReturnsCachedValue()
     {
-        var cache = new CacheService();
+        var cache = CreateCache();
         var callCount = 0;
 
         var result1 = await cache.GetOrAddAsync("key1", async () =>
@@ -31,7 +49,7 @@ public class CacheServiceTests
     [Fact]
     public async Task GetOrAddAsync_RefreshesAfterExpiry()
     {
-        var cache = new CacheService();
+        var cache = CreateCache();
         var callCount = 0;
 
         var result1 = await cache.GetOrAddAsync("key1", async () =>
@@ -56,7 +74,7 @@ public class CacheServiceTests
     [Fact]
     public async Task Invalidate_RemovesKey()
     {
-        var cache = new CacheService();
+        var cache = CreateCache();
         await cache.GetOrAddAsync("key1", () => Task.FromResult("value1"), TimeSpan.FromMinutes(5));
 
         cache.Invalidate("key1");
@@ -75,7 +93,7 @@ public class CacheServiceTests
     [Fact]
     public async Task InvalidatePrefix_RemovesMatchingKeys()
     {
-        var cache = new CacheService();
+        var cache = CreateCache();
         await cache.GetOrAddAsync("subs:repo1", () => Task.FromResult("v1"), TimeSpan.FromMinutes(5));
         await cache.GetOrAddAsync("subs:repo2", () => Task.FromResult("v2"), TimeSpan.FromMinutes(5));
         await cache.GetOrAddAsync("build:123", () => Task.FromResult("v3"), TimeSpan.FromMinutes(5));
@@ -93,7 +111,7 @@ public class CacheServiceTests
     [Fact]
     public async Task Clear_RemovesAllKeys()
     {
-        var cache = new CacheService();
+        var cache = CreateCache();
         await cache.GetOrAddAsync("key1", () => Task.FromResult("v1"), TimeSpan.FromMinutes(5));
         await cache.GetOrAddAsync("key2", () => Task.FromResult("v2"), TimeSpan.FromMinutes(5));
 
@@ -113,7 +131,7 @@ public class CacheServiceTests
     [Fact]
     public void GetRecentAction_ReturnsNull_WhenNoActionRecorded()
     {
-        var cache = new CacheService();
+        var cache = CreateCache();
 
         var result = cache.GetRecentAction("action:trigger:sub1");
 
@@ -123,7 +141,7 @@ public class CacheServiceTests
     [Fact]
     public void RecordAction_ThenGetRecentAction_ReturnsTimestamp()
     {
-        var cache = new CacheService();
+        var cache = CreateCache();
         var before = DateTimeOffset.UtcNow;
 
         cache.RecordAction("action:trigger:sub1", TimeSpan.FromMinutes(5));
@@ -137,7 +155,7 @@ public class CacheServiceTests
     [Fact]
     public async Task GetRecentAction_ReturnsNull_AfterCooldownExpires()
     {
-        var cache = new CacheService();
+        var cache = CreateCache();
 
         cache.RecordAction("action:trigger:sub1", TimeSpan.FromMilliseconds(50));
 
@@ -152,7 +170,7 @@ public class CacheServiceTests
     [Fact]
     public async Task Clear_DoesNotResetActionRecords()
     {
-        var cache = new CacheService();
+        var cache = CreateCache();
 
         // Populate both regular cache and action records
         await cache.GetOrAddAsync("key1", () => Task.FromResult("v1"), TimeSpan.FromMinutes(5));
@@ -170,7 +188,7 @@ public class CacheServiceTests
     [Fact]
     public void ClearActions_ResetsActionRecords()
     {
-        var cache = new CacheService();
+        var cache = CreateCache();
 
         cache.RecordAction("action:trigger:sub1", TimeSpan.FromMinutes(5));
         Assert.NotNull(cache.GetRecentAction("action:trigger:sub1"));
@@ -187,7 +205,7 @@ public class CacheServiceTests
     [Fact]
     public async Task Cache_RespectsMaxEntries()
     {
-        var cache = new CacheService();
+        var cache = CreateCache();
 
         // Fill cache beyond MaxCacheEntries (10,000)
         for (int i = 0; i < 10_001; i++)
@@ -213,7 +231,7 @@ public class CacheServiceTests
     [Fact]
     public async Task ConcurrentCacheAccess_DoesNotCorrupt()
     {
-        var cache = new CacheService();
+        var cache = CreateCache();
         var callCount = 0;
 
         // Hammer the same key from 100 concurrent tasks

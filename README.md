@@ -157,7 +157,7 @@ The server registers **11 MCP tools** for querying and triggering Maestro/BAR op
 | `maestro_build_freshness` | Check how long since a source repository branch was built | `sourceRepository`: source repo URL; `branch`: branch name; `noCache`: bypass cache |
 | `maestro_trigger_subscription` | Trigger a subscription to process a specific build | `subscriptionId`: UUID; `buildId`: BAR build ID |
 | `maestro_trigger_daily_update` | Trigger all daily-update subscriptions | None |
-| `maestro_clear_cache` | Clear the entire in-memory cache | None |
+| `maestro_clear_cache` | Clear the shared SQLite cache | None |
 
 ### Cache Bypass
 
@@ -184,21 +184,69 @@ src/
 ├── MaestroTool.Core/         # Shared library — Maestro API logic + MCP tool definitions
 │   ├── MaestroMcpTools.cs    # MCP tool definitions ([McpServerToolType])
 │   ├── MaestroService.cs     # Cached business logic
-│   ├── CacheService.cs       # In-memory TTL cache
+│   ├── CacheService.cs       # SQLite-backed cross-process cache
 │   ├── IMaestroApiClient.cs  # API abstraction
 │   └── MaestroApiClient.cs   # PCS client wrapper with auth cascade
 ├── MaestroTool.Mcp/          # MCP HTTP server (ASP.NET Core)
 │   └── Program.cs
-└── MaestroTool.Tests/        # Unit tests (35 tests)
+└── MaestroTool.Tests/        # Unit tests (67 tests)
 ```
 
 - **MaestroTool** — stdio MCP server packaged as a [dotnet tool](https://learn.microsoft.com/dotnet/core/tools/global-tools). Default entry point for `dnx` / `dotnet tool` usage.
 - **MaestroTool.Mcp** — HTTP MCP server for remote/shared deployments.
 - **MaestroTool.Core** — All business logic, caching, API client, and MCP tool definitions. Shared by both hosts.
 
+### Cross-Process Cache Architecture
+
+Multiple `mstro` instances (e.g., VS Code, Copilot CLI, and Claude Desktop running simultaneously) share a single SQLite cache at `~/.mstro/cache.db`. This eliminates redundant PCS API calls across clients.
+
+```mermaid
+graph TB
+    subgraph "MCP Clients"
+        VSCode["VS Code<br/>Copilot Extension"]
+        CLI["GitHub<br/>Copilot CLI"]
+        Claude["Claude<br/>Desktop"]
+    end
+
+    subgraph "mstro Instances (separate processes)"
+        M1["mstro<br/>MaestroMcpTools<br/>↓<br/>MaestroService"]
+        M2["mstro<br/>MaestroMcpTools<br/>↓<br/>MaestroService"]
+        M3["mstro<br/>MaestroMcpTools<br/>↓<br/>MaestroService"]
+    end
+
+    subgraph "Shared State"
+        DB[("~/.mstro/cache.db<br/>SQLite (WAL mode)<br/>─────────────<br/>cache table (data)<br/>actions table (dedup)")]
+    end
+
+    subgraph "External API"
+        PCS["Maestro / PCS API<br/>maestro.dot.net"]
+    end
+
+    VSCode -- "stdio" --> M1
+    CLI -- "stdio" --> M2
+    Claude -- "stdio" --> M3
+
+    M1 -- "read/write" --> DB
+    M2 -- "read/write" --> DB
+    M3 -- "read/write" --> DB
+
+    M1 -. "on cache miss" .-> PCS
+    M2 -. "on cache miss" .-> PCS
+    M3 -. "on cache miss" .-> PCS
+
+    style DB fill:#f9f,stroke:#333,stroke-width:2px
+    style PCS fill:#bbf,stroke:#333
+```
+
+**Key design decisions:**
+- **WAL (Write-Ahead Logging)** mode enables concurrent reads across processes without blocking
+- **Separate tables** for data cache and action dedup — `maestro_clear_cache` only clears data, trigger cooldowns survive
+- **Per-key TTL** expiration with periodic cleanup of expired rows
+- **10,000 entry cap** with auto-eviction when capacity is reached
+
 ## Cache TTLs
 
-The `CacheService` respects the following cache durations to balance freshness and performance:
+The `CacheService` uses **SQLite with WAL mode** for cross-process cache sharing. All `mstro` instances share `~/.mstro/cache.db`:
 
 | Data Type | TTL | Reason |
 |-----------|-----|--------|
@@ -208,7 +256,7 @@ The `CacheService` respects the following cache durations to balance freshness a
 | Build by ID | 30 minutes | Builds are immutable once published |
 | Build freshness (derived) | 10 minutes | Computed; cached to avoid repeated API calls |
 
-TTLs are configurable in `CacheService` if stricter freshness is needed.
+TTLs are configurable in `CacheService` if stricter freshness is needed. Expired entries are automatically cleaned up periodically.
 
 ## Testing
 
@@ -219,7 +267,7 @@ dotnet test
 ```
 
 The test suite includes:
-- **35 unit tests** covering `CacheService` and `MaestroService` behavior.
+- **67 unit tests** covering `CacheService` and `MaestroService` behavior.
 - **Framework**: xUnit + NSubstitute for mocking.
 - **Coverage**: cache hit/miss, TTL expiration, null handling, error scenarios.
 

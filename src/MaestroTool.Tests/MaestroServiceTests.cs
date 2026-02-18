@@ -5,17 +5,27 @@ using Xunit;
 
 namespace MaestroTool.Tests;
 
-public class MaestroServiceTests
+public class MaestroServiceTests : IDisposable
 {
     private readonly IMaestroApiClient _client;
     private readonly CacheService _cache;
     private readonly MaestroService _service;
+    private readonly string _dbPath;
 
     public MaestroServiceTests()
     {
+        _dbPath = Path.Combine(Path.GetTempPath(), $"mstro-test-{Guid.NewGuid()}.db");
         _client = Substitute.For<IMaestroApiClient>();
-        _cache = new CacheService();
+        _cache = new CacheService(_dbPath);
         _service = new MaestroService(_client, _cache);
+    }
+
+    public void Dispose()
+    {
+        foreach (var f in Directory.GetFiles(Path.GetTempPath(), Path.GetFileName(_dbPath) + "*"))
+        {
+            try { File.Delete(f); } catch { }
+        }
     }
 
     // --- Helper factories ---
@@ -77,7 +87,7 @@ public class MaestroServiceTests
         var result = await _service.GetSubscriptionsAsync();
 
         Assert.Single(result);
-        Assert.Same(expected, result);
+        Assert.Equal(expected[0].Id, result[0].Id);
     }
 
     [Fact]
@@ -90,7 +100,7 @@ public class MaestroServiceTests
         var first = await _service.GetSubscriptionsAsync();
         var second = await _service.GetSubscriptionsAsync();
 
-        Assert.Same(first, second);
+        Assert.Equal(first[0].Id, second[0].Id);
         await _client.Received(1).ListSubscriptionsAsync(null, null, null, true, Arg.Any<CancellationToken>());
     }
 
@@ -133,7 +143,7 @@ public class MaestroServiceTests
 
         var result = await _service.GetSubscriptionsAsync(channelId: 42);
 
-        Assert.Same(expected, result);
+        Assert.Equal(expected[0].Id, result[0].Id);
     }
 
     // ================================================================
@@ -163,7 +173,7 @@ public class MaestroServiceTests
         var first = await _service.GetSubscriptionAsync(id);
         var second = await _service.GetSubscriptionAsync(id);
 
-        Assert.Same(first, second);
+        Assert.Equal(first.Id, second.Id);
         await _client.Received(1).GetSubscriptionAsync(id, Arg.Any<CancellationToken>());
     }
 
@@ -223,7 +233,7 @@ public class MaestroServiceTests
         var first = await _service.GetLatestBuildAsync("https://github.com/dotnet/runtime");
         var second = await _service.GetLatestBuildAsync("https://github.com/dotnet/runtime");
 
-        Assert.Same(first, second);
+        Assert.Equal(first!.Id, second!.Id);
         await _client.Received(1).GetLatestBuildAsync("https://github.com/dotnet/runtime", null, Arg.Any<CancellationToken>());
     }
 
@@ -267,7 +277,7 @@ public class MaestroServiceTests
         var first = await _service.GetBuildAsync(77);
         var second = await _service.GetBuildAsync(77);
 
-        Assert.Same(first, second);
+        Assert.Equal(first.Id, second.Id);
         await _client.Received(1).GetBuildAsync(77, Arg.Any<CancellationToken>());
     }
 
@@ -584,8 +594,8 @@ public class MaestroServiceTests
         var first = await _service.GetSubscriptionsAsync();
         var second = await _service.GetSubscriptionsAsync(noCache: true);
 
-        Assert.Same(firstResult, first);
-        Assert.Same(secondResult, second);
+        Assert.Equal(firstResult[0].SourceRepository, first[0].SourceRepository);
+        Assert.Equal(secondResult[0].SourceRepository, second[0].SourceRepository);
         await _client.Received(2).ListSubscriptionsAsync(null, null, null, true, Arg.Any<CancellationToken>());
     }
 
@@ -599,7 +609,7 @@ public class MaestroServiceTests
         var first = await _service.GetSubscriptionsAsync(noCache: false);
         var second = await _service.GetSubscriptionsAsync(noCache: false);
 
-        Assert.Same(first, second);
+        Assert.Equal(first[0].Id, second[0].Id);
         await _client.Received(1).ListSubscriptionsAsync(null, null, null, true, Arg.Any<CancellationToken>());
     }
 
@@ -615,8 +625,8 @@ public class MaestroServiceTests
         var first = await _service.GetChannelsAsync();
         var second = await _service.GetChannelsAsync(noCache: true);
 
-        Assert.Same(firstResult, first);
-        Assert.Same(secondResult, second);
+        Assert.Equal(firstResult[0].Id, first[0].Id);
+        Assert.Equal(secondResult[0].Id, second[0].Id);
         await _client.Received(2).ListChannelsAsync(Arg.Any<CancellationToken>());
     }
 
@@ -630,7 +640,7 @@ public class MaestroServiceTests
         var first = await _service.GetChannelsAsync(noCache: false);
         var second = await _service.GetChannelsAsync(noCache: false);
 
-        Assert.Same(first, second);
+        Assert.Equal(first[0].Id, second[0].Id);
         await _client.Received(1).ListChannelsAsync(Arg.Any<CancellationToken>());
     }
 
@@ -648,7 +658,7 @@ public class MaestroServiceTests
 
         var result = await _service.TriggerSubscriptionAsync(subId, 42);
 
-        Assert.Same(expected, result);
+        Assert.Equal(expected.Id, result.Id);
         await _client.Received(1).TriggerSubscriptionAsync(subId, 42, Arg.Any<CancellationToken>());
     }
 

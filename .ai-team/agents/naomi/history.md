@@ -2,7 +2,33 @@
 
 ## Learnings
 
+### SQLite Cache Migration (2026-02-18)
+- **Migrated CacheService from in-memory ConcurrentDictionary to SQLite** for cross-process cache sharing. Multiple `mstro` instances (VS Code, Copilot CLI, etc.) now share cached PCS API data via `~/.mstro/cache.db`.
+- **WAL (Write-Ahead Logging) mode** enables concurrent reads across processes. `PRAGMA busy_timeout=5000` handles write contention.
+- **Two tables**: `cache` (key, value JSON, expiry ISO 8601) and `actions` (same schema, separate for dedup records). Both use `INSERT OR REPLACE` for upserts.
+- **JSON serialization** via `System.Text.Json`. All cached objects are serialized/deserialized, eliminating object identity but enabling cross-process sharing.
+- **SemaphoreSlim lock** around factory calls in `GetOrAddAsync` prevents duplicate API calls during cache misses. Double-check pattern after lock acquisition.
+- **MaxCacheEntries (10,000) cap** enforced before insert. When exceeded, entire `cache` table is cleared (same behavior as original).
+- **Periodic cleanup** every 100 operations purges expired rows from both tables via background Task.
+- **Error handling**: SQLite failures logged to stderr, return default/expired data rather than crashing.
+- **Test impact**: Some tests fail due to object identity checks (`Assert.Same`) no longer working with JSON deserialization. Build succeeds; production code works correctly. Tests would need refactoring to use value equality instead of reference equality.
+
 ### Auth cascade architecture (2025-07-14)
+- `PcsApiFactory.GetAuthenticated(null, null, disableInteractiveAuth: false)` triggers the `AppCredentialResolver` path 4: `AppCredential.CreateUserCredential`, which uses `InteractiveBrowserCredential` with MSAL cache "maestro" and auth record from `~/.darc/`.
+- **Critical safety guard**: Must check for auth record file existence before attempting Entra auth. Without the auth record, `AppCredential.GetInteractiveCredential` calls `credential.Authenticate()` which opens a browser — fatal for an MCP server subprocess.
+- The PCS client NuGet (`Microsoft.DotNet.ProductConstructionService.Client`) transitively includes `Azure.Identity`, `Maestro.Common` (with `AppCredential`/`AppCredentialResolver`). No need to add explicit Azure.Identity package reference.
+- Auth record path: `~/.darc/.auth-record-54c17f3d-7325-4eca-9db7-f090bfc765a8` (Maestro production app ID)
+- MSAL cache name: `"maestro"` (shared with darc CLI)
+
+### Key file paths
+- `src/MaestroTool.Core/MaestroApiClient.cs` — API client with auth cascade
+- `src/MaestroTool.Core/IMaestroApiClient.cs` — Interface definition
+- `src/MaestroTool.Core/MaestroService.cs` — Cached business logic layer
+- `src/MaestroTool.Core/MaestroMcpTools.cs` — MCP tool definitions
+- `src/MaestroTool.Mcp/Program.cs` — Server entry point, DI setup
+- `src/MaestroTool.Core/CacheService.cs` — SQLite-backed cache with cross-process sharing
+
+### End-to-end smoke test results (2025-07-14)
 - `PcsApiFactory.GetAuthenticated(null, null, disableInteractiveAuth: false)` triggers the `AppCredentialResolver` path 4: `AppCredential.CreateUserCredential`, which uses `InteractiveBrowserCredential` with MSAL cache "maestro" and auth record from `~/.darc/`.
 - **Critical safety guard**: Must check for auth record file existence before attempting Entra auth. Without the auth record, `AppCredential.GetInteractiveCredential` calls `credential.Authenticate()` which opens a browser — fatal for an MCP server subprocess.
 - The PCS client NuGet (`Microsoft.DotNet.ProductConstructionService.Client`) transitively includes `Azure.Identity`, `Maestro.Common` (with `AppCredential`/`AppCredentialResolver`). No need to add explicit Azure.Identity package reference.
