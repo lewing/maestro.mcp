@@ -15,3 +15,12 @@
 - **Project targets `net10.0`** with `xunit 2.*`, `NSubstitute 5.*`. Tests run fine with `dotnet test`.
 
 📌 Team update (2026-02-18): GetBuildFreshnessAsync is untestable without refactoring (IHttpClientFactory injection or new abstraction) — observation by Amos
+
+### 2025-07-15 — v0.2.0 feature tests added
+
+- **13 new tests written** (48 total, all passing) covering v0.2.0 features: action dedup, noCache bypass, trigger methods, and MaestroToolOptions defaults.
+- **CacheService action dedup** (`GetRecentAction`/`RecordAction`): 4 tests in `CacheServiceTests.cs`. Used short TTL (50ms) + `Task.Delay(100)` for expiry tests — same pattern as existing `GetOrAddAsync_RefreshesAfterExpiry`. Key finding: `Clear()` wipes both regular cache entries and action records since they share the same `ConcurrentDictionary`.
+- **MaestroService noCache**: 4 tests in `MaestroServiceTests.cs`. Verified that `noCache: true` invalidates before fetch (API called twice), while `noCache: false` returns cached (API called once). Tested on both `GetSubscriptionsAsync` and `GetChannelsAsync`.
+- **MaestroService trigger methods**: 4 tests in `MaestroServiceTests.cs`. `TriggerSubscriptionAsync` invalidates both `sub:{id}` and `subs:` prefix. `TriggerDailyUpdateAsync` invalidates `subs:` prefix. Verified by checking that subsequent reads hit the API again (Received(2) assertions).
+- **MaestroToolOptions**: 1 test in new `MaestroToolOptionsTests.cs`. Simple default-value assertion.
+- **NSubstitute `.Returns(first, second)` pattern**: Used for noCache tests where the same mock call must return different values on successive invocations. Clean way to test cache bypass.

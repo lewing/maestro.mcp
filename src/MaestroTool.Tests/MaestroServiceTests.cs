@@ -567,4 +567,145 @@ public class MaestroServiceTests
         Assert.NotNull(r.LastAppliedDate);
         Assert.NotNull(r.LatestBuildDate);
     }
+
+    // ================================================================
+    // noCache parameter tests
+    // ================================================================
+
+    [Fact]
+    public async Task GetSubscriptions_NoCache_BypassesCache()
+    {
+        var firstResult = new List<Subscription> { CreateSubscription(source: "repo1") };
+        var secondResult = new List<Subscription> { CreateSubscription(source: "repo2") };
+
+        _client.ListSubscriptionsAsync(null, null, null, true, Arg.Any<CancellationToken>())
+            .Returns(firstResult, secondResult);
+
+        var first = await _service.GetSubscriptionsAsync();
+        var second = await _service.GetSubscriptionsAsync(noCache: true);
+
+        Assert.Same(firstResult, first);
+        Assert.Same(secondResult, second);
+        await _client.Received(2).ListSubscriptionsAsync(null, null, null, true, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetSubscriptions_NoCacheFalse_ReturnsCached()
+    {
+        var expected = new List<Subscription> { CreateSubscription() };
+        _client.ListSubscriptionsAsync(null, null, null, true, Arg.Any<CancellationToken>())
+            .Returns(expected);
+
+        var first = await _service.GetSubscriptionsAsync(noCache: false);
+        var second = await _service.GetSubscriptionsAsync(noCache: false);
+
+        Assert.Same(first, second);
+        await _client.Received(1).ListSubscriptionsAsync(null, null, null, true, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetChannels_NoCache_BypassesCache()
+    {
+        var firstResult = new List<Channel> { CreateChannel(1, ".NET 10") };
+        var secondResult = new List<Channel> { CreateChannel(2, ".NET 9") };
+
+        _client.ListChannelsAsync(Arg.Any<CancellationToken>())
+            .Returns(firstResult, secondResult);
+
+        var first = await _service.GetChannelsAsync();
+        var second = await _service.GetChannelsAsync(noCache: true);
+
+        Assert.Same(firstResult, first);
+        Assert.Same(secondResult, second);
+        await _client.Received(2).ListChannelsAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetChannels_NoCacheFalse_ReturnsCached()
+    {
+        var expected = new List<Channel> { CreateChannel() };
+        _client.ListChannelsAsync(Arg.Any<CancellationToken>())
+            .Returns(expected);
+
+        var first = await _service.GetChannelsAsync(noCache: false);
+        var second = await _service.GetChannelsAsync(noCache: false);
+
+        Assert.Same(first, second);
+        await _client.Received(1).ListChannelsAsync(Arg.Any<CancellationToken>());
+    }
+
+    // ================================================================
+    // Trigger method tests
+    // ================================================================
+
+    [Fact]
+    public async Task TriggerSubscription_CallsThroughToClient()
+    {
+        var subId = Guid.NewGuid();
+        var expected = CreateSubscription(id: subId);
+        _client.TriggerSubscriptionAsync(subId, 42, Arg.Any<CancellationToken>())
+            .Returns(expected);
+
+        var result = await _service.TriggerSubscriptionAsync(subId, 42);
+
+        Assert.Same(expected, result);
+        await _client.Received(1).TriggerSubscriptionAsync(subId, 42, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task TriggerDailyUpdate_CallsThroughToClient()
+    {
+        await _service.TriggerDailyUpdateAsync();
+
+        await _client.Received(1).TriggerDailyUpdateAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task TriggerSubscription_InvalidatesRelatedCaches()
+    {
+        var subId = Guid.NewGuid();
+        var sub = CreateSubscription(id: subId);
+        var subs = new List<Subscription> { sub };
+
+        // Setup: populate caches
+        _client.ListSubscriptionsAsync(null, null, null, true, Arg.Any<CancellationToken>())
+            .Returns(subs);
+        _client.GetSubscriptionAsync(subId, Arg.Any<CancellationToken>())
+            .Returns(sub);
+        _client.TriggerSubscriptionAsync(subId, 1, Arg.Any<CancellationToken>())
+            .Returns(sub);
+
+        // Populate caches
+        await _service.GetSubscriptionsAsync();
+        await _service.GetSubscriptionAsync(subId);
+
+        // Trigger should invalidate
+        await _service.TriggerSubscriptionAsync(subId, 1);
+
+        // Next reads should hit API again
+        await _service.GetSubscriptionsAsync();
+        await _service.GetSubscriptionAsync(subId);
+
+        await _client.Received(2).ListSubscriptionsAsync(null, null, null, true, Arg.Any<CancellationToken>());
+        await _client.Received(2).GetSubscriptionAsync(subId, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task TriggerDailyUpdate_InvalidatesSubscriptionCaches()
+    {
+        var subs = new List<Subscription> { CreateSubscription() };
+        _client.ListSubscriptionsAsync(null, null, null, true, Arg.Any<CancellationToken>())
+            .Returns(subs);
+
+        // Populate cache
+        await _service.GetSubscriptionsAsync();
+
+        // Trigger daily update
+        await _service.TriggerDailyUpdateAsync();
+
+        // Next read should hit API again
+        await _service.GetSubscriptionsAsync();
+
+        await _client.Received(2).ListSubscriptionsAsync(null, null, null, true, Arg.Any<CancellationToken>());
+    }
 }

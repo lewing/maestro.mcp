@@ -105,4 +105,65 @@ public class CacheServiceTests
 
         Assert.Equal(2, count);
     }
+
+    // ================================================================
+    // Action dedup (GetRecentAction / RecordAction)
+    // ================================================================
+
+    [Fact]
+    public void GetRecentAction_ReturnsNull_WhenNoActionRecorded()
+    {
+        var cache = new CacheService();
+
+        var result = cache.GetRecentAction("action:trigger:sub1");
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void RecordAction_ThenGetRecentAction_ReturnsTimestamp()
+    {
+        var cache = new CacheService();
+        var before = DateTimeOffset.UtcNow;
+
+        cache.RecordAction("action:trigger:sub1", TimeSpan.FromMinutes(5));
+        var result = cache.GetRecentAction("action:trigger:sub1");
+
+        Assert.NotNull(result);
+        Assert.True(result!.Value >= before);
+        Assert.True(result.Value <= DateTimeOffset.UtcNow);
+    }
+
+    [Fact]
+    public async Task GetRecentAction_ReturnsNull_AfterCooldownExpires()
+    {
+        var cache = new CacheService();
+
+        cache.RecordAction("action:trigger:sub1", TimeSpan.FromMilliseconds(50));
+
+        // Immediately should be non-null
+        Assert.NotNull(cache.GetRecentAction("action:trigger:sub1"));
+
+        await Task.Delay(100); // Wait for cooldown to expire
+
+        Assert.Null(cache.GetRecentAction("action:trigger:sub1"));
+    }
+
+    [Fact]
+    public async Task Clear_ResetsActionRecords()
+    {
+        var cache = new CacheService();
+
+        // Populate both regular cache and action records
+        await cache.GetOrAddAsync("key1", () => Task.FromResult("v1"), TimeSpan.FromMinutes(5));
+        cache.RecordAction("action:trigger:sub1", TimeSpan.FromMinutes(5));
+
+        cache.Clear();
+
+        // Both should be gone
+        var count = 0;
+        await cache.GetOrAddAsync("key1", () => { count++; return Task.FromResult("new"); }, TimeSpan.FromMinutes(5));
+        Assert.Equal(1, count); // Cache entry was cleared
+        Assert.Null(cache.GetRecentAction("action:trigger:sub1")); // Action record was cleared
+    }
 }
