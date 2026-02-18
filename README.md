@@ -1,6 +1,6 @@
 # maestro.mcp — MCP server for Maestro/BAR dependency flow data
 
-An MCP server that provides cached access to [Maestro/BAR](https://maestro.dot.net) (Build Asset Registry) data for the .NET build infrastructure. Exposes 10 tools for querying subscriptions, builds, channels, and health status, plus triggering subscription updates via the Model Context Protocol.
+An MCP server that provides cached access to [Maestro/BAR](https://maestro.dot.net) (Build Asset Registry) data for the .NET build infrastructure. Exposes 11 tools for querying subscriptions, builds, channels, and health status, plus triggering subscription updates and managing cache via the Model Context Protocol.
 
 Built with [Squad](https://github.com/bradygaster/squad) — [meet the squad](.ai-team/SQUAD.md).
 
@@ -143,20 +143,35 @@ Future versions may include destructive actions (delete subscription, remove def
 
 ## Available Tools
 
-The server registers **10 MCP tools** for querying and triggering Maestro/BAR operations:
+The server registers **11 MCP tools** for querying and triggering Maestro/BAR operations:
 
 | Tool Name | Description | Key Parameters |
 |-----------|-------------|-----------------|
-| `maestro_subscriptions` | List all subscriptions | `sourceRepository` (optional): filter by source repo |
-| `maestro_subscription` | Get a single subscription by ID | `subscriptionId`: UUID of the subscription |
-| `maestro_latest_build` | Get the latest build from a channel | `channelId`: channel ID; `sourceRepository`: source repo URL |
-| `maestro_build` | Get a build by ID | `buildId`: build ID |
-| `maestro_channels` | List all channels | None |
-| `maestro_default_channels` | Get default channels for a repository | `repository`: source repository URL |
-| `maestro_subscription_health` | Get health status of a subscription (awaiting build, failed, etc.) | `subscriptionId`: UUID; includes freshness, branch, and error details |
-| `maestro_build_freshness` | Check how long since a source repository branch was built | `sourceRepository`: source repo URL; `branch`: branch name (e.g., `refs/heads/main`) |
+| `maestro_subscriptions` | List all subscriptions | `sourceRepository` (optional): filter by source repo; `noCache`: bypass cache |
+| `maestro_subscription` | Get a single subscription by ID | `subscriptionId`: UUID; `noCache`: bypass cache |
+| `maestro_latest_build` | Get the latest build from a channel | `channelId`: channel ID; `sourceRepository`: source repo URL; `noCache`: bypass cache |
+| `maestro_build` | Get a build by ID | `buildId`: build ID; `noCache`: bypass cache |
+| `maestro_channels` | List all channels | `noCache`: bypass cache |
+| `maestro_default_channels` | Get default channels for a repository | `repository`: source repository URL; `noCache`: bypass cache |
+| `maestro_subscription_health` | Get health status of a subscription (awaiting build, failed, etc.) | `subscriptionId`: UUID; `noCache`: bypass cache |
+| `maestro_build_freshness` | Check how long since a source repository branch was built | `sourceRepository`: source repo URL; `branch`: branch name; `noCache`: bypass cache |
 | `maestro_trigger_subscription` | Trigger a subscription to process a specific build | `subscriptionId`: UUID; `buildId`: BAR build ID |
 | `maestro_trigger_daily_update` | Trigger all daily-update subscriptions | None |
+| `maestro_clear_cache` | Clear the entire in-memory cache | None |
+
+### Cache Bypass
+
+All read tools accept an optional `noCache` boolean parameter. When set to `true`, the cached entry for that request is invalidated before fetching, guaranteeing a fresh API call. Use this after triggering actions or when investigating rapidly changing state.
+
+The `maestro_clear_cache` tool provides a full cache reset — useful when doing bulk operations or debugging stale data.
+
+### Response Timestamps
+
+All read tool responses include a retrieval timestamp header indicating when the data was fetched and whether it came from cache or a fresh API call:
+
+```
+_Retrieved: 2026-02-18 15:30:45Z (cached)_
+```
 
 ## Architecture
 
