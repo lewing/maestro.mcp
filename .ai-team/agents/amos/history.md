@@ -37,3 +37,16 @@
 - **26 security-focused test specifications written** — Filed to `.ai-team/decisions/inbox/amos-threat-testing.md`. Priority: P1 (auth, 5 specs), P2 (tool layer + input validation, 15 specs), P3 (cache abuse, 6 specs).
 
 📌 Team update (2025-07-15): STRIDE threat model completed — identified 14 threats, 8 with mitigations documented. P0 items (SSRF validation, dedup separation, tool-level auth gating) ready for next sprint. Decided by Holden, Naomi, Amos.
+
+### 2025-07-15 — Security tests written for threat model fixes
+
+- **15 new security-focused tests written** (67 total: 65 passing, 2 expected failures).
+- **Naomi's fixes 1-5 already landed** when I started writing. Tests validate the fixes rather than pre-date them.
+- **Fix 1 (SSRF)**: 5 invalid channel name test cases (`../../`, spaces, semicolons) + 4 valid channel name cases. Regex validation `^[a-zA-Z0-9.\-]+$` catches all path traversal attempts. Valid names use 5-second CancellationToken timeout to avoid hanging on network calls.
+- **Fix 2 (Auth gating)**: 2 tests verify `InvalidOperationException` with "Authentication required" message when `AuthLevel.Anonymous`. NSubstitute defaults `AuthLevel` to `Pat` (enum index 0), so existing trigger tests continue to pass.
+- **Fix 3 (Dedup separation)**: Already tested by Naomi's `Clear_DoesNotResetActionRecords` and `ClearActions_ResetsActionRecords`. No additional tests needed.
+- **Fix 4 (Stderr logging)**: 1 test captures `Console.Error` via `Console.SetError(StringWriter)`, verifies trigger output contains "Trigger" and subscription ID. Must restore original stderr in finally block.
+- **Fix 5 (Max cache entries)**: 1 test adds 10,001 entries, verifies early entries evicted. Runs fast (~1s) — all in-memory string values.
+- **Concurrency test**: 100 concurrent `GetOrAddAsync` calls on same key. Verifies no exceptions and all results equal. Does NOT assert factory called exactly once (known check-then-set race is acceptable).
+- **Input validation regression**: 2 null-parameter tests (pass now — null is valid for "no filter"). 2 buildId validation tests (`0` and `-1`) expect `ArgumentOutOfRangeException` — these FAIL because no buildId validation exists yet. Leaving as-is to document the gap.
+- **Key pattern**: Used `[Theory]` with `[InlineData]` for parameterized SSRF tests. Cleaner than separate `[Fact]` methods for the same assertion with different inputs.

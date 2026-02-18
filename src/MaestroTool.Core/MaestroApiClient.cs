@@ -11,22 +11,29 @@ public class MaestroApiClient : IMaestroApiClient
     private readonly IProductConstructionServiceApi _api;
 
     /// <summary>
+    /// The authentication level that was resolved during client creation.
+    /// </summary>
+    public AuthLevel AuthLevel { get; }
+
+    /// <summary>
     /// Auth cascade: BAR token → Entra ID (cached darc credentials) → anonymous.
     /// </summary>
     public MaestroApiClient(string? barToken = null)
     {
-        _api = CreateApi(barToken);
+        var (api, authLevel) = CreateApi(barToken);
+        _api = api;
+        AuthLevel = authLevel;
     }
 
     private const string MaestroAppId = "54c17f3d-7325-4eca-9db7-f090bfc765a8";
 
-    private static IProductConstructionServiceApi CreateApi(string? barToken)
+    private static (IProductConstructionServiceApi Api, AuthLevel Level) CreateApi(string? barToken)
     {
         // 1. Explicit BAR token from env var
         if (!string.IsNullOrEmpty(barToken))
         {
             Console.Error.WriteLine("[maestro-mcp] Auth: using MAESTRO_BAR_TOKEN");
-            return PcsApiFactory.GetAuthenticated(barToken, managedIdentityId: null, disableInteractiveAuth: true);
+            return (PcsApiFactory.GetAuthenticated(barToken, managedIdentityId: null, disableInteractiveAuth: true), AuthLevel.Pat);
         }
 
         // 2. Entra ID via InteractiveBrowserCredential with MSAL cache.
@@ -49,7 +56,7 @@ public class MaestroApiClient : IMaestroApiClient
                     disableInteractiveAuth: false);
 
                 Console.Error.WriteLine("[maestro-mcp] Auth: using Entra ID (cached darc credentials)");
-                return api;
+                return (api, AuthLevel.EntraId);
             }
             catch (Exception ex)
             {
@@ -63,7 +70,7 @@ public class MaestroApiClient : IMaestroApiClient
 
         // 3. Anonymous fallback
         Console.Error.WriteLine("[maestro-mcp] Auth: anonymous (read-only access)");
-        return PcsApiFactory.GetAnonymous();
+        return (PcsApiFactory.GetAnonymous(), AuthLevel.Anonymous);
     }
 
     public Task<List<Subscription>> ListSubscriptionsAsync(

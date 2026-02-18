@@ -3,10 +3,25 @@ using Microsoft.DotNet.ProductConstructionService.Client.Models;
 namespace MaestroTool.Core;
 
 /// <summary>
+/// Authentication level resolved during API client initialization.
+/// </summary>
+public enum AuthLevel
+{
+    Pat,
+    EntraId,
+    Anonymous
+}
+
+/// <summary>
 /// Abstraction over the PCS/Maestro API for testability.
 /// </summary>
 public interface IMaestroApiClient
 {
+    /// <summary>
+    /// The authentication level that was resolved during client creation.
+    /// </summary>
+    AuthLevel AuthLevel { get; }
+
     Task<List<Subscription>> ListSubscriptionsAsync(
         string? sourceRepository = null,
         string? targetRepository = null,

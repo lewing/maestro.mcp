@@ -708,4 +708,143 @@ public class MaestroServiceTests
 
         await _client.Received(2).ListSubscriptionsAsync(null, null, null, true, Arg.Any<CancellationToken>());
     }
+
+    // ================================================================
+    // Security: SSRF validation (Fix 1)
+    // ================================================================
+
+    [Theory]
+    [InlineData("../../etc/passwd")]
+    [InlineData("../admin")]
+    [InlineData("10.0/../../secret")]
+    [InlineData("channel name with spaces")]
+    [InlineData("channel;drop")]
+    public async Task GetBuildFreshnessAsync_RejectsInvalidChannelCharacters(string channel)
+    {
+        var result = await _service.GetBuildFreshnessAsync(channel);
+
+        Assert.False(result.IsAvailable);
+        Assert.NotNull(result.Error);
+        Assert.Contains("invalid", result.Error!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("10.0.1xx")]
+    [InlineData("9.0")]
+    [InlineData("net10")]
+    [InlineData("9.0.1xx-preview1")]
+    public async Task GetBuildFreshnessAsync_AcceptsValidChannelNames(string channel)
+    {
+        // Valid channels should pass validation. They may fail with network errors,
+        // but the error should NOT be a validation rejection.
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        try
+        {
+            var result = await _service.GetBuildFreshnessAsync(channel, cancellationToken: cts.Token);
+            if (!result.IsAvailable && result.Error != null)
+            {
+                Assert.DoesNotContain("Invalid channel name", result.Error);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Network timeout is acceptable — validation didn't reject the channel
+        }
+    }
+
+    // ================================================================
+    // Security: Auth gating on write operations (Fix 2)
+    // ================================================================
+
+    [Fact]
+    public async Task TriggerSubscription_RequiresAuthentication()
+    {
+        _client.AuthLevel.Returns(AuthLevel.Anonymous);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _service.TriggerSubscriptionAsync(Guid.NewGuid(), 42));
+
+        Assert.Contains("Authentication required", ex.Message);
+    }
+
+    [Fact]
+    public async Task TriggerDailyUpdate_RequiresAuthentication()
+    {
+        _client.AuthLevel.Returns(AuthLevel.Anonymous);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _service.TriggerDailyUpdateAsync());
+
+        Assert.Contains("Authentication required", ex.Message);
+    }
+
+    // ================================================================
+    // Security: Stderr audit logging (Fix 4)
+    // ================================================================
+
+    [Fact]
+    public async Task TriggerSubscription_LogsToStderr()
+    {
+        var subId = Guid.NewGuid();
+        _client.TriggerSubscriptionAsync(subId, 42, Arg.Any<CancellationToken>())
+            .Returns(CreateSubscription(id: subId));
+
+        var originalErr = Console.Error;
+        var captured = new StringWriter();
+        Console.SetError(captured);
+        try
+        {
+            await _service.TriggerSubscriptionAsync(subId, 42);
+        }
+        finally
+        {
+            Console.SetError(originalErr);
+        }
+
+        var output = captured.ToString();
+        Assert.Contains("Trigger", output);
+        Assert.Contains(subId.ToString(), output);
+    }
+
+    // ================================================================
+    // Input validation: null/empty parameters
+    // ================================================================
+
+    [Fact]
+    public async Task GetSubscriptions_HandlesNullSourceRepo()
+    {
+        _client.ListSubscriptionsAsync(null, null, null, true, Arg.Any<CancellationToken>())
+            .Returns(new List<Subscription>());
+
+        var result = await _service.GetSubscriptionsAsync(sourceRepository: null);
+
+        Assert.NotNull(result);
+    }
+
+    [Fact]
+    public async Task GetSubscriptions_HandlesNullTargetRepo()
+    {
+        _client.ListSubscriptionsAsync(null, null, null, true, Arg.Any<CancellationToken>())
+            .Returns(new List<Subscription>());
+
+        var result = await _service.GetSubscriptionsAsync(targetRepository: null);
+
+        Assert.NotNull(result);
+    }
+
+    [Fact]
+    public async Task GetBuilds_HandlesZeroBuildId()
+    {
+        // buildId=0 is invalid — should be caught by validation
+        var ex = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => _service.GetBuildAsync(0));
+    }
+
+    [Fact]
+    public async Task GetBuilds_HandlesNegativeBuildId()
+    {
+        // buildId=-1 is invalid — should be caught by validation
+        var ex = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => _service.GetBuildAsync(-1));
+    }
 }

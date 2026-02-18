@@ -150,7 +150,7 @@ public class CacheServiceTests
     }
 
     [Fact]
-    public async Task Clear_ResetsActionRecords()
+    public async Task Clear_DoesNotResetActionRecords()
     {
         var cache = new CacheService();
 
@@ -160,10 +160,75 @@ public class CacheServiceTests
 
         cache.Clear();
 
-        // Both should be gone
+        // Data cache should be cleared, action records should survive
         var count = 0;
         await cache.GetOrAddAsync("key1", () => { count++; return Task.FromResult("new"); }, TimeSpan.FromMinutes(5));
         Assert.Equal(1, count); // Cache entry was cleared
-        Assert.Null(cache.GetRecentAction("action:trigger:sub1")); // Action record was cleared
+        Assert.NotNull(cache.GetRecentAction("action:trigger:sub1")); // Action record survives Clear()
+    }
+
+    [Fact]
+    public void ClearActions_ResetsActionRecords()
+    {
+        var cache = new CacheService();
+
+        cache.RecordAction("action:trigger:sub1", TimeSpan.FromMinutes(5));
+        Assert.NotNull(cache.GetRecentAction("action:trigger:sub1"));
+
+        cache.ClearActions();
+
+        Assert.Null(cache.GetRecentAction("action:trigger:sub1"));
+    }
+
+    // ================================================================
+    // Security: cache size bounds (Fix 5)
+    // ================================================================
+
+    [Fact]
+    public async Task Cache_RespectsMaxEntries()
+    {
+        var cache = new CacheService();
+
+        // Fill cache beyond MaxCacheEntries (10,000)
+        for (int i = 0; i < 10_001; i++)
+        {
+            await cache.GetOrAddAsync($"key:{i}", () => Task.FromResult($"value:{i}"), TimeSpan.FromMinutes(30));
+        }
+
+        // Early entries should have been evicted when capacity was reached
+        var factoryCalled = false;
+        await cache.GetOrAddAsync("key:0", () =>
+        {
+            factoryCalled = true;
+            return Task.FromResult("new-value");
+        }, TimeSpan.FromMinutes(30));
+
+        Assert.True(factoryCalled, "Expected early entries to be evicted when cache exceeds max size");
+    }
+
+    // ================================================================
+    // Security: concurrent access safety
+    // ================================================================
+
+    [Fact]
+    public async Task ConcurrentCacheAccess_DoesNotCorrupt()
+    {
+        var cache = new CacheService();
+        var callCount = 0;
+
+        // Hammer the same key from 100 concurrent tasks
+        var tasks = Enumerable.Range(0, 100).Select(_ =>
+            cache.GetOrAddAsync("concurrent-key", async () =>
+            {
+                Interlocked.Increment(ref callCount);
+                await Task.Yield();
+                return "shared-value";
+            }, TimeSpan.FromMinutes(5))
+        ).ToArray();
+
+        var results = await Task.WhenAll(tasks);
+
+        // All results should be the same value — no corruption
+        Assert.All(results, r => Assert.Equal("shared-value", r));
     }
 }

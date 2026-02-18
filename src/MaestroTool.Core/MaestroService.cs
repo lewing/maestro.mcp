@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Microsoft.DotNet.ProductConstructionService.Client.Models;
 
 namespace MaestroTool.Core;
@@ -59,6 +60,7 @@ public class MaestroService
 
     public Task<Build> GetBuildAsync(int id, bool noCache = false, CancellationToken cancellationToken = default)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(id);
         var key = $"build:{id}";
         if (noCache) _cache.Invalidate(key);
         return _cache.GetOrAddAsync(key,
@@ -147,6 +149,11 @@ public class MaestroService
         bool noCache = false,
         CancellationToken cancellationToken = default)
     {
+        // SSRF mitigation: validate channel parameter (alphanumeric, dots, hyphens only)
+        if (!Regex.IsMatch(channel, @"^[a-zA-Z0-9.\-]+$"))
+            return new BuildFreshnessResult(channel, "", null, null, IsAvailable: false,
+                Error: "Invalid channel name. Only alphanumeric characters, dots, and hyphens are allowed.");
+
         var key = $"freshness:{channel}";
         if (noCache) _cache.Invalidate(key);
         return await _cache.GetOrAddAsync(key, async () =>
@@ -164,6 +171,23 @@ public class MaestroService
                     var redirectUrl = response.Headers.Location?.ToString();
                     if (!string.IsNullOrEmpty(redirectUrl))
                     {
+                        // SSRF mitigation: validate redirect URL stays within expected Microsoft domains
+                        if (Uri.TryCreate(redirectUrl, UriKind.Absolute, out var redirectUri))
+                        {
+                            var host = redirectUri.Host;
+                            if (!host.EndsWith(".blob.core.windows.net", StringComparison.OrdinalIgnoreCase) &&
+                                !host.Contains("dotnetcli", StringComparison.OrdinalIgnoreCase))
+                            {
+                                return new BuildFreshnessResult(channel, akaMsUrl, redirectUrl, null, IsAvailable: false,
+                                    Error: $"Redirect URL points to unexpected domain: {host}");
+                            }
+                        }
+                        else
+                        {
+                            return new BuildFreshnessResult(channel, akaMsUrl, redirectUrl, null, IsAvailable: false,
+                                Error: "Redirect URL is not a valid absolute URI.");
+                        }
+
                         // Follow the redirect and check Last-Modified
                         using var httpClient2 = new HttpClient();
                         var headResponse = await httpClient2.SendAsync(
@@ -191,6 +215,11 @@ public class MaestroService
 
     public async Task<Subscription> TriggerSubscriptionAsync(Guid subscriptionId, int buildId, CancellationToken cancellationToken = default)
     {
+        Console.Error.WriteLine($"[{DateTime.UtcNow:O}] Trigger: TriggerSubscriptionAsync args=(subscriptionId={subscriptionId}, buildId={buildId})");
+
+        if (_client.AuthLevel == AuthLevel.Anonymous)
+            throw new InvalidOperationException("Authentication required to trigger subscriptions. Run 'darc authenticate' or set MAESTRO_BAR_TOKEN.");
+
         var result = await _client.TriggerSubscriptionAsync(subscriptionId, buildId, cancellationToken);
         // Invalidate cached subscription data since it may have changed
         _cache.Invalidate($"sub:{subscriptionId}");
@@ -200,6 +229,11 @@ public class MaestroService
 
     public async Task TriggerDailyUpdateAsync(CancellationToken cancellationToken = default)
     {
+        Console.Error.WriteLine($"[{DateTime.UtcNow:O}] Trigger: TriggerDailyUpdateAsync");
+
+        if (_client.AuthLevel == AuthLevel.Anonymous)
+            throw new InvalidOperationException("Authentication required to trigger daily updates. Run 'darc authenticate' or set MAESTRO_BAR_TOKEN.");
+
         await _client.TriggerDailyUpdateAsync(cancellationToken);
         // Invalidate subscription-related caches since updates may have occurred
         _cache.InvalidatePrefix($"subs:");

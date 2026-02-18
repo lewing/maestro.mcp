@@ -262,19 +262,27 @@ public class MaestroMcpTools
         var recent = _cache.GetRecentAction(dedupKey);
         if (recent.HasValue)
         {
+            Console.Error.WriteLine($"[{DateTime.UtcNow:O}] Trigger: TriggerSubscription dedup-skipped args=(subscriptionId={subscriptionId}, buildId={buildId}) lastTriggered={recent.Value:O}");
             return $"⏳ This subscription was already triggered for build #{buildId} at {recent.Value:u}. Skipping duplicate.";
         }
 
-        var result = await _service.TriggerSubscriptionAsync(id, buildId, cancellationToken);
-        _cache.RecordAction(dedupKey, ActionCooldown);
+        try
+        {
+            var result = await _service.TriggerSubscriptionAsync(id, buildId, cancellationToken);
+            _cache.RecordAction(dedupKey, ActionCooldown);
 
-        var sb = new StringBuilder();
-        sb.AppendLine($"✅ Successfully triggered subscription {subscriptionId} for build #{buildId}");
-        sb.AppendLine($"\nSubscription: **{result.SourceRepository}** → **{result.TargetRepository}** ({result.TargetBranch})");
-        sb.AppendLine($"Channel: {result.Channel?.Name ?? "N/A"}");
-        sb.AppendLine($"\nThe subscription will now process build #{buildId} and create/update a dependency update PR if needed.");
+            var sb = new StringBuilder();
+            sb.AppendLine($"✅ Successfully triggered subscription {subscriptionId} for build #{buildId}");
+            sb.AppendLine($"\nSubscription: **{result.SourceRepository}** → **{result.TargetRepository}** ({result.TargetBranch})");
+            sb.AppendLine($"Channel: {result.Channel?.Name ?? "N/A"}");
+            sb.AppendLine($"\nThe subscription will now process build #{buildId} and create/update a dependency update PR if needed.");
 
-        return sb.ToString();
+            return sb.ToString();
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("Authentication required"))
+        {
+            return $"🔒 {ex.Message}";
+        }
     }
 
     [McpServerTool(Name = "maestro_trigger_daily_update")]
@@ -285,13 +293,21 @@ public class MaestroMcpTools
         var recent = _cache.GetRecentAction(dedupKey);
         if (recent.HasValue)
         {
+            Console.Error.WriteLine($"[{DateTime.UtcNow:O}] Trigger: TriggerDailyUpdate dedup-skipped lastTriggered={recent.Value:O}");
             return $"⏳ Daily update was already triggered at {recent.Value:u}. Skipping duplicate.";
         }
 
-        await _service.TriggerDailyUpdateAsync(cancellationToken);
-        _cache.RecordAction(dedupKey, ActionCooldown);
+        try
+        {
+            await _service.TriggerDailyUpdateAsync(cancellationToken);
+            _cache.RecordAction(dedupKey, ActionCooldown);
 
-        return "✅ Successfully triggered all daily-update subscriptions. Subscriptions will now process their latest builds and create/update dependency update PRs as needed.";
+            return "✅ Successfully triggered all daily-update subscriptions. Subscriptions will now process their latest builds and create/update dependency update PRs as needed.";
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("Authentication required"))
+        {
+            return $"🔒 {ex.Message}";
+        }
     }
 
     [McpServerTool(Name = "maestro_clear_cache")]

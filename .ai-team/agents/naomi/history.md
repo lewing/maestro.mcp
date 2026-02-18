@@ -55,3 +55,11 @@
 - **LOW: Anonymous fallback doesn't fail-fast on actions** — Action tools will get 401 at PCS runtime rather than failing early when running in anonymous mode.
 - **Architecture note:** No PII flows through the server. Most sensitive read data is subscription topology (reveals .NET build dependency graph). Secrets (PAT, Entra tokens) only flow in HTTP auth headers, never in MCP tool output.
 
+### Threat model fixes implementation (2025-07-15)
+- **Fix 1 (SSRF):** Added regex validation (`^[a-zA-Z0-9.\-]+$`) on `channel` parameter in `GetBuildFreshnessAsync` before URL interpolation. Also validates redirect URL host against `*.blob.core.windows.net` and `dotnetcli` — rejects unexpected domains.
+- **Fix 2 (Auth gate):** Added `AuthLevel` enum (`Pat`, `EntraId`, `Anonymous`) to `IMaestroApiClient`. `MaestroApiClient.CreateApi()` now returns a tuple of `(api, authLevel)`. Service-layer trigger methods throw `InvalidOperationException` if `AuthLevel.Anonymous`. MCP tools catch this specifically and return a `🔒` prefixed user-friendly message.
+- **Fix 3 (Dedup separation):** `CacheService` now uses a separate `_actions` ConcurrentDictionary for action dedup records. `Clear()` only wipes the data `_cache`, NOT action records. Added `ClearActions()` for explicit action clearing (not exposed via MCP). This prevents `maestro_clear_cache` from defeating trigger cooldowns.
+- **Fix 4 (Trigger audit):** Added `Console.Error.WriteLine` in `MaestroService` trigger methods (logs before API call with ISO 8601 timestamp + args). MCP tools log dedup-skipped cases separately. Both triggered and dedup-skipped events are now auditable on stderr.
+- **Fix 5 (Cache cap):** Added `MaxCacheEntries = 10000` constant. `GetOrAddAsync` checks `_cache.Count` before inserting; if at capacity, clears entire data cache and logs to stderr. Simple and appropriate for single-user MCP server.
+- **Test impact:** Replaced `Clear_ResetsActionRecords` with `Clear_DoesNotResetActionRecords` and added `ClearActions_ResetsActionRecords`. Total test count: 49, all passing.
+
