@@ -34,6 +34,26 @@ public class CacheService
 
     public void Clear() => _cache.Clear();
 
+    /// <summary>
+    /// Check if an action with this key was recently executed (within cooldown period).
+    /// Returns the timestamp if recently executed, null otherwise.
+    /// </summary>
+    public DateTimeOffset? GetRecentAction(string key)
+    {
+        if (_cache.TryGetValue(key, out var entry) && !entry.IsExpired)
+            return (DateTimeOffset)entry.Value!;
+        return null;
+    }
+
+    /// <summary>
+    /// Record that an action was executed. Future checks within the TTL will see this.
+    /// </summary>
+    public void RecordAction(string key, TimeSpan cooldown)
+    {
+        var now = DateTimeOffset.UtcNow;
+        _cache[key] = new CacheEntry(now, now.Add(cooldown));
+    }
+
     private record CacheEntry(object? Value, DateTimeOffset Expiry)
     {
         public bool IsExpired => DateTimeOffset.UtcNow >= Expiry;

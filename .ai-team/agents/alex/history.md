@@ -37,3 +37,10 @@ The README is production-ready and suitable for both internal developers and ext
 - Configuration examples must be copy-pasteable with minimal edits.
 - Always explain authentication flow in human terms before referencing files.
 - Tools and architecture sections are reference material; use tables and bullet lists for scannability.
+
+### README v2 Updates — Action Tools Documentation
+- **Config file locations**: GitHub Copilot CLI is now the first row since it's the primary client for this project's users.
+- **Action Tools section**: Documented non-destructive action tools with deduplication logic (2-minute cooldown prevents duplicate LLM retries).
+- **Future destructive actions**: Sketched the opt-in pattern for future delete/remove operations, showing how `MAESTRO_ENABLE_DESTRUCTIVE_ACTIONS` env var gates dangerous operations.
+- **Tool count updated**: Changed from 8 to 10 tools in the table header to reflect added action tools.
+- **Placement**: Action Tools section sits between Authentication and Available Tools, since it provides context for how triggering works before listing the full tool reference.

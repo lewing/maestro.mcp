@@ -30,4 +30,8 @@ public interface IMaestroApiClient
         string? branch = null,
         int? channelId = null,
         CancellationToken cancellationToken = default);
+
+    Task<Subscription> TriggerSubscriptionAsync(Guid subscriptionId, int buildId, CancellationToken cancellationToken = default);
+
+    Task TriggerDailyUpdateAsync(CancellationToken cancellationToken = default);
 }

@@ -120,4 +120,14 @@ public class MaestroApiClient : IMaestroApiClient
             channelId: channelId,
             cancellationToken: cancellationToken);
     }
+
+    public async Task<Subscription> TriggerSubscriptionAsync(Guid subscriptionId, int buildId, CancellationToken cancellationToken = default)
+    {
+        return await _api.Subscriptions.TriggerSubscriptionAsync(buildId, true, subscriptionId, cancellationToken);
+    }
+
+    public Task TriggerDailyUpdateAsync(CancellationToken cancellationToken = default)
+    {
+        return _api.Subscriptions.TriggerDailyUpdateAsync(cancellationToken);
+    }
 }

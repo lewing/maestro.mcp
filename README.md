@@ -1,6 +1,6 @@
 # maestro.mcp — MCP server for Maestro/BAR dependency flow data
 
-An MCP server that provides cached access to [Maestro/BAR](https://maestro.dot.net) (Build Asset Registry) data for the .NET build infrastructure. Exposes 8 tools for querying subscriptions, builds, channels, and health status via the Model Context Protocol.
+An MCP server that provides cached access to [Maestro/BAR](https://maestro.dot.net) (Build Asset Registry) data for the .NET build infrastructure. Exposes 10 tools for querying subscriptions, builds, channels, and health status, plus triggering subscription updates via the Model Context Protocol.
 
 Built with [Squad](https://github.com/bradygaster/squad) — [meet the squad](.ai-team/SQUAD.md).
 
@@ -98,6 +98,7 @@ The HTTP server listens on **http://localhost:5000** by default.
 
 | Client | Config file | Top-level key |
 |--------|------------|---------------|
+| **GitHub Copilot CLI** | `~/.copilot/mcp.json` | `servers` |
 | **VS Code / GitHub Copilot** | `.vscode/mcp.json` | `servers` |
 | **Claude Desktop** (macOS) | `~/Library/Application Support/Claude/claude_desktop_config.json` | `mcpServers` |
 | **Claude Desktop** (Windows) | `%APPDATA%\Claude\claude_desktop_config.json` | `mcpServers` |
@@ -113,9 +114,36 @@ The server implements a **3-tier authentication cascade**:
 
 **Recommended**: Run `darc authenticate` once (from [arcade-services](https://github.com/dotnet/arcade-services)) to cache credentials, then rely on automatic Entra ID authentication.
 
+## Action Tools
+
+The server includes **action tools** for triggering subscription updates. These are non-destructive operations — they trigger processing but don't delete or modify subscription configuration.
+
+### Deduplication
+
+Action tools include built-in deduplication with a 2-minute cooldown. If the same action is triggered again within the cooldown window, the server returns a notice instead of re-executing. This prevents duplicate triggers from LLM retries or multiple concurrent skills.
+
+### Destructive Actions (future)
+
+Future versions may include destructive actions (delete subscription, remove default channel, etc.). These will be **disabled by default** and require an explicit opt-in:
+
+```json
+{
+  "servers": {
+    "maestro": {
+      "type": "stdio",
+      "command": "dnx",
+      "args": ["lewing.maestro.mcp", "--yes"],
+      "env": {
+        "MAESTRO_ENABLE_DESTRUCTIVE_ACTIONS": "true"
+      }
+    }
+  }
+}
+```
+
 ## Available Tools
 
-The server registers **8 MCP tools** for querying Maestro/BAR data:
+The server registers **10 MCP tools** for querying and triggering Maestro/BAR operations:
 
 | Tool Name | Description | Key Parameters |
 |-----------|-------------|-----------------|
@@ -127,6 +155,8 @@ The server registers **8 MCP tools** for querying Maestro/BAR data:
 | `maestro_default_channels` | Get default channels for a repository | `repository`: source repository URL |
 | `maestro_subscription_health` | Get health status of a subscription (awaiting build, failed, etc.) | `subscriptionId`: UUID; includes freshness, branch, and error details |
 | `maestro_build_freshness` | Check how long since a source repository branch was built | `sourceRepository`: source repo URL; `branch`: branch name (e.g., `refs/heads/main`) |
+| `maestro_trigger_subscription` | Trigger a subscription to process a specific build | `subscriptionId`: UUID; `buildId`: BAR build ID |
+| `maestro_trigger_daily_update` | Trigger all daily-update subscriptions | None |
 
 ## Architecture
 

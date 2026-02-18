@@ -10,10 +10,19 @@ builder.Services.AddSingleton<IMaestroApiClient>(_ =>
 builder.Services.AddSingleton<CacheService>();
 builder.Services.AddSingleton<MaestroService>();
 
+var enableDestructive = bool.TryParse(
+    Environment.GetEnvironmentVariable("MAESTRO_ENABLE_DESTRUCTIVE_ACTIONS"),
+    out var enabled) && enabled;
+
+builder.Services.AddSingleton(new MaestroToolOptions
+{
+    EnableDestructiveActions = enableDestructive
+});
+
 builder.Services
     .AddMcpServer(options =>
     {
-        options.ServerInfo = new() { Name = "maestro", Version = "0.1.0" };
+        options.ServerInfo = new() { Name = "maestro", Version = "0.2.0" };
     })
     .WithStdioServerTransport()
     .WithToolsFromAssembly(typeof(MaestroMcpTools).Assembly);

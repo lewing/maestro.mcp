@@ -35,3 +35,11 @@
 - This decision affects **Backend Dev workflow**: Any MCP tool class added to the project must include this attribute
 
 📌 Team update (2026-02-18): README.md created for maestro.mcp covering authentication, tools, architecture, and cache strategy — decided by Alex
+
+### Action tools implementation (2026-02-18)
+- PCS client's `TriggerSubscriptionAsync` has signature `(int barBuildId, bool isCoherencyUpdate, Guid subscriptionId, CancellationToken)` — the bool parameter is required and appears to control coherency mode. Passed `true` for standard trigger behavior.
+- Action deduplication pattern: `CacheService.GetRecentAction(key)` checks for recent execution timestamp within cooldown window; `RecordAction(key, cooldown)` stores timestamp for duplicate prevention. Actions invalidate related read caches after success.
+- Service layer acts as pass-through for actions but invalidates relevant cached reads after mutation to prevent stale data.
+- `MaestroToolOptions` wired into DI container with `MAESTRO_ENABLE_DESTRUCTIVE_ACTIONS` env var support, ready for future destructive tools (delete subscription, etc.). For v0.2.0 only non-destructive trigger tools are exposed.
+- Action tools enforce 2-minute cooldown to prevent accidental duplicate triggers.
+

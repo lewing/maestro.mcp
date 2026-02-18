@@ -25,17 +25,20 @@ public class MaestroService
         string? sourceRepository = null,
         string? targetRepository = null,
         int? channelId = null,
+        bool noCache = false,
         CancellationToken cancellationToken = default)
     {
         var key = $"subs:{sourceRepository}:{targetRepository}:{channelId}";
+        if (noCache) _cache.Invalidate(key);
         return _cache.GetOrAddAsync(key,
             () => _client.ListSubscriptionsAsync(sourceRepository, targetRepository, channelId, enabled: true, cancellationToken),
             ShortTtl);
     }
 
-    public Task<Subscription> GetSubscriptionAsync(Guid id, CancellationToken cancellationToken = default)
+    public Task<Subscription> GetSubscriptionAsync(Guid id, bool noCache = false, CancellationToken cancellationToken = default)
     {
         var key = $"sub:{id}";
+        if (noCache) _cache.Invalidate(key);
         return _cache.GetOrAddAsync(key,
             () => _client.GetSubscriptionAsync(id, cancellationToken),
             ShortTtl);
@@ -44,41 +47,47 @@ public class MaestroService
     public Task<Build?> GetLatestBuildAsync(
         string repository,
         int? channelId = null,
+        bool noCache = false,
         CancellationToken cancellationToken = default)
     {
         var key = $"latest-build:{repository}:{channelId}";
+        if (noCache) _cache.Invalidate(key);
         return _cache.GetOrAddAsync(key,
             () => _client.GetLatestBuildAsync(repository, channelId, cancellationToken),
             ShortTtl);
     }
 
-    public Task<Build> GetBuildAsync(int id, CancellationToken cancellationToken = default)
+    public Task<Build> GetBuildAsync(int id, bool noCache = false, CancellationToken cancellationToken = default)
     {
         var key = $"build:{id}";
+        if (noCache) _cache.Invalidate(key);
         return _cache.GetOrAddAsync(key,
             () => _client.GetBuildAsync(id, cancellationToken),
             LongTtl); // Builds are immutable
     }
 
-    public Task<List<Channel>> GetChannelsAsync(CancellationToken cancellationToken = default)
+    public Task<List<Channel>> GetChannelsAsync(bool noCache = false, CancellationToken cancellationToken = default)
     {
+        if (noCache) _cache.Invalidate("channels");
         return _cache.GetOrAddAsync("channels",
             () => _client.ListChannelsAsync(cancellationToken),
             MediumTtl);
     }
 
-    public async Task<Channel?> GetChannelByNameAsync(string name, CancellationToken cancellationToken = default)
+    public async Task<Channel?> GetChannelByNameAsync(string name, bool noCache = false, CancellationToken cancellationToken = default)
     {
-        var channels = await GetChannelsAsync(cancellationToken);
+        var channels = await GetChannelsAsync(noCache, cancellationToken);
         return channels.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
     }
 
     public Task<List<DefaultChannel>> GetDefaultChannelsAsync(
         string? repository = null,
         string? branch = null,
+        bool noCache = false,
         CancellationToken cancellationToken = default)
     {
         var key = $"default-channels:{repository}:{branch}";
+        if (noCache) _cache.Invalidate(key);
         return _cache.GetOrAddAsync(key,
             () => _client.ListDefaultChannelsAsync(repository, branch, cancellationToken: cancellationToken),
             MediumTtl);
@@ -90,9 +99,10 @@ public class MaestroService
     /// </summary>
     public async Task<List<SubscriptionHealthResult>> GetSubscriptionHealthAsync(
         string targetRepository,
+        bool noCache = false,
         CancellationToken cancellationToken = default)
     {
-        var subscriptions = await GetSubscriptionsAsync(targetRepository: targetRepository, cancellationToken: cancellationToken);
+        var subscriptions = await GetSubscriptionsAsync(targetRepository: targetRepository, noCache: noCache, cancellationToken: cancellationToken);
         var results = new List<SubscriptionHealthResult>();
 
         foreach (var sub in subscriptions)
@@ -100,7 +110,7 @@ public class MaestroService
             var channelId = sub.Channel?.Id;
             if (channelId == null) continue;
 
-            var latestBuild = await GetLatestBuildAsync(sub.SourceRepository, channelId, cancellationToken);
+            var latestBuild = await GetLatestBuildAsync(sub.SourceRepository, channelId, noCache, cancellationToken);
             var lastApplied = sub.LastAppliedBuild;
 
             var isStale = latestBuild != null && lastApplied != null && latestBuild.Id != lastApplied.Id;
@@ -134,9 +144,11 @@ public class MaestroService
     /// </summary>
     public async Task<BuildFreshnessResult> GetBuildFreshnessAsync(
         string channel,
+        bool noCache = false,
         CancellationToken cancellationToken = default)
     {
         var key = $"freshness:{channel}";
+        if (noCache) _cache.Invalidate(key);
         return await _cache.GetOrAddAsync(key, async () =>
         {
             var akaMsUrl = $"https://aka.ms/dotnet/{channel}/daily/productCommit-win-x64.txt";
@@ -175,6 +187,22 @@ public class MaestroService
                 return new BuildFreshnessResult(channel, akaMsUrl, null, null, IsAvailable: false, Error: ex.Message);
             }
         }, FreshnessTtl);
+    }
+
+    public async Task<Subscription> TriggerSubscriptionAsync(Guid subscriptionId, int buildId, CancellationToken cancellationToken = default)
+    {
+        var result = await _client.TriggerSubscriptionAsync(subscriptionId, buildId, cancellationToken);
+        // Invalidate cached subscription data since it may have changed
+        _cache.Invalidate($"sub:{subscriptionId}");
+        _cache.InvalidatePrefix($"subs:");
+        return result;
+    }
+
+    public async Task TriggerDailyUpdateAsync(CancellationToken cancellationToken = default)
+    {
+        await _client.TriggerDailyUpdateAsync(cancellationToken);
+        // Invalidate subscription-related caches since updates may have occurred
+        _cache.InvalidatePrefix($"subs:");
     }
 }
 
