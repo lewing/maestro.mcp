@@ -36,7 +36,7 @@ dotnet pack src/MaestroTool
 dotnet tool install -g --add-source src/MaestroTool/nupkg lewing.maestro.mcp
 ```
 
-After installation, `maestro` is available globally.
+After installation, `mstro` is available globally.
 
 ### Build from Source
 
@@ -67,7 +67,7 @@ Add the following to your MCP client config. The `--yes` flag ensures `dnx` does
 }
 ```
 
-> If you've installed `lewing.maestro.mcp` as a global tool, you can use `"command": "maestro"` with `"args": []` instead of `dnx`.
+> If you've installed `lewing.maestro.mcp` as a global tool, you can use `"command": "mstro"` with `"args": []` instead of `dnx`.
 
 ### With authentication
 

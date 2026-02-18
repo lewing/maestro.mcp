@@ -7,7 +7,7 @@
     <Nullable>enable</Nullable>
     <PackAsTool>true</PackAsTool>
     <PackageType>McpServer</PackageType>
-    <ToolCommandName>maestro</ToolCommandName>
+    <ToolCommandName>mstro</ToolCommandName>
     <Version>0.1.0</Version>
   </PropertyGroup>
 
