@@ -24,3 +24,16 @@
 - **MaestroService trigger methods**: 4 tests in `MaestroServiceTests.cs`. `TriggerSubscriptionAsync` invalidates both `sub:{id}` and `subs:` prefix. `TriggerDailyUpdateAsync` invalidates `subs:` prefix. Verified by checking that subsequent reads hit the API again (Received(2) assertions).
 - **MaestroToolOptions**: 1 test in new `MaestroToolOptionsTests.cs`. Simple default-value assertion.
 - **NSubstitute `.Returns(first, second)` pattern**: Used for noCache tests where the same mock call must return different values on successive invocations. Clean way to test cache bypass.
+
+### 2025-07-15 — Security/threat model audit
+
+- **Zero MCP tool layer tests** — All 48 tests operate at the `MaestroService` or `CacheService` level. `MaestroMcpTools` (the actual `[McpServerTool]` methods) has no test coverage at all. GUID validation, channel-name resolution, empty-result messaging, and dedup integration are all untested at the tool boundary.
+- **Auth cascade is untestable** — `MaestroApiClient.CreateApi()` uses `PcsApiFactory` statics and `File.Exists()` directly. No interface seam exists to mock the 3-tier auth cascade. This is the biggest testability gap. Recommend `IApiFactory` injection.
+- **No input guards on buildId** — `GetBuild` and `TriggerSubscription` accept `int buildId` but never validate negative/zero values. They pass through to the PCS API, which likely returns opaque errors.
+- **Cache has no max-size or proactive eviction** — `ConcurrentDictionary` grows without bound. Expired entries are only replaced on re-request (lazy eviction). Under sustained unique-key load, memory grows unbounded.
+- **noCache has no rate limiting** — Any caller can pass `noCache: true` on every request, bypassing cache entirely and hammering the Maestro API. No cooldown or throttle exists.
+- **CacheService.GetOrAddAsync has a check-then-set race** — Between `TryGetValue` returning false and `_cache[key] = ...`, concurrent tasks can all enter the factory. Not a security bug but wastes API calls.
+- **Action dedup keys include buildId** — `TriggerSubscription` dedup is per (subscriptionId, buildId) pair, so triggering the same sub with different builds is not blocked. This is correct behavior but wasn't tested.
+- **26 security-focused test specifications written** — Filed to `.ai-team/decisions/inbox/amos-threat-testing.md`. Priority: P1 (auth, 5 specs), P2 (tool layer + input validation, 15 specs), P3 (cache abuse, 6 specs).
+
+📌 Team update (2025-07-15): STRIDE threat model completed — identified 14 threats, 8 with mitigations documented. P0 items (SSRF validation, dedup separation, tool-level auth gating) ready for next sprint. Decided by Holden, Naomi, Amos.

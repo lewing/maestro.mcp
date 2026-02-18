@@ -43,3 +43,15 @@
 - `MaestroToolOptions` wired into DI container with `MAESTRO_ENABLE_DESTRUCTIVE_ACTIONS` env var support, ready for future destructive tools (delete subscription, etc.). For v0.2.0 only non-destructive trigger tools are exposed.
 - Action tools enforce 2-minute cooldown to prevent accidental duplicate triggers.
 
+### Backend threat model findings (2025-07-15)
+- **CRITICAL: SSRF in GetBuildFreshnessAsync** — `channel` parameter is user-controlled and interpolated into aka.ms URL without validation. Path traversal (`../../`) can target arbitrary aka.ms short links, and the redirect URL is followed without domain validation. Must sanitize channel input (alphanumeric + dots + hyphens only) and validate redirect targets.
+- **HIGH: Entra auth record file permissions** — We check `File.Exists()` on `~/.darc/.auth-record-*` but never verify file permissions. On shared systems with permissive `~/.darc/` permissions, refresh tokens could be stolen. Should warn if permissions are too open.
+- **MEDIUM: No cache size limit** — `ConcurrentDictionary` grows unbounded. A malicious client sending unique parameters could cause OOM. Should add max-entry or LRU eviction.
+- **MEDIUM: noCache bypass enables PCS DoS** — Every read tool exposes `noCache` with no rate limit. Automated agents calling with `noCache: true` in loops would hammer PCS directly.
+
+📌 Team update (2025-07-15): STRIDE threat model completed — identified 14 threats, 8 with mitigations documented. P0 items (SSRF validation, dedup separation, tool-level auth gating) ready for next sprint. Decided by Holden, Naomi, Amos.
+- **MEDIUM: TriggerDailyUpdate blast radius** — Triggers ALL daily subscriptions ecosystem-wide. Not gated by `EnableDestructiveActions`. Consider gating or separate flag.
+- **LOW: clear_cache resets action dedup** — Calling `maestro_clear_cache` removes trigger cooldown records, allowing immediate re-trigger. Consider separating action dedup store from read cache.
+- **LOW: Anonymous fallback doesn't fail-fast on actions** — Action tools will get 401 at PCS runtime rather than failing early when running in anonymous mode.
+- **Architecture note:** No PII flows through the server. Most sensitive read data is subscription topology (reveals .NET build dependency graph). Secrets (PAT, Entra tokens) only flow in HTTP auth headers, never in MCP tool output.
+
