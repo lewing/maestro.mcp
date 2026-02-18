@@ -31,3 +31,29 @@ Implement a 3-tier auth cascade in `MaestroApiClient.CreateApi()`:
 ### Files changed
 
 - `src/MaestroTool.Core/MaestroApiClient.cs` — Auth cascade implementation
+
+## Bug Fix: [McpServerToolType] attribute required on MaestroMcpTools
+
+**Author:** Naomi (Backend Dev)
+**Date:** 2025-07-14
+**Status:** Fixed
+
+### Problem
+
+The MCP server started successfully but reported 0 tools. `tools/call` requests returned error `-32601: Method 'tools/call' is not available`. The server was effectively useless.
+
+### Root Cause
+
+`MaestroMcpTools` was missing the `[McpServerToolType]` class-level attribute. The `WithToolsFromAssembly()` registration in `Program.cs` uses this attribute to discover classes containing instance-method tools (methods decorated with `[McpServerTool]`). Without it, the assembly scan finds nothing.
+
+### Fix
+
+Added `[McpServerToolType]` to the `MaestroMcpTools` class declaration, matching the pattern in the Helix reference implementation (`HelixMcpTools.cs`).
+
+### Impact
+
+All 8 MCP tools now register and work end-to-end against real maestro.dot.net data.
+
+### Files Changed
+
+- `src/MaestroTool.Core/MaestroMcpTools.cs` — Added `[McpServerToolType]` attribute

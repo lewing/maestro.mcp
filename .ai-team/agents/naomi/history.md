@@ -16,6 +16,20 @@
 - `src/MaestroTool.Core/MaestroMcpTools.cs` — MCP tool definitions
 - `src/MaestroTool.Mcp/Program.cs` — Server entry point, DI setup
 
+### End-to-end smoke test results (2025-07-14)
+- **Bug found & fixed**: `MaestroMcpTools` was missing the `[McpServerToolType]` class attribute. Without it, `WithToolsFromAssembly()` can't discover instance-method tools — the server started but reported 0 tools and `tools/call` returned `-32601 Method not available`. Added the attribute; all 8 tools now register correctly.
+- **Auth cascade works**: Server logs `[maestro-mcp] Auth: using Entra ID (cached darc credentials)` on first tool invocation. Auth is lazy — the `MaestroApiClient` singleton is constructed by DI at first use, not at startup.
+- **All 8 tools verified**: `maestro_channels` (159 channels), `maestro_subscriptions` (filtered by dotnet/runtime, 8 results), `maestro_latest_build` (build #302353 for dotnet/runtime). All return real data from maestro.dot.net.
+- **MCP HTTP+SSE transport**: Server listens on `http://localhost:5000`. Client connects to `/sse` (GET, long-lived SSE stream), receives session endpoint URL, then POSTs JSON-RPC messages to `/message?sessionId=<id>`. Responses arrive on the SSE stream. The `tools/list` response now includes `listChanged: true` capability.
+- **Performance**: First tool call (channels) took ~1.6s including auth + API call. Subsequent calls (subscriptions, latest build) completed in 150-400ms thanks to the cache layer.
+- **Caching confirmed**: The subscriptions call returned in 154ms, confirming the `CacheService` TTL cache is working for second-hit scenarios within the same session.
+
 ### Conventions
 - Diagnostic output goes to `Console.Error.WriteLine` with `[maestro-mcp]` prefix to avoid interfering with MCP stdio transport
 - Auth method is logged at startup for troubleshooting
+- **Critical**: Tool classes must have `[McpServerToolType]` attribute for `WithToolsFromAssembly()` to discover instance-method tools. This is the pattern from the Helix reference implementation.
+
+### Decision: [McpServerToolType] attribute required (2025-07-14)
+- Smoke test revealed all 8 tools were registering as 0 tools due to missing `[McpServerToolType]` attribute on `MaestroMcpTools` class
+- Fix applied; verified all tools now appear in tool list and respond to `tools/call`
+- This decision affects **Backend Dev workflow**: Any MCP tool class added to the project must include this attribute
