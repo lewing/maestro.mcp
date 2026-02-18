@@ -57,3 +57,63 @@ All 8 MCP tools now register and work end-to-end against real maestro.dot.net da
 ### Files Changed
 
 - `src/MaestroTool.Core/MaestroMcpTools.cs` — Added `[McpServerToolType]` attribute
+
+## Documentation: README.md created for maestro.mcp
+
+**Author:** Alex (DevOps / Infrastructure)  
+**Date:** 2025-07-15  
+**Status:** Complete
+
+### Context
+
+The maestro.mcp project required comprehensive documentation for both internal developers and external MCP client integrators. The README needed to cover authentication, tool references, architecture, and operational guidance.
+
+### Decision
+
+Created a production-ready README.md following this structure:
+
+1. **Problem statement** — Clear opening describing what the server does and its role in .NET build infrastructure.
+2. **Prerequisites** — .NET 10 SDK, authentication options (darc or PAT).
+3. **Getting started** — Build, test, and run instructions.
+4. **Configuration** — Copy-pasteable mcp-config.json snippet for Copilot clients.
+5. **Authentication** — Full 3-tier cascade explanation with example of each tier.
+6. **Tools reference** — Table of 8 tools with parameters for quick lookup.
+7. **Architecture** — 4-layer model (data, cache, service, MCP) with class/responsibility mapping.
+8. **Cache strategy** — TTL table with justifications (trade-offs between freshness and load).
+9. **Testing** — How to run tests and scope (35 unit tests, xUnit, NSubstitute).
+10. **Contributing** — Guidance for future maintainers.
+
+### Key Design Choices
+
+- **Authentication emphasis**: The 3-tier cascade is explained in plain English before any file references. This is critical because auth is non-obvious (cached darc tokens, MSAL integration).
+- **Tools as a table**: Scannable reference format, not prose. MCP client integrators need to find parameter names quickly.
+- **Architecture as story**: Each layer (data → cache → service → MCP) is explained by the problem it solves, not by listing every method.
+- **Cache TTLs justified**: We explain why each TTL is set, not just the numbers. This helps reviewers understand trade-offs.
+- **Copy-pasteable config**: The mcp-config.json example uses a placeholder path with clear instructions to replace it.
+
+### Files Created
+
+- `README.md` — 5980 bytes, production-ready documentation.
+
+### Rationale
+
+Clear documentation is force-multiplier for MCP servers. External integrators (Copilot CLI users, other teams) should understand configuration, auth, and available tools without reading code. Internal developers should see the architecture and cache strategy without digging through source files.
+
+## Decision: GetBuildFreshnessAsync is untestable without refactoring
+
+**Author:** Amos (Tester)  
+**Date:** 2025-07-14  
+**Status:** Observation / Recommendation
+
+### Context
+
+`MaestroService.GetBuildFreshnessAsync` creates `HttpClient` and `HttpClientHandler` inline with `new`. This makes it impossible to mock the HTTP layer for unit testing without introducing `IHttpClientFactory` or similar injection.
+
+### Recommendation
+
+If we want test coverage on build freshness logic:
+1. Inject `IHttpClientFactory` into `MaestroService`, or
+2. Extract the HTTP-fetching part into a separate abstraction (e.g., `IAkaMsResolver`), or
+3. Accept it as an integration-only test target.
+
+Not blocking — the method is cached and simple. But it's the one gap in `MaestroService` coverage.

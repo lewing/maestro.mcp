@@ -33,3 +33,5 @@
 - Smoke test revealed all 8 tools were registering as 0 tools due to missing `[McpServerToolType]` attribute on `MaestroMcpTools` class
 - Fix applied; verified all tools now appear in tool list and respond to `tools/call`
 - This decision affects **Backend Dev workflow**: Any MCP tool class added to the project must include this attribute
+
+📌 Team update (2026-02-18): README.md created for maestro.mcp covering authentication, tools, architecture, and cache strategy — decided by Alex
