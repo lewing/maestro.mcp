@@ -1,0 +1,21 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json",
+  "name": "io.github.lewing/lewing.maestro.mcp",
+  "title": "Maestro Dependency Flow MCP Server",
+  "description": "CLI tool and MCP server for querying Maestro/BAR dependency flow data in dotnet repos",
+  "version": "0.1.0",
+  "websiteUrl": "https://github.com/lewing/maestro.mcp",
+  "packages": [
+    {
+      "registryType": "nuget",
+      "identifier": "lewing.maestro.mcp",
+      "version": "0.1.0",
+      "package_arguments": [],
+      "environment_variables": []
+    }
+  ],
+  "repository": {
+    "url": "https://github.com/lewing/maestro.mcp",
+    "source": "github"
+  }
+}

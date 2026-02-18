@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "maestro": {
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--project",
+        "src/MaestroTool.Mcp/MaestroTool.Mcp.csproj"
+      ],
+      "env": {
+        "MAESTRO_BAR_TOKEN": "${MAESTRO_BAR_TOKEN}"
+      }
+    }
+  }
+}

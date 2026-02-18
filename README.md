@@ -1,66 +1,117 @@
-# maestro.mcp
+# maestro.mcp — MCP server for Maestro/BAR dependency flow data
 
-An MCP server providing cached access to Maestro/BAR (Build Asset Registry) data for the .NET build infrastructure. It exposes 8 tools for querying subscriptions, builds, channels, and health status via the Model Context Protocol.
+An MCP server that provides cached access to [Maestro/BAR](https://maestro.dot.net) (Build Asset Registry) data for the .NET build infrastructure. Exposes 8 tools for querying subscriptions, builds, channels, and health status via the Model Context Protocol.
 
-## Prerequisites
+Built with [Squad](https://github.com/bradygaster/squad) — [meet the squad](.ai-team/SQUAD.md).
 
-- **.NET 10 SDK** or later (targets `net10.0`)
-- **For authenticated access**: Run `darc authenticate` first (from [arcade-services](https://github.com/dotnet/arcade-services)). The server reuses cached Entra ID credentials from `~/.darc/.auth-record-*`.
-- **Alternative**: Set the `MAESTRO_BAR_TOKEN` environment variable to use a Personal Access Token directly.
+## Installation
 
-## Building
+### Run with dnx (no install needed)
+
+`dnx` (new in .NET 10) auto-downloads and runs NuGet tool packages — no install step required:
 
 ```bash
+dnx lewing.maestro.mcp
+```
+
+This is the recommended approach for MCP server configuration (see below). MCP stdio mode is the default.
+
+### Install as Global Tool
+
+```bash
+dotnet tool install -g lewing.maestro.mcp
+```
+
+For repo-local installation via a [tool manifest](https://learn.microsoft.com/dotnet/core/tools/local-tools-how-to-use):
+
+```bash
+dotnet new tool-manifest   # if .config/dotnet-tools.json doesn't exist
+dotnet tool install --local lewing.maestro.mcp
+```
+
+### Install from Local Build
+
+```bash
+dotnet pack src/MaestroTool
+dotnet tool install -g --add-source src/MaestroTool/nupkg lewing.maestro.mcp
+```
+
+After installation, `maestro` is available globally.
+
+### Build from Source
+
+```bash
+# Prerequisites: .NET 10 SDK
+git clone https://github.com/lewing/maestro.mcp.git
+cd maestro.mcp
 dotnet build
-dotnet test
 ```
 
-## Running
+> **NuGet feed requirement:** The `Microsoft.DotNet.ProductConstructionService.Client` package is published to the
+> [dotnet-eng](https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-eng/nuget/v3/index.json)
+> Azure Artifacts feed. The included `nuget.config` references this feed.
 
-Start the MCP server:
+## MCP Configuration
 
-```bash
-dotnet run --project src/MaestroTool.Mcp
-```
-
-The server listens on **http://localhost:5000** by default.
-
-## Configuration for Copilot/MCP Clients
-
-Add this to your MCP configuration file (e.g., `.copilot/mcp-config.json` or your Copilot client's settings):
+Add the following to your MCP client config. The `--yes` flag ensures `dnx` doesn't prompt for confirmation:
 
 ```json
 {
-  "mcpServers": {
+  "servers": {
     "maestro": {
-      "command": "dotnet",
-      "args": ["run", "--project", "D:\\path\\to\\src\\MaestroTool.Mcp"],
-      "env": {}
+      "type": "stdio",
+      "command": "dnx",
+      "args": ["lewing.maestro.mcp", "--yes"]
     }
   }
 }
 ```
 
-Replace `D:\path\to\` with the actual path to the maestro.mcp repository root.
+> If you've installed `lewing.maestro.mcp` as a global tool, you can use `"command": "maestro"` with `"args": []` instead of `dnx`.
+
+### With authentication
+
+```json
+{
+  "servers": {
+    "maestro": {
+      "type": "stdio",
+      "command": "dnx",
+      "args": ["lewing.maestro.mcp", "--yes"],
+      "env": {
+        "MAESTRO_BAR_TOKEN": "your-token-here"
+      }
+    }
+  }
+}
+```
+
+### HTTP server (alternative)
+
+```bash
+dotnet run --project src/MaestroTool.Mcp
+```
+
+The HTTP server listens on **http://localhost:5000** by default.
+
+### Config file locations
+
+| Client | Config file | Top-level key |
+|--------|------------|---------------|
+| **VS Code / GitHub Copilot** | `.vscode/mcp.json` | `servers` |
+| **Claude Desktop** (macOS) | `~/Library/Application Support/Claude/claude_desktop_config.json` | `mcpServers` |
+| **Claude Desktop** (Windows) | `%APPDATA%\Claude\claude_desktop_config.json` | `mcpServers` |
+| **Claude Code / Cursor** | `.cursor/mcp.json` | `mcpServers` |
 
 ## Authentication
 
 The server implements a **3-tier authentication cascade**:
 
-1. **Explicit PAT via environment variable** (`MAESTRO_BAR_TOKEN`)
-   - If set, uses this Personal Access Token for authentication.
-   - Highest priority; no other auth methods are attempted.
+1. **Explicit PAT** — Set `MAESTRO_BAR_TOKEN` environment variable
+2. **Cached Entra ID** — Reuses credentials from `darc authenticate` (`~/.darc/.auth-record-*`)
+3. **Anonymous** — Read-only fallback (may be rate-limited)
 
-2. **Entra ID via cached darc credentials**
-   - If `MAESTRO_BAR_TOKEN` is not set and `~/.darc/.auth-record-*` exists, the server attempts to authenticate using cached MSAL credentials from a prior `darc authenticate` call.
-   - Provides silent, automatic authentication without user interaction.
-   - Falls back to anonymous if credential creation fails.
-
-3. **Anonymous fallback**
-   - If neither of the above is available, the server operates anonymously (read-only).
-   - Access may be rate-limited; useful for testing or public queries only.
-
-**Recommended**: Run `darc authenticate` once to cache credentials, then rely on automatic Entra ID authentication.
+**Recommended**: Run `darc authenticate` once (from [arcade-services](https://github.com/dotnet/arcade-services)) to cache credentials, then rely on automatic Entra ID authentication.
 
 ## Available Tools
 
@@ -79,31 +130,26 @@ The server registers **8 MCP tools** for querying Maestro/BAR data:
 
 ## Architecture
 
-The server is organized into three layers:
+The project is split into three layers:
 
-### Data Layer: **MaestroApiClient**
-- Wraps the PCS NuGet client (`Microsoft.Dot.Arcade.Services.Core`) for Maestro API access.
-- Implements the 3-tier authentication cascade (PAT → cached Entra ID → anonymous).
-- All requests flow through this client, ensuring consistent auth behavior.
+```
+src/
+├── MaestroTool/              # CLI tool + stdio MCP server (dotnet tool)
+│   └── Program.cs
+├── MaestroTool.Core/         # Shared library — Maestro API logic + MCP tool definitions
+│   ├── MaestroMcpTools.cs    # MCP tool definitions ([McpServerToolType])
+│   ├── MaestroService.cs     # Cached business logic
+│   ├── CacheService.cs       # In-memory TTL cache
+│   ├── IMaestroApiClient.cs  # API abstraction
+│   └── MaestroApiClient.cs   # PCS client wrapper with auth cascade
+├── MaestroTool.Mcp/          # MCP HTTP server (ASP.NET Core)
+│   └── Program.cs
+└── MaestroTool.Tests/        # Unit tests (35 tests)
+```
 
-### Caching Layer: **CacheService**
-- In-memory TTL cache using `ConcurrentDictionary<string, CacheEntry<T>>`.
-- Prevents repeated API calls; respects configurable TTLs per data type (see [Cache TTLs](#cache-ttls)).
-- Thread-safe; no locks required.
-
-### Business Logic Layer: **MaestroService**
-- Orchestrates cached data queries and derived calculations.
-- `GetSubscriptionHealthAsync()`: fetches subscription + latest build, computes health status and time-since-build.
-- `GetBuildFreshnessAsync()`: fetches latest build for a source repo/branch, computes age in minutes.
-
-### MCP Layer: **MaestroMcpTools**
-- Defines the 8 MCP tool methods via `[McpServerTool]` attributes.
-- Each tool parses arguments, calls `MaestroService`, and returns structured JSON.
-
-### Hosting: **Program.cs**
-- ASP.NET Core host with OpenAI MCP HTTP transport.
-- Dependency injection: registers `MaestroApiClient`, `CacheService`, `MaestroService`, and MCP tools.
-- JSON configuration for MCP server metadata (name, version, description).
+- **MaestroTool** — stdio MCP server packaged as a [dotnet tool](https://learn.microsoft.com/dotnet/core/tools/global-tools). Default entry point for `dnx` / `dotnet tool` usage.
+- **MaestroTool.Mcp** — HTTP MCP server for remote/shared deployments.
+- **MaestroTool.Core** — All business logic, caching, API client, and MCP tool definitions. Shared by both hosts.
 
 ## Cache TTLs
 

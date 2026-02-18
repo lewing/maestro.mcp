@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MaestroTool.Core/MaestroTool.Core.csproj" />
+    <Project Path="src/MaestroTool.Mcp/MaestroTool.Mcp.csproj" />
+    <Project Path="src/MaestroTool/MaestroTool.csproj" />
+  </Folder>
+  <Folder Name="/test/">
+    <Project Path="src/MaestroTool.Tests/MaestroTool.Tests.csproj" />
+  </Folder>
+</Solution>
