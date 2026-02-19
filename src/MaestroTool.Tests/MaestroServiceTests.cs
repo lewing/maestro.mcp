@@ -578,6 +578,98 @@ public class MaestroServiceTests : IDisposable
         Assert.NotNull(r.LatestBuildDate);
     }
 
+    [Fact]
+    public async Task SubscriptionHealth_HandlesApiErrorForSingleSubscription()
+    {
+        var channel = CreateChannel(1, ".NET 10");
+        var failingSub = CreateSubscription(
+            source: "https://github.com/dotnet/runtime",
+            target: "https://github.com/dotnet/dotnet",
+            channel: channel,
+            lastApplied: CreateBuild(id: 80));
+        var workingSub = CreateSubscription(
+            source: "https://github.com/dotnet/aspnetcore",
+            target: "https://github.com/dotnet/dotnet",
+            channel: channel,
+            lastApplied: CreateBuild(id: 100));
+
+        _client.ListSubscriptionsAsync(null, "https://github.com/dotnet/dotnet", null, true, Arg.Any<CancellationToken>())
+            .Returns(new List<Subscription> { failingSub, workingSub });
+        _client.GetLatestBuildAsync("https://github.com/dotnet/runtime", channel.Id, Arg.Any<CancellationToken>())
+            .Returns<Build?>(_ => throw new HttpRequestException("API timeout"));
+        _client.GetLatestBuildAsync("https://github.com/dotnet/aspnetcore", channel.Id, Arg.Any<CancellationToken>())
+            .Returns(CreateBuild(id: 100));
+
+        var results = await _service.GetSubscriptionHealthAsync("https://github.com/dotnet/dotnet");
+
+        Assert.Equal(2, results.Count);
+
+        var failed = results.First(r => r.SourceRepository == "https://github.com/dotnet/runtime");
+        Assert.NotNull(failed.Error);
+
+        var working = results.First(r => r.SourceRepository == "https://github.com/dotnet/aspnetcore");
+        Assert.Null(working.Error);
+        Assert.False(working.IsStale);
+    }
+
+    [Fact]
+    public async Task SubscriptionHealth_HandlesApiErrorForAllSubscriptions()
+    {
+        var channel = CreateChannel(1, ".NET 10");
+        var sub1 = CreateSubscription(
+            source: "https://github.com/dotnet/runtime",
+            target: "https://github.com/dotnet/dotnet",
+            channel: channel,
+            lastApplied: CreateBuild(id: 80));
+        var sub2 = CreateSubscription(
+            source: "https://github.com/dotnet/aspnetcore",
+            target: "https://github.com/dotnet/dotnet",
+            channel: channel,
+            lastApplied: CreateBuild(id: 90));
+
+        _client.ListSubscriptionsAsync(null, "https://github.com/dotnet/dotnet", null, true, Arg.Any<CancellationToken>())
+            .Returns(new List<Subscription> { sub1, sub2 });
+        _client.GetLatestBuildAsync("https://github.com/dotnet/runtime", channel.Id, Arg.Any<CancellationToken>())
+            .Returns<Build?>(_ => throw new HttpRequestException("API timeout"));
+        _client.GetLatestBuildAsync("https://github.com/dotnet/aspnetcore", channel.Id, Arg.Any<CancellationToken>())
+            .Returns<Build?>(_ => throw new HttpRequestException("Service unavailable"));
+
+        var results = await _service.GetSubscriptionHealthAsync("https://github.com/dotnet/dotnet");
+
+        Assert.Equal(2, results.Count);
+        Assert.All(results, r => Assert.NotNull(r.Error));
+    }
+
+    [Fact]
+    public async Task SubscriptionHealth_ErrorResultHasBasicFields()
+    {
+        var channel = CreateChannel(5, "TestChannel");
+        var subId = Guid.NewGuid();
+        var sub = CreateSubscription(
+            id: subId,
+            source: "https://github.com/dotnet/runtime",
+            target: "https://github.com/dotnet/dotnet",
+            branch: "release/10.0",
+            channel: channel,
+            lastApplied: CreateBuild(id: 42));
+
+        _client.ListSubscriptionsAsync(null, "https://github.com/dotnet/dotnet", null, true, Arg.Any<CancellationToken>())
+            .Returns(new List<Subscription> { sub });
+        _client.GetLatestBuildAsync("https://github.com/dotnet/runtime", 5, Arg.Any<CancellationToken>())
+            .Returns<Build?>(_ => throw new InvalidOperationException("Upstream failure"));
+
+        var results = await _service.GetSubscriptionHealthAsync("https://github.com/dotnet/dotnet");
+
+        Assert.Single(results);
+        var r = results[0];
+        Assert.NotNull(r.Error);
+        Assert.Equal(subId, r.SubscriptionId);
+        Assert.Equal("https://github.com/dotnet/runtime", r.SourceRepository);
+        Assert.Equal("https://github.com/dotnet/dotnet", r.TargetRepository);
+        Assert.Equal("release/10.0", r.TargetBranch);
+        Assert.Equal("TestChannel", r.ChannelName);
+    }
+
     // ================================================================
     // noCache parameter tests
     // ================================================================

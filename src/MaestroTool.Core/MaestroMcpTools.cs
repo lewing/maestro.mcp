@@ -208,6 +208,8 @@ public class MaestroMcpTools
             var status = r.IsStale ? $"⚠️ STALE ({r.BuildsBehind} behind)" : "✅ Current";
             sb.AppendLine($"**{r.SourceRepository}** → {r.TargetBranch}");
             sb.AppendLine($"  Channel: {r.ChannelName} | Status: {status}");
+            if (r.Error != null)
+                sb.AppendLine($"  ⚠️ Error: {r.Error}");
             if (r.LastAppliedBuildId != null)
                 sb.AppendLine($"  Last Applied: #{r.LastAppliedBuildId} ({r.LastAppliedDate:u})");
             if (r.LatestBuildId != null)

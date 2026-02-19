@@ -112,30 +112,50 @@ public class MaestroService
             var channelId = sub.Channel?.Id;
             if (channelId == null) continue;
 
-            var latestBuild = await GetLatestBuildAsync(sub.SourceRepository, channelId, noCache, cancellationToken);
-            var lastApplied = sub.LastAppliedBuild;
-
-            var isStale = latestBuild != null && lastApplied != null && latestBuild.Id != lastApplied.Id;
-            var buildsBehind = 0;
-
-            if (isStale && latestBuild != null && lastApplied != null)
+            try
             {
-                buildsBehind = latestBuild.Id - lastApplied.Id; // Approximate
-            }
+                var latestBuild = await GetLatestBuildAsync(sub.SourceRepository, channelId, noCache, cancellationToken);
+                var lastApplied = sub.LastAppliedBuild;
 
-            results.Add(new SubscriptionHealthResult(
-                SubscriptionId: sub.Id,
-                SourceRepository: sub.SourceRepository,
-                TargetRepository: sub.TargetRepository,
-                TargetBranch: sub.TargetBranch,
-                ChannelName: sub.Channel?.Name ?? "unknown",
-                IsStale: isStale,
-                BuildsBehind: buildsBehind,
-                LastAppliedBuildId: lastApplied?.Id,
-                LastAppliedDate: lastApplied?.DateProduced,
-                LatestBuildId: latestBuild?.Id,
-                LatestBuildDate: latestBuild?.DateProduced
-            ));
+                var isStale = latestBuild != null && lastApplied != null && latestBuild.Id != lastApplied.Id;
+                var buildsBehind = 0;
+
+                if (isStale && latestBuild != null && lastApplied != null)
+                {
+                    buildsBehind = latestBuild.Id - lastApplied.Id; // Approximate
+                }
+
+                results.Add(new SubscriptionHealthResult(
+                    SubscriptionId: sub.Id,
+                    SourceRepository: sub.SourceRepository,
+                    TargetRepository: sub.TargetRepository,
+                    TargetBranch: sub.TargetBranch,
+                    ChannelName: sub.Channel?.Name ?? "unknown",
+                    IsStale: isStale,
+                    BuildsBehind: buildsBehind,
+                    LastAppliedBuildId: lastApplied?.Id,
+                    LastAppliedDate: lastApplied?.DateProduced,
+                    LatestBuildId: latestBuild?.Id,
+                    LatestBuildDate: latestBuild?.DateProduced
+                ));
+            }
+            catch (Exception ex)
+            {
+                results.Add(new SubscriptionHealthResult(
+                    SubscriptionId: sub.Id,
+                    SourceRepository: sub.SourceRepository,
+                    TargetRepository: sub.TargetRepository,
+                    TargetBranch: sub.TargetBranch,
+                    ChannelName: sub.Channel?.Name ?? "unknown",
+                    IsStale: false,
+                    BuildsBehind: 0,
+                    LastAppliedBuildId: sub.LastAppliedBuild?.Id,
+                    LastAppliedDate: sub.LastAppliedBuild?.DateProduced,
+                    LatestBuildId: null,
+                    LatestBuildDate: null,
+                    Error: ex.Message
+                ));
+            }
         }
 
         return results;
@@ -176,7 +196,9 @@ public class MaestroService
                         {
                             var host = redirectUri.Host;
                             if (!host.EndsWith(".blob.core.windows.net", StringComparison.OrdinalIgnoreCase) &&
-                                !host.Contains("dotnetcli", StringComparison.OrdinalIgnoreCase))
+                                !host.Contains("dotnetcli", StringComparison.OrdinalIgnoreCase) &&
+                                !host.Equals("ci.dot.net", StringComparison.OrdinalIgnoreCase) &&
+                                !host.EndsWith(".azureedge.net", StringComparison.OrdinalIgnoreCase))
                             {
                                 return new BuildFreshnessResult(channel, akaMsUrl, redirectUrl, null, IsAvailable: false,
                                     Error: $"Redirect URL points to unexpected domain: {host}");
@@ -251,7 +273,8 @@ public record SubscriptionHealthResult(
     int? LastAppliedBuildId,
     DateTimeOffset? LastAppliedDate,
     int? LatestBuildId,
-    DateTimeOffset? LatestBuildDate
+    DateTimeOffset? LatestBuildDate,
+    string? Error = null
 );
 
 public record BuildFreshnessResult(

@@ -2,6 +2,18 @@
 
 ## Learnings
 
+### Issue #1 Triage: Codeflow Feature Requests (2026-02-19)
+
+- Triaged 9 feature requests from Issue #1 covering codeflow analysis workflows. **All 9 are architecturally feasible** with current PCS client surface. No fundamental blockers.
+- Decomposed scope: P1 (high-impact) = 3 features (codeflow PRs, force-trigger, branch filtering); P2 (medium) = 3 features (history, flow graph, health); P3 (nice-to-have) = 3 features (VMR manifest, channel shorthand, build assets).
+- **Proposed roadmap**: v0.2.1 (2 features + enhancements: force-trigger + branch filter + channel shorthand, ~10 hrs); v0.3 (3 composite features requiring GitHub API: codeflow-prs, flow-graph, health endpoint, ~2 weeks); v0.4+ (backlog niche features).
+- **PCS API investigation needed** for features #4 (subscription history) and #9 (build assets) — Naomi to check if these endpoints exist in current PCS client NuGet. If not, file backlog items with Maestro team.
+- **Key decision**: Force-trigger (feature #2) — current code already passes `isCoherencyUpdate: true` to PCS. Clarify with Larry whether this is correct behavior, then either document or expose as separate tool.
+- **GitHub API strategy needed** — features #1, #5, #6 require GitHub integration (search PRs, get PR status). Team should decide: Octokit (REST), GraphQL client, or `gh` CLI wrapper. Recommending Octokit for simplicity.
+- **Documented questions for Larry** on force-trigger semantics, GitHub client preference, and VMR scope.
+
+📌 Triage document written to `.ai-team/decisions/inbox/holden-issue1-triage.md`. Covers feasibility, complexity, PCS dependencies, effort estimates, and actionable roadmap for team.
+
 ### STRIDE Threat Model (2025-07-15)
 
 - Conducted full STRIDE analysis of maestro.mcp. The auth cascade (PAT → Entra ID → Anonymous) is the highest-risk surface — the anonymous fallback is by design for read-only, but the server currently doesn't enforce read-only at the MCP tool layer for anonymous sessions. The `TriggerSubscription` and `TriggerDailyUpdate` tools rely entirely on the PCS API rejecting unauthorized callers, which is correct but means auth failures surface as opaque API errors rather than clean "you're not authenticated" messages.

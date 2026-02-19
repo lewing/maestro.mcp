@@ -71,3 +71,15 @@
 - **Directory creation edge case:** Custom path test intentionally uses deeply nested path (`Path.Combine(tempPath, guid, "subdir", "cache.db")`) that doesn't exist. Exercises `Directory.CreateDirectory` which recursively creates parents and applies permission hardening to ALL created directories. Cleanup removes entire tree with `recursive: true`.
 
 📌 Team update (2026-02-19): P1 security fixes completed — file permissions (I2) and corruption auto-recovery (D2) implemented in CacheService. 6 security tests written. All 73 tests passing. Decided by Naomi, Amos.
+
+### 2026-02-19 — Regression tests for GitHub Issues #2 and #3
+
+- **3 new regression tests written** for Issue #3 (subscription_health error resilience) in `MaestroServiceTests.cs`.
+- **Error resilience test pattern**: Use NSubstitute `.Returns<Build?>(_ => throw new ...)` to simulate per-subscription API failures. The fixed `GetSubscriptionHealthAsync` wraps each subscription's `GetLatestBuildAsync` in try/catch, so one failure doesn't abort the entire loop.
+- **`SubscriptionHealthResult.Error` field**: New optional `string? Error = null` on the record. When a subscription's health check throws, the result is still added with `Error` populated instead of propagating the exception. Tests assert `NotNull(r.Error)` for failing subs and `Null(r.Error)` for working subs.
+- **Test 1 (`HandlesApiErrorForSingleSubscription`)**: 2 subs, 1 throws `HttpRequestException`. Verifies both results returned, failing sub has Error, working sub still reports correct stale/current data.
+- **Test 2 (`HandlesApiErrorForAllSubscriptions`)**: 2 subs, both throw. Verifies 2 results (not empty, no exception), both have non-null Error.
+- **Test 3 (`ErrorResultHasBasicFields`)**: When a sub errors, verifies SubscriptionId, SourceRepository, TargetRepository, TargetBranch, and ChannelName are still populated from the subscription object (not lost due to the error path).
+- **Bug #2 (build_freshness domain allowlist)**: No unit tests written — `GetBuildFreshnessAsync` creates `HttpClient` inline, making HTTP-level domain validation untestable. This is a known gap documented in `decisions.md`. Domain allowlist fix validated via integration testing only.
+
+📌 Team update (2026-02-19): 3 regression tests for Issue #3 error resilience. All passing. Bug #2 domain allowlist is integration-test-only (untestable at unit level).

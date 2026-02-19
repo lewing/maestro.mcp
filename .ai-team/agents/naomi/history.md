@@ -98,3 +98,8 @@
 
 📌 Team update (2026-02-19): P1 security fixes completed — file permissions (I2) and corruption auto-recovery (D2) implemented in CacheService. 6 security tests written. All 73 tests passing. Windows connection pool issue resolved. Decided by Naomi, Amos, Coordinator.
 
+### Bug fixes: Issues #2 and #3 (2025-07-16)
+- **Issue #2 (build_freshness rejects ci.dot.net):** The SSRF domain allowlist in `GetBuildFreshnessAsync` only accepted `*.blob.core.windows.net` and `dotnetcli` hosts. The aka.ms redirect for .NET channels now resolves to `ci.dot.net`, a legitimate Microsoft domain. Added `ci.dot.net` (exact match) and `*.azureedge.net` (suffix match) to the allowlist. Two lines added to the existing `if` condition.
+- **Issue #3 (subscription_health errors for dotnet/sdk):** The `GetSubscriptionHealthAsync` foreach loop had no error handling — a single failed `GetLatestBuildAsync` call would crash the entire method. Wrapped the per-subscription body in try/catch. On exception, the subscription is added to results with an `Error` field populated. Added optional `string? Error = null` to the `SubscriptionHealthResult` record. MCP tool layer now displays `⚠️ Error:` for any subscription that failed. This makes the tool resilient for repos with many subscriptions (dotnet/sdk has 59).
+- **Build:** 0 warnings, 0 errors. **Tests:** All 76 pass.
+
