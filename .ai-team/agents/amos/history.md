@@ -95,3 +95,14 @@
 - **Naomi's code landed first**: Interface and MaestroService already had the new methods when tests were written. Build succeeded on first try after fixing `Guid` → `string` parameter type mismatch.
 
 📌 Team update (2026-02-20): 8 codeflow PR tracking tests for v0.4.0. All 88 tests passing. TrackedPullRequest, BackflowStatus, and SubscriptionHistory APIs all covered.
+
+### 2026-02-20 — TriggerSubscription force parameter tests
+
+- **3 new tests written** (97 total, all passing) covering the `force` parameter added to `TriggerSubscriptionAsync`.
+- **Existing mock setups updated**: All 3 existing `TriggerSubscriptionAsync` mock calls updated from 3-param `(subId, buildId, CancellationToken)` to 4-param `(subId, buildId, false, CancellationToken)` to match Naomi's new signature with `bool force = false`.
+- **`TriggerSubscription_WithForce_PassesForceThroughToClient`**: Verifies `force: true` flows through MaestroService to the IMaestroApiClient mock. Asserts `Received(1)` with `true` as the force arg.
+- **`TriggerSubscription_WithForce_InvalidatesCaches`**: Same cache invalidation pattern as `TriggerSubscription_InvalidatesRelatedCaches` but with `force: true`. Confirms cache behavior is identical regardless of force value.
+- **`TriggerSubscription_DefaultForceIsFalse`**: Calls service without explicit `force`, then asserts `Received(1)` with `false` and `Received(0)` with `true`. Validates the default parameter value is correctly propagated.
+- **Key pattern**: Default parameter tests use negative assertion (`Received(0)`) to prove the non-default value was NOT sent. This is more rigorous than just checking the default was sent.
+
+📌 Team update (2026-02-20): 3 force parameter tests for TriggerSubscriptionAsync. All 97 tests passing. Existing trigger tests updated for new 4-param signature.

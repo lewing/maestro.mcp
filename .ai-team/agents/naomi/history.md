@@ -138,3 +138,10 @@
 - **Cache key patterns:** `tracked-prs:{channelId}`, `tracked-pr:{subId}`, `backflow-status:{vmrBuildId}`, `sub-history:{subscriptionId}` — all use ShortTtl (5 min).
 - **No auth gating** on new APIs initially — will add if needed based on runtime testing.
 
+### Force trigger parameter (Issue #1 Feature #2) (2025-07-16)
+- Added optional `bool force = false` parameter across all 4 layers: `IMaestroApiClient` → `MaestroApiClient` → `MaestroService` → `MaestroMcpTools`.
+- PCS client's `TriggerSubscriptionAsync(int barBuildId, bool isCoherencyUpdate, Guid subscriptionId, CT)` — the `isCoherencyUpdate` parameter, when `true`, force-triggers (overwrites existing PR branch with fresh VMR content). Previously hardcoded to `false`.
+- Dedup key now includes force flag: `action:trigger-sub:{subId}:{buildId}:{force}` — so force and non-force triggers are deduped independently.
+- MCP tool description updated to document force behavior. Success message differentiates force vs normal trigger.
+- Decided as team to add as optional param to existing tool rather than a separate `maestro_force_trigger_subscription` tool.
+
