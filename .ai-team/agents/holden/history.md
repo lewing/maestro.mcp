@@ -12,3 +12,14 @@
 - The HTTP transport (`MaestroTool.Mcp`) has no authentication middleware — it's wide open on localhost:5000. This is fine for local dev but would be critical in any shared deployment.
 
 📌 Team update (2025-07-15): STRIDE threat model completed — identified 14 threats, 8 with mitigations documented. P0 items (SSRF validation, dedup separation, tool-level auth gating) ready for next sprint. Decided by Holden, Naomi, Amos.
+
+### SQLite Cache Migration Threat Model (2026-02-18)
+
+- Conducted focused STRIDE analysis on the SQLite cache migration (ConcurrentDictionary → `~/.mstro/cache.db`). Identified 13 new threats across all 6 STRIDE categories. The migration fundamentally changes the trust boundary: data that was implicitly protected by process isolation is now accessible to any same-user process via a predictable filesystem path.
+- **Highest severity findings**: Cache poisoning (S1, HIGH) and direct database tampering (T1, HIGH) by same-user processes, and plaintext persistence of operationally sensitive data (I1, HIGH). These are all inherent to moving from in-memory to on-disk storage.
+- **Pragmatic assessment**: Same-user tampering threats (S1/T1/T2) require prior machine compromise. If an attacker has same-user code execution, they can already call the PCS API directly — cache tampering gains little. Prioritized file permissions (I2, P1) and corruption auto-recovery (D2, P1) as the actionable items.
+- **Cross-process auth boundary** (E1) is interesting: an anonymous mstro instance can read data cached by an authenticated instance. Accepted as low risk since PCS allows anonymous reads anyway — the "escalation" is avoiding rate limits, not accessing protected data.
+- **Key design recommendation**: HMAC integrity verification on cache entries (P2 backlog). Per-installation secret in `~/.mstro/.cache-key`, HMAC-SHA256 over key+value+expiry. This is the right long-term fix for S1/T1/T2 but not urgent for single-user dev workstations.
+- **Immediate P1 actions**: (1) Explicit file permissions on `~/.mstro/` directory and `cache.db` — use `File.SetUnixFileMode` on Linux/macOS. (2) `PRAGMA integrity_check` in `InitializeDatabase()` with auto-delete-and-recreate on corruption.
+
+📌 Threat model written to `.ai-team/decisions/inbox/holden-sqlite-threat-model.md`. 13 findings, 2 P1 items for next sprint, HMAC integrity on P2 backlog.

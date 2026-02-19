@@ -22,7 +22,16 @@ public class CacheService
         _dbPath = dbPath;
         var dir = Path.GetDirectoryName(dbPath);
         if (!string.IsNullOrEmpty(dir))
+        {
             Directory.CreateDirectory(dir);
+            
+            // Set owner-only permissions on Linux/macOS to prevent info disclosure
+            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+            {
+                File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            }
+            // Windows: User profile directory is already restricted by default
+        }
         _connectionString = $"Data Source={_dbPath};Mode=ReadWriteCreate;Cache=Shared";
         InitializeDatabase();
     }
@@ -32,45 +41,101 @@ public class CacheService
         var homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var cacheDir = Path.Combine(homeDir, ".mstro");
         Directory.CreateDirectory(cacheDir);
+        
+        // Set owner-only permissions on Linux/macOS to prevent info disclosure on shared machines
+        if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+        {
+            File.SetUnixFileMode(cacheDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+        // Windows: User profile directory is already restricted by default
+        
         return Path.Combine(cacheDir, "cache.db");
     }
 
     private void InitializeDatabase()
     {
-        using var conn = new SqliteConnection(_connectionString);
-        conn.Open();
-        
-        // Enable WAL mode for concurrent reads across processes
-        using (var cmd = conn.CreateCommand())
+        SqliteConnection? conn = null;
+        try
         {
-            cmd.CommandText = "PRAGMA journal_mode=WAL;";
-            cmd.ExecuteNonQuery();
-        }
-        
-        // Set busy timeout for write contention
-        using (var cmd = conn.CreateCommand())
-        {
-            cmd.CommandText = "PRAGMA busy_timeout=5000;";
-            cmd.ExecuteNonQuery();
-        }
-        
-        // Create tables
-        using (var cmd = conn.CreateCommand())
-        {
-            cmd.CommandText = @"
-                CREATE TABLE IF NOT EXISTS cache (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL,
-                    expiry TEXT NOT NULL
-                );
+            conn = new SqliteConnection(_connectionString);
+            conn.Open();
+            
+            // Check database integrity before use
+            var integrityOk = false;
+            try
+            {
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "PRAGMA integrity_check";
+                    var result = cmd.ExecuteScalar()?.ToString();
+                    integrityOk = result == "ok";
+                }
+            }
+            catch (SqliteException)
+            {
+                // Corrupted header or unreadable database
+                integrityOk = false;
+            }
+            
+            if (!integrityOk)
+            {
+                Console.Error.WriteLine("[maestro-mcp] Cache database corrupted, recreating...");
+                conn.Close();
+                conn.Dispose();
+                conn = null;
                 
-                CREATE TABLE IF NOT EXISTS actions (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL,
-                    expiry TEXT NOT NULL
-                );
-            ";
-            cmd.ExecuteNonQuery();
+                // Release connection pool locks before deleting files (required on Windows)
+                SqliteConnection.ClearAllPools();
+                
+                // Delete corrupted database and sidecars
+                if (File.Exists(_dbPath))
+                    File.Delete(_dbPath);
+                if (File.Exists(_dbPath + "-wal"))
+                    File.Delete(_dbPath + "-wal");
+                if (File.Exists(_dbPath + "-shm"))
+                    File.Delete(_dbPath + "-shm");
+                
+                // Re-open clean database
+                conn = new SqliteConnection(_connectionString);
+                conn.Open();
+            }
+            
+            // Enable WAL mode for concurrent reads across processes
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = "PRAGMA journal_mode=WAL;";
+                cmd.ExecuteNonQuery();
+            }
+            
+            // Set busy timeout for write contention
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = "PRAGMA busy_timeout=5000;";
+                cmd.ExecuteNonQuery();
+            }
+            
+            // Create tables
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = @"
+                    CREATE TABLE IF NOT EXISTS cache (
+                        key TEXT PRIMARY KEY,
+                        value TEXT NOT NULL,
+                        expiry TEXT NOT NULL
+                    );
+                    
+                    CREATE TABLE IF NOT EXISTS actions (
+                        key TEXT PRIMARY KEY,
+                        value TEXT NOT NULL,
+                        expiry TEXT NOT NULL
+                    );
+                ";
+                cmd.ExecuteNonQuery();
+            }
+        }
+        finally
+        {
+            conn?.Dispose();
         }
     }
 

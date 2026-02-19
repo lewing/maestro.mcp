@@ -249,4 +249,155 @@ public class CacheServiceTests : IDisposable
         // All results should be the same value — no corruption
         Assert.All(results, r => Assert.Equal("shared-value", r));
     }
+
+    // ================================================================
+    // Security: SQLite P1 — file permissions and corruption recovery
+    // ================================================================
+
+    [Fact]
+    public void Test_DirectoryPermissions_SetOnUnix()
+    {
+        var cache = CreateCache();
+
+        // Verify the cache was created successfully
+        // On Unix, the directory should have owner-only permissions (700)
+        // On Windows, this test simply verifies the directory exists
+        var dir = Path.GetDirectoryName(_dbPath);
+        Assert.True(Directory.Exists(dir), "Cache directory should be created");
+
+        if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+        {
+            var mode = File.GetUnixFileMode(dir!);
+            // Should have owner read, write, execute only (no group or other access)
+            Assert.True(mode.HasFlag(UnixFileMode.UserRead), "Owner should have read permission");
+            Assert.True(mode.HasFlag(UnixFileMode.UserWrite), "Owner should have write permission");
+            Assert.True(mode.HasFlag(UnixFileMode.UserExecute), "Owner should have execute permission");
+            Assert.False(mode.HasFlag(UnixFileMode.GroupRead), "Group should not have read permission");
+            Assert.False(mode.HasFlag(UnixFileMode.OtherRead), "Others should not have read permission");
+        }
+    }
+
+    [Fact]
+    public async Task Test_DirectoryCreation_ForCustomPath()
+    {
+        // Create a custom path in a subdirectory that doesn't exist yet
+        var customPath = Path.Combine(Path.GetTempPath(), $"mstro-nested-{Guid.NewGuid()}", "subdir", "cache.db");
+        
+        try
+        {
+            var cache = new CacheService(customPath);
+            
+            // Verify the directory structure was created
+            var dir = Path.GetDirectoryName(customPath);
+            Assert.True(Directory.Exists(dir), "Parent directory should be created");
+            
+            // Verify the cache works
+            await cache.GetOrAddAsync("test-key", () => Task.FromResult("test-value"), TimeSpan.FromMinutes(5));
+            var result = await cache.GetOrAddAsync("test-key", () => Task.FromResult("other-value"), TimeSpan.FromMinutes(5));
+            Assert.Equal("test-value", result);
+        }
+        finally
+        {
+            // Clean up nested directory structure
+            var rootDir = Path.Combine(Path.GetTempPath(), Path.GetFileName(Path.GetDirectoryName(Path.GetDirectoryName(customPath))!));
+            if (Directory.Exists(rootDir))
+            {
+                try { Directory.Delete(rootDir, recursive: true); } catch { }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Test_CorruptedDatabase_RecreatesAutomatically()
+    {
+        // Write garbage bytes to simulate a corrupted database
+        await File.WriteAllBytesAsync(_dbPath, new byte[] { 0xFF, 0xFE, 0xFD, 0xFC, 0xFB, 0xFA });
+        
+        // Creating a CacheService should detect corruption and recreate the DB
+        var cache = CreateCache();
+        
+        // Verify normal operations work after recovery
+        await cache.GetOrAddAsync("key1", () => Task.FromResult("value1"), TimeSpan.FromMinutes(5));
+        var result = await cache.GetOrAddAsync("key1", () => Task.FromResult("value2"), TimeSpan.FromMinutes(5));
+        
+        Assert.Equal("value1", result);
+    }
+
+    [Fact]
+    public async Task Test_CorruptedDatabase_PreservesNormalOperation()
+    {
+        // Simulate corruption
+        await File.WriteAllBytesAsync(_dbPath, new byte[] { 0x00, 0x01, 0x02, 0x03 });
+        
+        var cache = CreateCache();
+        
+        // Test all normal operations after recovery
+        await cache.GetOrAddAsync("key1", () => Task.FromResult("value1"), TimeSpan.FromMinutes(5));
+        await cache.GetOrAddAsync("key2", () => Task.FromResult("value2"), TimeSpan.FromMinutes(5));
+        
+        cache.Invalidate("key1");
+        var count = 0;
+        await cache.GetOrAddAsync("key1", () => { count++; return Task.FromResult("new1"); }, TimeSpan.FromMinutes(5));
+        Assert.Equal(1, count); // key1 was invalidated, should re-fetch
+        
+        cache.InvalidatePrefix("key");
+        count = 0;
+        await cache.GetOrAddAsync("key2", () => { count++; return Task.FromResult("new2"); }, TimeSpan.FromMinutes(5));
+        Assert.Equal(1, count); // key2 was invalidated by prefix, should re-fetch
+        
+        cache.Clear();
+        count = 0;
+        await cache.GetOrAddAsync("key3", () => { count++; return Task.FromResult("value3"); }, TimeSpan.FromMinutes(5));
+        Assert.Equal(1, count); // First time fetching key3
+        
+        // Test action dedup still works
+        cache.RecordAction("action:test", TimeSpan.FromMinutes(5));
+        Assert.NotNull(cache.GetRecentAction("action:test"));
+    }
+
+    [Fact]
+    public async Task Test_EmptyDatabase_InitializesNormally()
+    {
+        // _dbPath doesn't exist yet (fresh test case)
+        Assert.False(File.Exists(_dbPath), "Database file should not exist initially");
+        
+        var cache = CreateCache();
+        
+        // Verify normal operations work on fresh database
+        await cache.GetOrAddAsync("key1", () => Task.FromResult("value1"), TimeSpan.FromMinutes(5));
+        var result = await cache.GetOrAddAsync("key1", () => Task.FromResult("value2"), TimeSpan.FromMinutes(5));
+        
+        Assert.Equal("value1", result);
+        Assert.True(File.Exists(_dbPath), "Database file should now exist");
+    }
+
+    [Fact]
+    public async Task Test_ValidDatabase_NotRecreated()
+    {
+        // Create a cache and populate it with data
+        var cache1 = CreateCache();
+        await cache1.GetOrAddAsync("key1", () => Task.FromResult("value1"), TimeSpan.FromMinutes(30));
+        await cache1.GetOrAddAsync("key2", () => Task.FromResult("value2"), TimeSpan.FromMinutes(30));
+        
+        // Create a NEW CacheService instance pointing at the same DB path
+        var cache2 = new CacheService(_dbPath);
+        
+        // Verify the data survives (proves we didn't unnecessarily recreate)
+        var callCount = 0;
+        var result1 = await cache2.GetOrAddAsync("key1", () =>
+        {
+            callCount++;
+            return Task.FromResult("new-value1");
+        }, TimeSpan.FromMinutes(30));
+        
+        var result2 = await cache2.GetOrAddAsync("key2", () =>
+        {
+            callCount++;
+            return Task.FromResult("new-value2");
+        }, TimeSpan.FromMinutes(30));
+        
+        Assert.Equal("value1", result1);
+        Assert.Equal("value2", result2);
+        Assert.Equal(0, callCount); // Factory was never called — data came from existing DB
+    }
 }
