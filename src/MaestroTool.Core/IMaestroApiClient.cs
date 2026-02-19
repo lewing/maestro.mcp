@@ -57,4 +57,8 @@ public interface IMaestroApiClient
     Task<Subscription> TriggerSubscriptionAsync(Guid subscriptionId, int buildId, CancellationToken cancellationToken = default);
 
     Task TriggerDailyUpdateAsync(CancellationToken cancellationToken = default);
+
+    Task<BuildGraph> GetBuildGraphAsync(int buildId, CancellationToken cancellationToken = default);
+
+    Task<FlowGraph> GetFlowGraphAsync(int days, int channelId, bool includeArcade = true, bool includeBuildTimes = true, bool includeDisabledSubscriptions = false, List<string>? includedFrequencies = null, CancellationToken cancellationToken = default);
 }

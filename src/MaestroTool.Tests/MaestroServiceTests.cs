@@ -74,6 +74,55 @@ public class MaestroServiceTests : IDisposable
             Channel = channel ?? CreateChannel()
         };
 
+    private static BuildGraph CreateBuildGraph(params Build[] builds)
+    {
+        var dict = new Dictionary<string, Build>();
+        foreach (var b in builds)
+            dict[b.Id.ToString()] = b;
+        return new BuildGraph(dict);
+    }
+
+    private static FlowGraph CreateFlowGraph(List<FlowRef>? refs = null, List<FlowEdge>? edges = null)
+    {
+        return new FlowGraph(
+            refs ?? new List<FlowRef>(),
+            edges ?? new List<FlowEdge>()
+        );
+    }
+
+    private static FlowRef CreateFlowRef(string id = "ref1", string repo = "https://github.com/dotnet/runtime", string branch = "main")
+    {
+        return new FlowRef(
+            officialBuildTime: 30.0,
+            prBuildTime: 15.0,
+            onLongestBuildPath: false,
+            bestCasePathTime: 60.0,
+            worstCasePathTime: 120.0,
+            goalTimeInMinutes: 90
+        )
+        {
+            Id = id,
+            Repository = repo,
+            Branch = branch
+        };
+    }
+
+    private static FlowEdge CreateFlowEdge(string fromId = "ref1", string toId = "ref2", string channel = ".NET 10")
+    {
+        return new FlowEdge(
+            subscriptionId: Guid.NewGuid(),
+            onLongestBuildPath: false,
+            isToolingOnly: false,
+            backEdge: false,
+            toId: toId,
+            fromId: fromId
+        )
+        {
+            ChannelName = channel,
+            PartOfCycle = null
+        };
+    }
+
     // ================================================================
     // GetSubscriptionsAsync
     // ================================================================
@@ -1161,5 +1210,127 @@ public class MaestroServiceTests : IDisposable
         Assert.True(result[0].Success);
         Assert.False(result[1].Success);
         Assert.Equal("timeout", result[1].ErrorMessage);
+    }
+
+    // ================================================================
+    // GetBuildGraphAsync
+    // ================================================================
+
+    [Fact]
+    public async Task GetBuildGraph_ReturnsFromApi()
+    {
+        var build1 = CreateBuild(101, "https://github.com/dotnet/runtime");
+        var build2 = CreateBuild(102, "https://github.com/dotnet/aspnetcore");
+        var expected = CreateBuildGraph(build1, build2);
+
+        _client.GetBuildGraphAsync(101, Arg.Any<CancellationToken>())
+            .Returns(expected);
+
+        var result = await _service.GetBuildGraphAsync(101);
+
+        Assert.NotNull(result);
+        Assert.Equal(2, result.Builds.Count);
+        Assert.True(result.Builds.ContainsKey("101"));
+        Assert.True(result.Builds.ContainsKey("102"));
+    }
+
+    [Fact]
+    public async Task GetBuildGraph_SecondCallReturnsCached()
+    {
+        var build = CreateBuild(101);
+        var graph = CreateBuildGraph(build);
+
+        _client.GetBuildGraphAsync(101, Arg.Any<CancellationToken>())
+            .Returns(graph);
+
+        var first = await _service.GetBuildGraphAsync(101);
+        var second = await _service.GetBuildGraphAsync(101);
+
+        Assert.Equal(first.Builds.Count, second.Builds.Count);
+        await _client.Received(1).GetBuildGraphAsync(101, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetBuildGraph_NoCacheBypassesCache()
+    {
+        var build = CreateBuild(101);
+        var graph = CreateBuildGraph(build);
+
+        _client.GetBuildGraphAsync(101, Arg.Any<CancellationToken>())
+            .Returns(graph);
+
+        var first = await _service.GetBuildGraphAsync(101);
+        var second = await _service.GetBuildGraphAsync(101, noCache: true);
+
+        Assert.NotNull(first);
+        Assert.NotNull(second);
+        await _client.Received(2).GetBuildGraphAsync(101, Arg.Any<CancellationToken>());
+    }
+
+    // ================================================================
+    // GetFlowGraphAsync
+    // ================================================================
+
+    [Fact]
+    public async Task GetFlowGraph_ReturnsFromApi()
+    {
+        var ref1 = CreateFlowRef("ref1", "https://github.com/dotnet/runtime", "main");
+        var ref2 = CreateFlowRef("ref2", "https://github.com/dotnet/aspnetcore", "main");
+        var edge1 = CreateFlowEdge("ref1", "ref2", ".NET 10");
+        var expected = CreateFlowGraph(
+            refs: new List<FlowRef> { ref1, ref2 },
+            edges: new List<FlowEdge> { edge1 });
+
+        _client.GetFlowGraphAsync(7, 1, true, true, false, null, Arg.Any<CancellationToken>())
+            .Returns(expected);
+
+        var result = await _service.GetFlowGraphAsync(7, 1);
+
+        Assert.NotNull(result);
+        Assert.Equal(2, result.FlowRefs.Count);
+        Assert.Single(result.FlowEdges);
+        Assert.Equal("ref1", result.FlowRefs[0].Id);
+        Assert.Equal("ref2", result.FlowRefs[1].Id);
+    }
+
+    [Fact]
+    public async Task GetFlowGraph_SecondCallReturnsCached()
+    {
+        var ref1 = CreateFlowRef();
+        var edge1 = CreateFlowEdge();
+        var graph = CreateFlowGraph(
+            refs: new List<FlowRef> { ref1 },
+            edges: new List<FlowEdge> { edge1 });
+
+        _client.GetFlowGraphAsync(7, 1, true, true, false, null, Arg.Any<CancellationToken>())
+            .Returns(graph);
+
+        var first = await _service.GetFlowGraphAsync(7, 1);
+        var second = await _service.GetFlowGraphAsync(7, 1);
+
+        Assert.Equal(first.FlowRefs.Count, second.FlowRefs.Count);
+        await _client.Received(1).GetFlowGraphAsync(7, 1, true, true, false, null, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetFlowGraph_DifferentChannelIdUsesSeperateCache()
+    {
+        var ref1 = CreateFlowRef("ref1");
+        var ref2 = CreateFlowRef("ref2");
+        var graph1 = CreateFlowGraph(refs: new List<FlowRef> { ref1 });
+        var graph2 = CreateFlowGraph(refs: new List<FlowRef> { ref2 });
+
+        _client.GetFlowGraphAsync(7, 1, true, true, false, null, Arg.Any<CancellationToken>())
+            .Returns(graph1);
+        _client.GetFlowGraphAsync(7, 2, true, true, false, null, Arg.Any<CancellationToken>())
+            .Returns(graph2);
+
+        var result1 = await _service.GetFlowGraphAsync(7, 1);
+        var result2 = await _service.GetFlowGraphAsync(7, 2);
+
+        Assert.Equal("ref1", result1.FlowRefs[0].Id);
+        Assert.Equal("ref2", result2.FlowRefs[0].Id);
+        await _client.Received(1).GetFlowGraphAsync(7, 1, true, true, false, null, Arg.Any<CancellationToken>());
+        await _client.Received(1).GetFlowGraphAsync(7, 2, true, true, false, null, Arg.Any<CancellationToken>());
     }
 }

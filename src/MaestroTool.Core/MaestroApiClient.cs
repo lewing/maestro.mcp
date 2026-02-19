@@ -158,4 +158,14 @@ public class MaestroApiClient : IMaestroApiClient
     {
         return _api.Subscriptions.TriggerDailyUpdateAsync(cancellationToken);
     }
+
+    public Task<BuildGraph> GetBuildGraphAsync(int buildId, CancellationToken cancellationToken = default)
+    {
+        return _api.Builds.GetBuildGraphAsync(buildId, cancellationToken);
+    }
+
+    public Task<FlowGraph> GetFlowGraphAsync(int days, int channelId, bool includeArcade = true, bool includeBuildTimes = true, bool includeDisabledSubscriptions = false, List<string>? includedFrequencies = null, CancellationToken cancellationToken = default)
+    {
+        return _api.Channels.GetFlowGraphAsync(days, channelId, includeArcade, includeBuildTimes, includeDisabledSubscriptions, includedFrequencies ?? new List<string>(), cancellationToken);
+    }
 }

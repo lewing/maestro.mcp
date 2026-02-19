@@ -482,6 +482,131 @@ public class MaestroMcpTools
         return Timestamp(noCache) + sb.ToString();
     }
 
+    [McpServerTool(Name = "maestro_build_graph")]
+    [Description("Get the full dependency graph for a build. Returns all builds in the dependency tree with their relationships.")]
+    public async Task<string> GetBuildGraph(
+        [Description("The BAR build ID to get the dependency graph for")] int buildId,
+        [Description("Bypass cache and fetch fresh data")] bool noCache = false,
+        CancellationToken cancellationToken = default)
+    {
+        var graph = await _service.GetBuildGraphAsync(buildId, noCache, cancellationToken);
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"**Build Graph for Build #{buildId}**");
+        sb.AppendLine($"Valid: {graph.IsValid}");
+        sb.AppendLine($"Total Builds: {graph.Builds?.Count ?? 0}\n");
+
+        if (graph.Builds == null || graph.Builds.Count == 0)
+        {
+            sb.AppendLine("No builds found in the dependency graph.");
+            return Timestamp(noCache) + sb.ToString();
+        }
+
+        // Identify the root build
+        sb.AppendLine($"**Root Build: #{buildId}**\n");
+
+        // Show all builds in the graph
+        sb.AppendLine("**All Builds in Dependency Tree:**\n");
+        foreach (var (key, build) in graph.Builds.OrderBy(kvp => kvp.Value.Id))
+        {
+            sb.AppendLine($"**Build #{build.Id}**");
+            sb.AppendLine($"  Repository: {build.GitHubRepository ?? build.AzureDevOpsRepository ?? "N/A"}");
+            sb.AppendLine($"  Commit: {build.Commit}");
+            sb.AppendLine($"  Date: {build.DateProduced:u}");
+            sb.AppendLine($"  AzDO Build: {build.AzureDevOpsBuildNumber ?? "N/A"}");
+            if (build.Dependencies?.Count > 0)
+            {
+                sb.AppendLine($"  Dependencies: {build.Dependencies.Count}");
+            }
+            sb.AppendLine();
+        }
+
+        return Timestamp(noCache) + sb.ToString();
+    }
+
+    [McpServerTool(Name = "maestro_flow_graph")]
+    [Description("Get the dependency flow graph for a channel showing how builds flow through subscriptions between repositories.")]
+    public async Task<string> GetFlowGraph(
+        [Description("The channel ID to get the flow graph for")] int channelId,
+        [Description("Number of days to include in the flow graph analysis")] int days = 7,
+        [Description("Include Arcade/tooling dependencies in the graph")] bool includeArcade = true,
+        [Description("Include build time metrics in the graph")] bool includeBuildTimes = true,
+        [Description("Include disabled subscriptions in the graph")] bool includeDisabledSubscriptions = false,
+        [Description("Bypass cache and fetch fresh data")] bool noCache = false,
+        CancellationToken cancellationToken = default)
+    {
+        var graph = await _service.GetFlowGraphAsync(days, channelId, includeArcade, includeBuildTimes, includeDisabledSubscriptions, null, noCache, cancellationToken);
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"**Flow Graph for Channel #{channelId}** (last {days} days)");
+        sb.AppendLine($"Valid: {graph.IsValid}");
+        sb.AppendLine($"Flow Nodes: {graph.FlowRefs?.Count ?? 0}");
+        sb.AppendLine($"Flow Edges: {graph.FlowEdges?.Count ?? 0}\n");
+
+        if (graph.FlowRefs == null || graph.FlowRefs.Count == 0)
+        {
+            sb.AppendLine("No flow nodes found in the dependency graph.");
+            return Timestamp(noCache) + sb.ToString();
+        }
+
+        // Section 1: Flow Nodes (Repositories)
+        sb.AppendLine("**Flow Nodes (Repositories):**\n");
+        foreach (var flowRef in graph.FlowRefs.OrderBy(f => f.Repository).ThenBy(f => f.Branch))
+        {
+            var onLongestPath = flowRef.OnLongestBuildPath ? " ⚡" : "";
+            sb.AppendLine($"**{flowRef.Repository}** ({flowRef.Branch}){onLongestPath}");
+            sb.AppendLine($"  ID: {flowRef.Id}");
+            if (flowRef.OfficialBuildTime > 0)
+                sb.AppendLine($"  Official Build Time: {flowRef.OfficialBuildTime} min");
+            if (flowRef.PrBuildTime > 0)
+                sb.AppendLine($"  PR Build Time: {flowRef.PrBuildTime} min");
+            if (flowRef.BestCasePathTime > 0)
+                sb.AppendLine($"  Best Case Path Time: {flowRef.BestCasePathTime} min");
+            if (flowRef.WorstCasePathTime > 0)
+                sb.AppendLine($"  Worst Case Path Time: {flowRef.WorstCasePathTime} min");
+            if (flowRef.GoalTimeInMinutes > 0)
+                sb.AppendLine($"  Goal Time: {flowRef.GoalTimeInMinutes} min");
+            if (flowRef.InputChannels?.Count > 0)
+                sb.AppendLine($"  Input Channels: {string.Join(", ", flowRef.InputChannels)}");
+            if (flowRef.OutputChannels?.Count > 0)
+                sb.AppendLine($"  Output Channels: {string.Join(", ", flowRef.OutputChannels)}");
+            sb.AppendLine();
+        }
+
+        // Section 2: Flow Edges (Subscription Connections)
+        if (graph.FlowEdges != null && graph.FlowEdges.Count > 0)
+        {
+            sb.AppendLine("\n**Flow Edges (Subscription Connections):**\n");
+            foreach (var edge in graph.FlowEdges)
+            {
+                var fromRepo = graph.FlowRefs.FirstOrDefault(f => f.Id == edge.FromId);
+                var toRepo = graph.FlowRefs.FirstOrDefault(f => f.Id == edge.ToId);
+                
+                var indicators = new List<string>();
+                if (edge.OnLongestBuildPath) indicators.Add("⚡ Longest Path");
+                if (edge.IsToolingOnly) indicators.Add("🔧 Tooling");
+                if (edge.PartOfCycle == true) indicators.Add("🔄 Cycle");
+                if (edge.BackEdge) indicators.Add("⬅️ Back Edge");
+                
+                var indicatorStr = indicators.Count > 0 ? $" ({string.Join(", ", indicators)})" : "";
+                
+                sb.AppendLine($"**{fromRepo?.Repository ?? edge.FromId}** → **{toRepo?.Repository ?? edge.ToId}**{indicatorStr}");
+                sb.AppendLine($"  Channel: {edge.ChannelName ?? "N/A"}");
+                sb.AppendLine($"  Subscription: {edge.SubscriptionId}");
+                sb.AppendLine();
+            }
+        }
+
+        // Highlight longest build path summary
+        var longestPathNodes = graph.FlowRefs.Where(f => f.OnLongestBuildPath).ToList();
+        if (longestPathNodes.Count > 0)
+        {
+            sb.AppendLine("\n⚡ **Longest Build Path:** " + string.Join(" → ", longestPathNodes.Select(n => n.Repository)));
+        }
+
+        return Timestamp(noCache) + sb.ToString();
+    }
+
     private static string FormatBuild(Build build)
     {
         var sb = new StringBuilder();

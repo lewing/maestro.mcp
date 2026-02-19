@@ -307,6 +307,25 @@ public class MaestroService
         // Invalidate subscription-related caches since updates may have occurred
         _cache.InvalidatePrefix($"subs:");
     }
+
+    public Task<BuildGraph> GetBuildGraphAsync(int buildId, bool noCache = false, CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(buildId);
+        var key = $"build-graph:{buildId}";
+        if (noCache) _cache.Invalidate(key);
+        return _cache.GetOrAddAsync(key,
+            () => _client.GetBuildGraphAsync(buildId, cancellationToken),
+            LongTtl); // Build graphs are immutable like builds
+    }
+
+    public Task<FlowGraph> GetFlowGraphAsync(int days, int channelId, bool includeArcade = true, bool includeBuildTimes = true, bool includeDisabledSubscriptions = false, List<string>? includedFrequencies = null, bool noCache = false, CancellationToken cancellationToken = default)
+    {
+        var key = $"flow-graph:{channelId}:{days}:{includeArcade}:{includeBuildTimes}:{includeDisabledSubscriptions}";
+        if (noCache) _cache.Invalidate(key);
+        return _cache.GetOrAddAsync(key,
+            () => _client.GetFlowGraphAsync(days, channelId, includeArcade, includeBuildTimes, includeDisabledSubscriptions, includedFrequencies, cancellationToken),
+            ShortTtl);
+    }
 }
 
 public record SubscriptionHealthResult(
