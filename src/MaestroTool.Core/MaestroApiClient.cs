@@ -128,6 +128,27 @@ public class MaestroApiClient : IMaestroApiClient
             cancellationToken: cancellationToken);
     }
 
+    public Task<List<TrackedPullRequest>> GetTrackedPullRequestsAsync(CancellationToken cancellationToken = default)
+    {
+        return _api.PullRequest.GetTrackedPullRequestsAsync(cancellationToken: cancellationToken);
+    }
+
+    public Task<TrackedPullRequest> GetTrackedPullRequestBySubscriptionIdAsync(string subscriptionId, CancellationToken cancellationToken = default)
+    {
+        return _api.PullRequest.GetTrackedPullRequestBySubscriptionIdAsync(subscriptionId, cancellationToken: cancellationToken);
+    }
+
+    public Task<BackflowStatus> GetBackflowStatusAsync(int vmrBuildId, CancellationToken cancellationToken = default)
+    {
+        return _api.BackflowStatus.GetBackflowStatusAsync(vmrBuildId, cancellationToken: cancellationToken);
+    }
+
+    public async Task<List<SubscriptionHistoryItem>> GetSubscriptionHistoryAsync(Guid subscriptionId, int? page = null, int? perPage = null, CancellationToken cancellationToken = default)
+    {
+        var result = await _api.Subscriptions.GetSubscriptionHistoryPageAsync(subscriptionId, page, perPage, cancellationToken);
+        return result.Values.ToList();
+    }
+
     public async Task<Subscription> TriggerSubscriptionAsync(Guid subscriptionId, int buildId, CancellationToken cancellationToken = default)
     {
         return await _api.Subscriptions.TriggerSubscriptionAsync(buildId, true, subscriptionId, cancellationToken);

@@ -242,6 +242,46 @@ public class MaestroService
         }, FreshnessTtl);
     }
 
+    public Task<List<TrackedPullRequest>> GetTrackedPullRequestsAsync(int? channelId = null, bool noCache = false, CancellationToken cancellationToken = default)
+    {
+        var key = $"tracked-prs:{channelId}";
+        if (noCache) _cache.Invalidate(key);
+        return _cache.GetOrAddAsync(key, async () =>
+        {
+            var prs = await _client.GetTrackedPullRequestsAsync(cancellationToken);
+            if (channelId.HasValue)
+                prs = prs.Where(pr => pr.Channel?.Id == channelId.Value).ToList();
+            return prs;
+        }, ShortTtl);
+    }
+
+    public Task<TrackedPullRequest> GetTrackedPullRequestBySubscriptionIdAsync(string subscriptionId, bool noCache = false, CancellationToken cancellationToken = default)
+    {
+        var key = $"tracked-pr:{subscriptionId}";
+        if (noCache) _cache.Invalidate(key);
+        return _cache.GetOrAddAsync(key,
+            () => _client.GetTrackedPullRequestBySubscriptionIdAsync(subscriptionId, cancellationToken),
+            ShortTtl);
+    }
+
+    public Task<BackflowStatus> GetBackflowStatusAsync(int vmrBuildId, bool noCache = false, CancellationToken cancellationToken = default)
+    {
+        var key = $"backflow-status:{vmrBuildId}";
+        if (noCache) _cache.Invalidate(key);
+        return _cache.GetOrAddAsync(key,
+            () => _client.GetBackflowStatusAsync(vmrBuildId, cancellationToken),
+            ShortTtl);
+    }
+
+    public Task<List<SubscriptionHistoryItem>> GetSubscriptionHistoryAsync(Guid subscriptionId, bool noCache = false, CancellationToken cancellationToken = default)
+    {
+        var key = $"sub-history:{subscriptionId}";
+        if (noCache) _cache.Invalidate(key);
+        return _cache.GetOrAddAsync(key,
+            () => _client.GetSubscriptionHistoryAsync(subscriptionId, cancellationToken: cancellationToken),
+            ShortTtl);
+    }
+
     public async Task<Subscription> TriggerSubscriptionAsync(Guid subscriptionId, int buildId, CancellationToken cancellationToken = default)
     {
         Console.Error.WriteLine($"[{DateTime.UtcNow:O}] Trigger: TriggerSubscriptionAsync args=(subscriptionId={subscriptionId}, buildId={buildId})");

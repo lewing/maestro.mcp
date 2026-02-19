@@ -1,6 +1,6 @@
 # maestro.mcp — MCP server for Maestro/BAR dependency flow data
 
-An MCP server that provides cached access to [Maestro/BAR](https://maestro.dot.net) (Build Asset Registry) data for the .NET build infrastructure. Exposes 11 tools for querying subscriptions, builds, channels, and health status, plus triggering subscription updates and managing cache via the Model Context Protocol.
+An MCP server that provides cached access to [Maestro/BAR](https://maestro.dot.net) (Build Asset Registry) data for the .NET build infrastructure. Exposes 14 tools for querying subscriptions, builds, channels, and health status, plus triggering subscription updates and managing cache via the Model Context Protocol.
 
 Built with [Squad](https://github.com/bradygaster/squad) — [meet the squad](.ai-team/SQUAD.md).
 
@@ -143,7 +143,7 @@ Future versions may include destructive actions (delete subscription, remove def
 
 ## Available Tools
 
-The server registers **11 MCP tools** for querying and triggering Maestro/BAR operations:
+The server registers **14 MCP tools** for querying and triggering Maestro/BAR operations:
 
 | Tool Name | Description | Key Parameters |
 |-----------|-------------|-----------------|
@@ -157,6 +157,10 @@ The server registers **11 MCP tools** for querying and triggering Maestro/BAR op
 | `maestro_build_freshness` | Check how long since a source repository branch was built | `sourceRepository`: source repo URL; `branch`: branch name; `noCache`: bypass cache |
 | `maestro_trigger_subscription` | Trigger a subscription to process a specific build | `subscriptionId`: UUID; `buildId`: BAR build ID |
 | `maestro_trigger_daily_update` | Trigger all daily-update subscriptions | None |
+| `maestro_codeflow_prs` | List active codeflow (backflow) tracked PRs, optionally filtered by channel | `channelName` (optional); `noCache`: bypass cache |
+| `maestro_tracked_pr` | Get the tracked PR for a specific subscription by ID | `subscriptionId`: UUID; `noCache`: bypass cache |
+| `maestro_backflow_status` | Get backflow status for a VMR build | `vmrBuildId`: build ID; `noCache`: bypass cache |
+| `maestro_subscription_history` | Get update history for a subscription | `subscriptionId`: UUID; `noCache`: bypass cache |
 | `maestro_clear_cache` | Clear the shared SQLite cache | None |
 
 ### Cache Bypass
@@ -164,6 +168,10 @@ The server registers **11 MCP tools** for querying and triggering Maestro/BAR op
 All read tools accept an optional `noCache` boolean parameter. When set to `true`, the cached entry for that request is invalidated before fetching, guaranteeing a fresh API call. Use this after triggering actions or when investigating rapidly changing state.
 
 The `maestro_clear_cache` tool provides a full cache reset — useful when doing bulk operations or debugging stale data.
+
+### Codeflow Tracking
+
+The `maestro_codeflow_prs`, `maestro_tracked_pr`, `maestro_backflow_status`, and `maestro_subscription_history` tools expose the same PCS PullRequest APIs used by the VMR codeflow tools (see [dotnet/dotnet#4952](https://github.com/dotnet/dotnet/issues/4952)). These tools enable visibility into codeflow PRs, backflow status, and subscription update history without requiring direct VMR access.
 
 ### Response Timestamps
 
@@ -189,7 +197,7 @@ src/
 │   └── MaestroApiClient.cs   # PCS client wrapper with auth cascade
 ├── MaestroTool.Mcp/          # MCP HTTP server (ASP.NET Core)
 │   └── Program.cs
-└── MaestroTool.Tests/        # Unit tests (80 tests)
+└── MaestroTool.Tests/        # Unit tests (88 tests)
 ```
 
 - **MaestroTool** — stdio MCP server packaged as a [dotnet tool](https://learn.microsoft.com/dotnet/core/tools/global-tools). Default entry point for `dnx` / `dotnet tool` usage.
@@ -267,7 +275,7 @@ dotnet test
 ```
 
 The test suite includes:
-- **80 unit tests** (73 original + 3 regression tests + 4 targetBranch filter tests) covering `CacheService` and `MaestroService` behavior.
+- **88 unit tests** (73 original + 3 regression tests + 4 targetBranch filter tests + 8 codeflow tests) covering `CacheService` and `MaestroService` behavior.
 - **Framework**: xUnit + NSubstitute for mocking.
 - **Coverage**: cache hit/miss, TTL expiration, null handling, error scenarios.
 

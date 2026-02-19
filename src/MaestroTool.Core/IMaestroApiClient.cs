@@ -46,6 +46,14 @@ public interface IMaestroApiClient
         int? channelId = null,
         CancellationToken cancellationToken = default);
 
+    Task<List<TrackedPullRequest>> GetTrackedPullRequestsAsync(CancellationToken cancellationToken = default);
+
+    Task<TrackedPullRequest> GetTrackedPullRequestBySubscriptionIdAsync(string subscriptionId, CancellationToken cancellationToken = default);
+
+    Task<BackflowStatus> GetBackflowStatusAsync(int vmrBuildId, CancellationToken cancellationToken = default);
+
+    Task<List<SubscriptionHistoryItem>> GetSubscriptionHistoryAsync(Guid subscriptionId, int? page = null, int? perPage = null, CancellationToken cancellationToken = default);
+
     Task<Subscription> TriggerSubscriptionAsync(Guid subscriptionId, int buildId, CancellationToken cancellationToken = default);
 
     Task TriggerDailyUpdateAsync(CancellationToken cancellationToken = default);

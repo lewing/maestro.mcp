@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using MaestroTool.Core;
 using Microsoft.DotNet.ProductConstructionService.Client.Models;
 using NSubstitute;
@@ -1010,5 +1011,155 @@ public class MaestroServiceTests : IDisposable
         // buildId=-1 is invalid — should be caught by validation
         var ex = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
             () => _service.GetBuildAsync(-1));
+    }
+
+    // ================================================================
+    // Codeflow PR Tracking (v0.4.0)
+    // ================================================================
+
+    private static TrackedPullRequest CreateTrackedPullRequest(string url = "https://github.com/dotnet/dotnet/pull/1234")
+    {
+        var tpr = new TrackedPullRequest(sourceEnabled: true, lastUpdate: DateTimeOffset.UtcNow, lastCheck: DateTimeOffset.UtcNow)
+        {
+            Url = url,
+            TargetBranch = "main",
+            HeadBranch = "darc-main-abc123"
+        };
+        return tpr;
+    }
+
+    [Fact]
+    public async Task GetTrackedPullRequests_ReturnsList()
+    {
+        var pr1 = CreateTrackedPullRequest("https://github.com/dotnet/dotnet/pull/1001");
+        var pr2 = CreateTrackedPullRequest("https://github.com/dotnet/dotnet/pull/1002");
+        var expected = new List<TrackedPullRequest> { pr1, pr2 };
+
+        _client.GetTrackedPullRequestsAsync(Arg.Any<CancellationToken>())
+            .Returns(expected);
+
+        var result = await _service.GetTrackedPullRequestsAsync();
+
+        Assert.Equal(2, result.Count);
+        Assert.Equal("https://github.com/dotnet/dotnet/pull/1001", result[0].Url);
+        Assert.Equal("https://github.com/dotnet/dotnet/pull/1002", result[1].Url);
+    }
+
+    [Fact]
+    public async Task GetTrackedPullRequests_EmptyList()
+    {
+        _client.GetTrackedPullRequestsAsync(Arg.Any<CancellationToken>())
+            .Returns(new List<TrackedPullRequest>());
+
+        var result = await _service.GetTrackedPullRequestsAsync();
+
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public async Task GetTrackedPullRequests_CachesResult()
+    {
+        var expected = new List<TrackedPullRequest> { CreateTrackedPullRequest() };
+        _client.GetTrackedPullRequestsAsync(Arg.Any<CancellationToken>())
+            .Returns(expected);
+
+        var first = await _service.GetTrackedPullRequestsAsync();
+        var second = await _service.GetTrackedPullRequestsAsync();
+
+        Assert.Equal(first[0].Url, second[0].Url);
+        await _client.Received(1).GetTrackedPullRequestsAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetTrackedPullRequestBySubscriptionId_ReturnsTrackedPR()
+    {
+        var subId = Guid.NewGuid().ToString();
+        var expected = CreateTrackedPullRequest("https://github.com/dotnet/dotnet/pull/5555");
+
+        _client.GetTrackedPullRequestBySubscriptionIdAsync(subId, Arg.Any<CancellationToken>())
+            .Returns(expected);
+
+        var result = await _service.GetTrackedPullRequestBySubscriptionIdAsync(subId);
+
+        Assert.Equal("https://github.com/dotnet/dotnet/pull/5555", result.Url);
+    }
+
+    [Fact]
+    public async Task GetTrackedPullRequestBySubscriptionId_CachesResult()
+    {
+        var subId = Guid.NewGuid().ToString();
+        var expected = CreateTrackedPullRequest();
+
+        _client.GetTrackedPullRequestBySubscriptionIdAsync(subId, Arg.Any<CancellationToken>())
+            .Returns(expected);
+
+        var first = await _service.GetTrackedPullRequestBySubscriptionIdAsync(subId);
+        var second = await _service.GetTrackedPullRequestBySubscriptionIdAsync(subId);
+
+        Assert.Equal(first.Url, second.Url);
+        await _client.Received(1).GetTrackedPullRequestBySubscriptionIdAsync(subId, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetTrackedPullRequestBySubscriptionId_NoCacheBypassesCache()
+    {
+        var subId = Guid.NewGuid().ToString();
+        var first = CreateTrackedPullRequest("https://github.com/dotnet/dotnet/pull/1001");
+        var second = CreateTrackedPullRequest("https://github.com/dotnet/dotnet/pull/1002");
+
+        _client.GetTrackedPullRequestBySubscriptionIdAsync(subId, Arg.Any<CancellationToken>())
+            .Returns(first, second);
+
+        var result1 = await _service.GetTrackedPullRequestBySubscriptionIdAsync(subId);
+        var result2 = await _service.GetTrackedPullRequestBySubscriptionIdAsync(subId, noCache: true);
+
+        Assert.Equal("https://github.com/dotnet/dotnet/pull/1001", result1.Url);
+        Assert.Equal("https://github.com/dotnet/dotnet/pull/1002", result2.Url);
+        await _client.Received(2).GetTrackedPullRequestBySubscriptionIdAsync(subId, Arg.Any<CancellationToken>());
+    }
+
+    // ================================================================
+    // Backflow Status (v0.4.0)
+    // ================================================================
+
+    [Fact]
+    public async Task GetBackflowStatus_ReturnsStatus()
+    {
+        var expected = new BackflowStatus(
+            vmrCommitSha: "abc123",
+            computationTimestamp: DateTimeOffset.UtcNow,
+            branchStatuses: System.Collections.Immutable.ImmutableDictionary<string, BranchBackflowStatus>.Empty);
+
+        _client.GetBackflowStatusAsync(42, Arg.Any<CancellationToken>())
+            .Returns(expected);
+
+        var result = await _service.GetBackflowStatusAsync(42);
+
+        Assert.Equal("abc123", result.VmrCommitSha);
+    }
+
+    // ================================================================
+    // Subscription History (v0.4.0)
+    // ================================================================
+
+    [Fact]
+    public async Task GetSubscriptionHistory_ReturnsList()
+    {
+        var subId = Guid.NewGuid();
+        var items = new List<SubscriptionHistoryItem>
+        {
+            new(DateTimeOffset.UtcNow, success: true, subscriptionId: subId, errorMessage: "", action: "UpdateAssets", retryUrl: ""),
+            new(DateTimeOffset.UtcNow.AddMinutes(-5), success: false, subscriptionId: subId, errorMessage: "timeout", action: "UpdateAssets", retryUrl: "https://retry")
+        };
+
+        _client.GetSubscriptionHistoryAsync(subId, null, null, Arg.Any<CancellationToken>())
+            .Returns(items);
+
+        var result = await _service.GetSubscriptionHistoryAsync(subId);
+
+        Assert.Equal(2, result.Count);
+        Assert.True(result[0].Success);
+        Assert.False(result[1].Success);
+        Assert.Equal("timeout", result[1].ErrorMessage);
     }
 }

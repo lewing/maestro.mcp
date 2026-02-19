@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Text;
+using Microsoft.DotNet.ProductConstructionService.Client;
 using Microsoft.DotNet.ProductConstructionService.Client.Models;
 using ModelContextProtocol.Server;
 
@@ -319,6 +320,166 @@ public class MaestroMcpTools
     {
         _cache.Clear();
         return "✅ Cache cleared. All subsequent tool calls will fetch fresh data from the Maestro API.";
+    }
+
+    [McpServerTool(Name = "maestro_codeflow_prs")]
+    [Description("List active codeflow (tracked) pull requests managed by Maestro. Optionally filter by channel name. Shows PR URL, channel, target branch, last update, and subscription updates.")]
+    public async Task<string> GetCodeflowPrs(
+        [Description("Filter by channel name (e.g. '.NET 10.0.1xx SDK')")] string? channelName = null,
+        [Description("Bypass cache and fetch fresh data")] bool noCache = false,
+        CancellationToken cancellationToken = default)
+    {
+        int? channelId = null;
+        if (!string.IsNullOrEmpty(channelName))
+        {
+            var channel = await _service.GetChannelByNameAsync(channelName, noCache, cancellationToken);
+            channelId = channel?.Id;
+            if (channelId == null)
+                return $"Channel '{channelName}' not found.";
+        }
+
+        var prs = await _service.GetTrackedPullRequestsAsync(channelId, noCache, cancellationToken);
+
+        if (prs.Count == 0)
+            return "No active tracked pull requests found" + (channelName != null ? $" for channel '{channelName}'" : "") + ".";
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"Found {prs.Count} tracked pull request(s):\n");
+
+        foreach (var pr in prs)
+        {
+            sb.AppendLine($"**{pr.Url}**");
+            sb.AppendLine($"  Channel: {pr.Channel?.Name ?? "N/A"} | Target Branch: {pr.TargetBranch ?? "N/A"}");
+            sb.AppendLine($"  Head Branch: {pr.HeadBranch ?? "N/A"} | Source Enabled: {pr.SourceEnabled}");
+            sb.AppendLine($"  Last Update: {pr.LastUpdate:u} | Last Check: {pr.LastCheck:u}");
+            if (pr.NextCheck.HasValue)
+                sb.AppendLine($"  Next Check: {pr.NextCheck.Value:u}");
+            if (pr.Updates?.Count > 0)
+            {
+                sb.AppendLine($"  Updates ({pr.Updates.Count}):");
+                foreach (var update in pr.Updates)
+                {
+                    sb.AppendLine($"    - {update.SourceRepository} (sub: {update.SubscriptionId}, build: #{update.BuildId})");
+                }
+            }
+            sb.AppendLine();
+        }
+
+        return Timestamp(noCache) + sb.ToString();
+    }
+
+    [McpServerTool(Name = "maestro_tracked_pr")]
+    [Description("Get the tracked pull request for a specific Maestro subscription. Returns PR URL, channel, target branch, and update details. Returns a message if no PR is currently tracked.")]
+    public async Task<string> GetTrackedPr(
+        [Description("The subscription GUID")] string subscriptionId,
+        [Description("Bypass cache and fetch fresh data")] bool noCache = false,
+        CancellationToken cancellationToken = default)
+    {
+        if (!Guid.TryParse(subscriptionId, out _))
+            return "Invalid subscription ID format. Expected a GUID.";
+
+        try
+        {
+            var pr = await _service.GetTrackedPullRequestBySubscriptionIdAsync(subscriptionId, noCache, cancellationToken);
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"**Tracked PR for subscription {subscriptionId}**\n");
+            sb.AppendLine($"URL: {pr.Url}");
+            sb.AppendLine($"Channel: {pr.Channel?.Name ?? "N/A"}");
+            sb.AppendLine($"Target Branch: {pr.TargetBranch ?? "N/A"} | Head Branch: {pr.HeadBranch ?? "N/A"}");
+            sb.AppendLine($"Source Enabled: {pr.SourceEnabled}");
+            sb.AppendLine($"Last Update: {pr.LastUpdate:u} | Last Check: {pr.LastCheck:u}");
+            if (pr.NextCheck.HasValue)
+                sb.AppendLine($"Next Check: {pr.NextCheck.Value:u}");
+            if (pr.Updates?.Count > 0)
+            {
+                sb.AppendLine($"\nUpdates ({pr.Updates.Count}):");
+                foreach (var update in pr.Updates)
+                {
+                    sb.AppendLine($"  - {update.SourceRepository} (sub: {update.SubscriptionId}, build: #{update.BuildId})");
+                }
+            }
+
+            return Timestamp(noCache) + sb.ToString();
+        }
+        catch (RestApiException ex) when (ex.Response.Status == 404)
+        {
+            return $"No active PR tracked for subscription {subscriptionId}.";
+        }
+    }
+
+    [McpServerTool(Name = "maestro_backflow_status")]
+    [Description("Get backflow status for a specific VMR build. Shows per-branch backflow status including commit distance and subscription details.")]
+    public async Task<string> GetBackflowStatus(
+        [Description("The VMR (dotnet/dotnet) BAR build ID to check backflow status for")] int vmrBuildId,
+        [Description("Bypass cache and fetch fresh data")] bool noCache = false,
+        CancellationToken cancellationToken = default)
+    {
+        var status = await _service.GetBackflowStatusAsync(vmrBuildId, noCache, cancellationToken);
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"**Backflow Status for VMR Build #{vmrBuildId}**\n");
+        sb.AppendLine($"VMR Commit: {status.VmrCommitSha ?? "N/A"}");
+        sb.AppendLine($"Computed: {status.ComputationTimestamp:u}");
+        sb.AppendLine($"Valid: {status.IsValid}\n");
+
+        if (status.BranchStatuses?.Count > 0)
+        {
+            sb.AppendLine($"Branch statuses ({status.BranchStatuses.Count}):\n");
+            foreach (var (branch, branchStatus) in status.BranchStatuses)
+            {
+                var branchValid = branchStatus.IsValid ? "✅" : "⚠️";
+                sb.AppendLine($"**{branch}** {branchValid} (channel ID: {branchStatus.DefaultChannelId})");
+                if (branchStatus.SubscriptionStatuses?.Count > 0)
+                {
+                    foreach (var subStatus in branchStatus.SubscriptionStatuses)
+                    {
+                        var distance = subStatus.CommitDistance > 0 ? $"⚠️ {subStatus.CommitDistance} commits behind" : "✅ up to date";
+                        sb.AppendLine($"  - {subStatus.TargetRepository} ({subStatus.TargetBranch}): {distance}");
+                        sb.AppendLine($"    Sub: {subStatus.SubscriptionId} | Last SHA: {subStatus.LastBackflowedSha ?? "none"}");
+                    }
+                }
+                sb.AppendLine();
+            }
+        }
+        else
+        {
+            sb.AppendLine("No branch statuses available.");
+        }
+
+        return Timestamp(noCache) + sb.ToString();
+    }
+
+    [McpServerTool(Name = "maestro_subscription_history")]
+    [Description("Get the update history for a specific Maestro subscription. Shows timestamped actions, success/failure status, and error messages for failed updates.")]
+    public async Task<string> GetSubscriptionHistory(
+        [Description("The subscription GUID")] string subscriptionId,
+        [Description("Bypass cache and fetch fresh data")] bool noCache = false,
+        CancellationToken cancellationToken = default)
+    {
+        if (!Guid.TryParse(subscriptionId, out var id))
+            return "Invalid subscription ID format. Expected a GUID.";
+
+        var history = await _service.GetSubscriptionHistoryAsync(id, noCache, cancellationToken);
+
+        if (history.Count == 0)
+            return $"No history found for subscription {subscriptionId}.";
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"**Subscription History for {subscriptionId}** ({history.Count} entries):\n");
+
+        foreach (var item in history.OrderByDescending(h => h.Timestamp))
+        {
+            var status = item.Success ? "✅" : "❌";
+            sb.AppendLine($"{status} **{item.Timestamp:u}** — {item.Action}");
+            if (!item.Success && !string.IsNullOrEmpty(item.ErrorMessage))
+                sb.AppendLine($"    Error: {item.ErrorMessage}");
+            if (!string.IsNullOrEmpty(item.RetryUrl))
+                sb.AppendLine($"    Retry: {item.RetryUrl}");
+            sb.AppendLine();
+        }
+
+        return Timestamp(noCache) + sb.ToString();
     }
 
     private static string FormatBuild(Build build)
