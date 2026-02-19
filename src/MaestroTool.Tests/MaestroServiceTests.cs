@@ -857,13 +857,13 @@ public class MaestroServiceTests : IDisposable
     {
         var subId = Guid.NewGuid();
         var expected = CreateSubscription(id: subId);
-        _client.TriggerSubscriptionAsync(subId, 42, Arg.Any<CancellationToken>())
+        _client.TriggerSubscriptionAsync(subId, 42, false, Arg.Any<CancellationToken>())
             .Returns(expected);
 
         var result = await _service.TriggerSubscriptionAsync(subId, 42);
 
         Assert.Equal(expected.Id, result.Id);
-        await _client.Received(1).TriggerSubscriptionAsync(subId, 42, Arg.Any<CancellationToken>());
+        await _client.Received(1).TriggerSubscriptionAsync(subId, 42, false, Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -886,7 +886,7 @@ public class MaestroServiceTests : IDisposable
             .Returns(subs);
         _client.GetSubscriptionAsync(subId, Arg.Any<CancellationToken>())
             .Returns(sub);
-        _client.TriggerSubscriptionAsync(subId, 1, Arg.Any<CancellationToken>())
+        _client.TriggerSubscriptionAsync(subId, 1, false, Arg.Any<CancellationToken>())
             .Returns(sub);
 
         // Populate caches
@@ -921,6 +921,69 @@ public class MaestroServiceTests : IDisposable
         await _service.GetSubscriptionsAsync();
 
         await _client.Received(2).ListSubscriptionsAsync(null, null, null, true, Arg.Any<CancellationToken>());
+    }
+
+    // ================================================================
+    // Trigger method: force parameter tests
+    // ================================================================
+
+    [Fact]
+    public async Task TriggerSubscription_WithForce_PassesForceThroughToClient()
+    {
+        var subId = Guid.NewGuid();
+        var expected = CreateSubscription(id: subId);
+        _client.TriggerSubscriptionAsync(subId, 42, true, Arg.Any<CancellationToken>())
+            .Returns(expected);
+
+        var result = await _service.TriggerSubscriptionAsync(subId, 42, force: true);
+
+        Assert.Equal(expected.Id, result.Id);
+        await _client.Received(1).TriggerSubscriptionAsync(subId, 42, true, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task TriggerSubscription_WithForce_InvalidatesCaches()
+    {
+        var subId = Guid.NewGuid();
+        var sub = CreateSubscription(id: subId);
+        var subs = new List<Subscription> { sub };
+
+        _client.ListSubscriptionsAsync(null, null, null, true, Arg.Any<CancellationToken>())
+            .Returns(subs);
+        _client.GetSubscriptionAsync(subId, Arg.Any<CancellationToken>())
+            .Returns(sub);
+        _client.TriggerSubscriptionAsync(subId, 1, true, Arg.Any<CancellationToken>())
+            .Returns(sub);
+
+        // Populate caches
+        await _service.GetSubscriptionsAsync();
+        await _service.GetSubscriptionAsync(subId);
+
+        // Trigger with force should invalidate
+        await _service.TriggerSubscriptionAsync(subId, 1, force: true);
+
+        // Next reads should hit API again
+        await _service.GetSubscriptionsAsync();
+        await _service.GetSubscriptionAsync(subId);
+
+        await _client.Received(2).ListSubscriptionsAsync(null, null, null, true, Arg.Any<CancellationToken>());
+        await _client.Received(2).GetSubscriptionAsync(subId, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task TriggerSubscription_DefaultForceIsFalse()
+    {
+        var subId = Guid.NewGuid();
+        var expected = CreateSubscription(id: subId);
+        _client.TriggerSubscriptionAsync(subId, 42, false, Arg.Any<CancellationToken>())
+            .Returns(expected);
+
+        // Call without explicit force parameter
+        var result = await _service.TriggerSubscriptionAsync(subId, 42);
+
+        Assert.Equal(expected.Id, result.Id);
+        await _client.Received(1).TriggerSubscriptionAsync(subId, 42, false, Arg.Any<CancellationToken>());
+        await _client.Received(0).TriggerSubscriptionAsync(subId, 42, true, Arg.Any<CancellationToken>());
     }
 
     // ================================================================
@@ -1000,7 +1063,7 @@ public class MaestroServiceTests : IDisposable
     public async Task TriggerSubscription_LogsToStderr()
     {
         var subId = Guid.NewGuid();
-        _client.TriggerSubscriptionAsync(subId, 42, Arg.Any<CancellationToken>())
+        _client.TriggerSubscriptionAsync(subId, 42, false, Arg.Any<CancellationToken>())
             .Returns(CreateSubscription(id: subId));
 
         var originalErr = Console.Error;

@@ -253,32 +253,35 @@ public class MaestroMcpTools
     }
 
     [McpServerTool(Name = "maestro_trigger_subscription")]
-    [Description("Trigger a specific Maestro subscription to process a build. This is a non-destructive action that initiates dependency flow processing.")]
+    [Description("Trigger a specific Maestro subscription to process a build. This is a non-destructive action that initiates dependency flow processing. Use force=true to force-trigger (overwrites existing PR branch with fresh content) for stale backflow PR remediation.")]
     public async Task<string> TriggerSubscription(
         [Description("The subscription GUID to trigger")] string subscriptionId,
         [Description("The BAR build ID to process")] int buildId,
+        [Description("When true, force-triggers the subscription (overwrites existing PR branch with fresh content). Use for stale backflow PR remediation. Default: false.")] bool force = false,
         CancellationToken cancellationToken = default)
     {
         if (!Guid.TryParse(subscriptionId, out var id))
             return "Invalid subscription ID format. Expected a GUID.";
 
-        var dedupKey = $"action:trigger-sub:{subscriptionId}:{buildId}";
+        var dedupKey = $"action:trigger-sub:{subscriptionId}:{buildId}:{force}";
         var recent = _cache.GetRecentAction(dedupKey);
         if (recent.HasValue)
         {
-            Console.Error.WriteLine($"[{DateTime.UtcNow:O}] Trigger: TriggerSubscription dedup-skipped args=(subscriptionId={subscriptionId}, buildId={buildId}) lastTriggered={recent.Value:O}");
-            return $"⏳ This subscription was already triggered for build #{buildId} at {recent.Value:u}. Skipping duplicate.";
+            Console.Error.WriteLine($"[{DateTime.UtcNow:O}] Trigger: TriggerSubscription dedup-skipped args=(subscriptionId={subscriptionId}, buildId={buildId}, force={force}) lastTriggered={recent.Value:O}");
+            return $"⏳ This subscription was already triggered for build #{buildId}{(force ? " (force)" : "")} at {recent.Value:u}. Skipping duplicate.";
         }
 
         try
         {
-            var result = await _service.TriggerSubscriptionAsync(id, buildId, cancellationToken);
+            var result = await _service.TriggerSubscriptionAsync(id, buildId, force, cancellationToken);
             _cache.RecordAction(dedupKey, ActionCooldown);
 
             var sb = new StringBuilder();
-            sb.AppendLine($"✅ Successfully triggered subscription {subscriptionId} for build #{buildId}");
+            sb.AppendLine($"✅ Successfully {(force ? "force-" : "")}triggered subscription {subscriptionId} for build #{buildId}");
             sb.AppendLine($"\nSubscription: **{result.SourceRepository}** → **{result.TargetRepository}** ({result.TargetBranch})");
             sb.AppendLine($"Channel: {result.Channel?.Name ?? "N/A"}");
+            if (force)
+                sb.AppendLine($"\n⚡ Force mode: existing PR branch will be overwritten with fresh VMR content.");
             sb.AppendLine($"\nThe subscription will now process build #{buildId} and create/update a dependency update PR if needed.");
 
             return sb.ToString();

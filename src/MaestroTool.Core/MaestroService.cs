@@ -282,14 +282,14 @@ public class MaestroService
             ShortTtl);
     }
 
-    public async Task<Subscription> TriggerSubscriptionAsync(Guid subscriptionId, int buildId, CancellationToken cancellationToken = default)
+    public async Task<Subscription> TriggerSubscriptionAsync(Guid subscriptionId, int buildId, bool force = false, CancellationToken cancellationToken = default)
     {
-        Console.Error.WriteLine($"[{DateTime.UtcNow:O}] Trigger: TriggerSubscriptionAsync args=(subscriptionId={subscriptionId}, buildId={buildId})");
+        Console.Error.WriteLine($"[{DateTime.UtcNow:O}] Trigger: TriggerSubscriptionAsync args=(subscriptionId={subscriptionId}, buildId={buildId}, force={force})");
 
         if (_client.AuthLevel == AuthLevel.Anonymous)
             throw new InvalidOperationException("Authentication required to trigger subscriptions. Run 'darc authenticate' or set MAESTRO_BAR_TOKEN.");
 
-        var result = await _client.TriggerSubscriptionAsync(subscriptionId, buildId, cancellationToken);
+        var result = await _client.TriggerSubscriptionAsync(subscriptionId, buildId, force, cancellationToken);
         // Invalidate cached subscription data since it may have changed
         _cache.Invalidate($"sub:{subscriptionId}");
         _cache.InvalidatePrefix($"subs:");
