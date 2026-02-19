@@ -146,6 +146,68 @@ public class MaestroServiceTests : IDisposable
         Assert.Equal(expected[0].Id, result[0].Id);
     }
 
+    [Fact]
+    public async Task GetSubscriptions_WithTargetBranch_FiltersResults()
+    {
+        var sub1 = CreateSubscription(branch: "main");
+        var sub2 = CreateSubscription(branch: "release/9.0");
+        var sub3 = CreateSubscription(branch: "main");
+        var allSubs = new List<Subscription> { sub1, sub2, sub3 };
+
+        _client.ListSubscriptionsAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<int?>(), true, Arg.Any<CancellationToken>())
+            .Returns(allSubs);
+
+        var result = await _service.GetSubscriptionsAsync(targetBranch: "main");
+
+        Assert.Equal(2, result.Count);
+        Assert.All(result, s => Assert.Equal("main", s.TargetBranch));
+    }
+
+    [Fact]
+    public async Task GetSubscriptions_WithTargetBranch_CaseInsensitive()
+    {
+        var sub = CreateSubscription(branch: "Main");
+        var allSubs = new List<Subscription> { sub };
+
+        _client.ListSubscriptionsAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<int?>(), true, Arg.Any<CancellationToken>())
+            .Returns(allSubs);
+
+        var result = await _service.GetSubscriptionsAsync(targetBranch: "main");
+
+        Assert.Single(result);
+    }
+
+    [Fact]
+    public async Task GetSubscriptions_WithTargetBranch_NoMatch_ReturnsEmpty()
+    {
+        var sub1 = CreateSubscription(branch: "main");
+        var sub2 = CreateSubscription(branch: "release/9.0");
+        var allSubs = new List<Subscription> { sub1, sub2 };
+
+        _client.ListSubscriptionsAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<int?>(), true, Arg.Any<CancellationToken>())
+            .Returns(allSubs);
+
+        var result = await _service.GetSubscriptionsAsync(targetBranch: "release/10.0");
+
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public async Task GetSubscriptions_WithTargetBranch_NullMeansNoFilter()
+    {
+        var sub1 = CreateSubscription(branch: "main");
+        var sub2 = CreateSubscription(branch: "release/9.0");
+        var sub3 = CreateSubscription(branch: "develop");
+        var allSubs = new List<Subscription> { sub1, sub2, sub3 };
+
+        _client.ListSubscriptionsAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<int?>(), true, Arg.Any<CancellationToken>())
+            .Returns(allSubs);
+
+        var result = await _service.GetSubscriptionsAsync(targetBranch: null);
+
+        Assert.Equal(3, result.Count);
+    }
+
     // ================================================================
     // GetSubscriptionAsync
     // ================================================================

@@ -22,17 +22,24 @@ public class MaestroService
         _cache = cache;
     }
 
-    public Task<List<Subscription>> GetSubscriptionsAsync(
+    public async Task<List<Subscription>> GetSubscriptionsAsync(
         string? sourceRepository = null,
         string? targetRepository = null,
         int? channelId = null,
+        string? targetBranch = null,
         bool noCache = false,
         CancellationToken cancellationToken = default)
     {
-        var key = $"subs:{sourceRepository}:{targetRepository}:{channelId}";
+        var key = $"subs:{sourceRepository}:{targetRepository}:{channelId}:{targetBranch}";
         if (noCache) _cache.Invalidate(key);
-        return _cache.GetOrAddAsync(key,
-            () => _client.ListSubscriptionsAsync(sourceRepository, targetRepository, channelId, enabled: true, cancellationToken),
+        return await _cache.GetOrAddAsync(key,
+            async () =>
+            {
+                var subs = await _client.ListSubscriptionsAsync(sourceRepository, targetRepository, channelId, enabled: true, cancellationToken);
+                if (!string.IsNullOrEmpty(targetBranch))
+                    subs = subs.Where(s => string.Equals(s.TargetBranch, targetBranch, StringComparison.OrdinalIgnoreCase)).ToList();
+                return subs;
+            },
             ShortTtl);
     }
 

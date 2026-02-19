@@ -147,7 +147,7 @@ The server registers **11 MCP tools** for querying and triggering Maestro/BAR op
 
 | Tool Name | Description | Key Parameters |
 |-----------|-------------|-----------------|
-| `maestro_subscriptions` | List all subscriptions | `sourceRepository` (optional): filter by source repo; `noCache`: bypass cache |
+| `maestro_subscriptions` | List all subscriptions | `sourceRepository`, `targetRepository`, `channelName`, `targetBranch` (all optional filters); `noCache`: bypass cache |
 | `maestro_subscription` | Get a single subscription by ID | `subscriptionId`: UUID; `noCache`: bypass cache |
 | `maestro_latest_build` | Get the latest build from a channel | `channelId`: channel ID; `sourceRepository`: source repo URL; `noCache`: bypass cache |
 | `maestro_build` | Get a build by ID | `buildId`: build ID; `noCache`: bypass cache |
@@ -189,7 +189,7 @@ src/
 │   └── MaestroApiClient.cs   # PCS client wrapper with auth cascade
 ├── MaestroTool.Mcp/          # MCP HTTP server (ASP.NET Core)
 │   └── Program.cs
-└── MaestroTool.Tests/        # Unit tests (76 tests)
+└── MaestroTool.Tests/        # Unit tests (80 tests)
 ```
 
 - **MaestroTool** — stdio MCP server packaged as a [dotnet tool](https://learn.microsoft.com/dotnet/core/tools/global-tools). Default entry point for `dnx` / `dotnet tool` usage.
@@ -267,7 +267,7 @@ dotnet test
 ```
 
 The test suite includes:
-- **76 unit tests** (73 original + 3 regression tests for bugs #2 and #3) covering `CacheService` and `MaestroService` behavior.
+- **80 unit tests** (73 original + 3 regression tests + 4 targetBranch filter tests) covering `CacheService` and `MaestroService` behavior.
 - **Framework**: xUnit + NSubstitute for mocking.
 - **Coverage**: cache hit/miss, TTL expiration, null handling, error scenarios.
 

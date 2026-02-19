@@ -29,6 +29,7 @@ public class MaestroMcpTools
         [Description("Filter by source repository URL (e.g. https://github.com/dotnet/runtime)")] string? sourceRepository = null,
         [Description("Filter by target repository URL (e.g. https://github.com/dotnet/dotnet)")] string? targetRepository = null,
         [Description("Filter by channel name (e.g. '.NET 10.0.1xx SDK')")] string? channelName = null,
+        [Description("Filter by target branch (e.g. 'main')")] string? targetBranch = null,
         [Description("Bypass cache and fetch fresh data")] bool noCache = false,
         CancellationToken cancellationToken = default)
     {
@@ -41,7 +42,7 @@ public class MaestroMcpTools
                 return $"Channel '{channelName}' not found.";
         }
 
-        var subs = await _service.GetSubscriptionsAsync(sourceRepository, targetRepository, channelId, noCache, cancellationToken);
+        var subs = await _service.GetSubscriptionsAsync(sourceRepository, targetRepository, channelId, targetBranch, noCache, cancellationToken);
 
         if (subs.Count == 0)
             return "No subscriptions found matching the criteria.";
