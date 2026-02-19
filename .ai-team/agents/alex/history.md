@@ -44,3 +44,9 @@ The README is production-ready and suitable for both internal developers and ext
 - **Future destructive actions**: Sketched the opt-in pattern for future delete/remove operations, showing how `MAESTRO_ENABLE_DESTRUCTIVE_ACTIONS` env var gates dangerous operations.
 - **Tool count updated**: Changed from 8 to 10 tools in the table header to reflect added action tools.
 - **Placement**: Action Tools section sits between Authentication and Available Tools, since it provides context for how triggering works before listing the full tool reference.
+
+### README Test Count & Version Update (2026-02-19)
+- **README test count updated**: Changed from 67 to 76 tests in two locations:
+  1. Architecture section tree diagram (line 192)
+  2. Testing section description (lines 269-272) with note about 73 original + 3 regression tests
+- **Version check**: Confirmed v0.2.2 is already set in MaestroTool.csproj (line 11) — no version update needed in README as no version was mentioned
