@@ -802,3 +802,265 @@ The model includes Channel, TargetBranch, HeadBranch, SourceEnabled, LastUpdate/
 
 **Why:** Need to know which APIs are safe to expose as MCP tools and which need gating behind config flags.
 
+## 2026-02-19: Comprehensive PCS Client NuGet API Inspection
+
+**By:** Naomi (Backend Dev)
+
+**What:** Comprehensive inspection of `Microsoft.DotNet.ProductConstructionService.Client` NuGet package API surface using `dotnet-inspect` v0.4.4. Package version inspected: **1.1.0-beta.26118.5** (latest).
+
+**Why:** Need accurate understanding of our PCS client package API surface for maintenance and future feature work
+
+---
+
+## Package Overview
+
+- **Library:** Microsoft.DotNet.ProductConstructionService.Client.dll
+- **88 types** | **183 methods** | **307 properties**
+- **Latest version:** 1.1.0-beta.26118.5 (all versions are prerelease beta)
+- **Source:** [arcade-services on GitHub](https://github.com/dotnet/arcade-services)
+
+## Complete Interface List (17 interfaces)
+
+### IProductConstructionServiceApi — Root API Interface (17 members)
+Properties exposing all sub-interfaces:
+| Property | Type |
+|----------|------|
+| Assets | `IAssets` |
+| AzDo | `IAzDo` |
+| BackflowStatus | `IBackflowStatus` |
+| BuildTime | `IBuildTime` |
+| Builds | `IBuilds` |
+| Channels | `IChannels` |
+| DefaultChannels | `IDefaultChannels` |
+| FeatureFlags | `IFeatureFlags` |
+| Goal | `IGoal` |
+| Ingestion | `IConfigurationIngestion` |
+| Options | `ProductConstructionServiceApiOptions` |
+| Pipelines | `IPipelines` |
+| PullRequest | `IPullRequest` |
+| Repository | `IRepository` |
+| Status | `IStatus` |
+| Subscriptions | `ISubscriptions` |
+
+Methods: `IsAdmin(CancellationToken) → Task<bool>`
+
+---
+
+### ISubscriptions (8 members)
+| Method | Signature |
+|--------|-----------|
+| GetSubscriptionAsync | `Task<Subscription> GetSubscriptionAsync(Guid, CancellationToken)` |
+| GetSubscriptionHistoryAsync | `AsyncPageable<SubscriptionHistoryItem> GetSubscriptionHistoryAsync(Guid, CancellationToken)` |
+| GetSubscriptionHistoryPageAsync | `Task<Page<SubscriptionHistoryItem>> GetSubscriptionHistoryPageAsync(Guid, int?, int?, CancellationToken)` |
+| ListSubscriptionsAsync | `Task<List<Subscription>> ListSubscriptionsAsync(bool?, int?, string, bool?, string, string, string, CancellationToken)` |
+| TriggerDailyUpdateAsync | `Task TriggerDailyUpdateAsync(CancellationToken)` |
+| **TriggerSubscriptionAsync** (overload 1) | `Task<Subscription> TriggerSubscriptionAsync(Guid, CancellationToken)` |
+| **TriggerSubscriptionAsync** (overload 2) | `Task<Subscription> TriggerSubscriptionAsync(Guid, bool, CancellationToken)` |
+| **TriggerSubscriptionAsync** (overload 3) | `Task<Subscription> TriggerSubscriptionAsync(int, bool, Guid, CancellationToken)` |
+
+### IBuilds (9 members)
+| Method | Signature |
+|--------|-----------|
+| CreateAsync | `Task<Build> CreateAsync(BuildData, CancellationToken)` |
+| GetBuildAsync | `Task<Build> GetBuildAsync(int, CancellationToken)` |
+| GetBuildGraphAsync | `Task<BuildGraph> GetBuildGraphAsync(int, CancellationToken)` |
+| GetCommitAsync | `Task<Commit> GetCommitAsync(int, CancellationToken)` |
+| GetLatestAsync | `Task<Build> GetLatestAsync(string, string, int?, bool?, DateTimeOffset?, DateTimeOffset?, string, CancellationToken)` |
+| GetSourceManifestAsync | `Task<List<SourceManifestEntry>> GetSourceManifestAsync(int, CancellationToken)` |
+| ListBuildsAsync | `AsyncPageable<Build> ListBuildsAsync(string, int?, string, string, string, int?, bool?, DateTimeOffset?, DateTimeOffset?, string, CancellationToken)` |
+| ListBuildsPageAsync | `Task<Page<Build>> ListBuildsPageAsync(string, int?, string, string, string, int?, bool?, DateTimeOffset?, DateTimeOffset?, int?, int?, string, CancellationToken)` |
+| UpdateAsync | `Task<Build> UpdateAsync(BuildUpdate, int, CancellationToken)` |
+
+### IChannels (6 members)
+| Method | Signature |
+|--------|-----------|
+| AddBuildToChannelAsync | `Task AddBuildToChannelAsync(int, int, CancellationToken)` |
+| GetChannelAsync | `Task<Channel> GetChannelAsync(int, CancellationToken)` |
+| GetFlowGraphAsync | `Task<FlowGraph> GetFlowGraphAsync(int, int, bool, bool, bool, List<string>, CancellationToken)` |
+| ListChannelsAsync | `Task<List<Channel>> ListChannelsAsync(string, CancellationToken)` |
+| ListRepositoriesAsync | `Task<List<string>> ListRepositoriesAsync(int, int?, CancellationToken)` |
+| RemoveBuildFromChannelAsync | `Task RemoveBuildFromChannelAsync(int, int, CancellationToken)` |
+
+### IDefaultChannels (2 members)
+| Method | Signature |
+|--------|-----------|
+| GetAsync | `Task<DefaultChannel> GetAsync(int, CancellationToken)` |
+| ListAsync | `Task<List<DefaultChannel>> ListAsync(string, bool?, int?, string, CancellationToken)` |
+
+### IBackflowStatus (2 members)
+| Method | Signature |
+|--------|-----------|
+| GetBackflowStatusAsync | `Task<BackflowStatus> GetBackflowStatusAsync(int, CancellationToken)` |
+| TriggerBackflowStatusCalculationAsync | `Task TriggerBackflowStatusCalculationAsync(int, CancellationToken)` |
+
+### IPullRequest (3 members)
+| Method | Signature |
+|--------|-----------|
+| GetTrackedPullRequestBySubscriptionIdAsync | `Task<TrackedPullRequest> GetTrackedPullRequestBySubscriptionIdAsync(string, CancellationToken)` |
+| GetTrackedPullRequestsAsync | `Task<List<TrackedPullRequest>> GetTrackedPullRequestsAsync(CancellationToken)` |
+| UntrackPullRequestAsync | `Task UntrackPullRequestAsync(string, CancellationToken)` |
+
+### IAssets (7 members)
+| Method | Signature |
+|--------|-----------|
+| AddAssetLocationToAssetAsync | `Task<AssetLocation> AddAssetLocationToAssetAsync(int, LocationType, string, CancellationToken)` |
+| BulkAddLocationsAsync | `Task BulkAddLocationsAsync(List<AssetAndLocation>, CancellationToken)` |
+| GetAssetAsync | `Task<Asset> GetAssetAsync(int, CancellationToken)` |
+| GetDarcVersionAsync | `Task<string> GetDarcVersionAsync(CancellationToken)` |
+| ListAssetsAsync | `AsyncPageable<Asset> ListAssetsAsync(int?, bool?, string, bool?, string, CancellationToken)` |
+| ListAssetsPageAsync | `Task<Page<Asset>> ListAssetsPageAsync(int?, bool?, string, bool?, int?, int?, string, CancellationToken)` |
+| RemoveAssetLocationFromAssetAsync | `Task RemoveAssetLocationFromAssetAsync(int, int, CancellationToken)` |
+
+### IFeatureFlags (8 members)
+| Method | Signature |
+|--------|-----------|
+| GetAllFeatureFlagsAsync | `Task<FeatureFlagListResponse> GetAllFeatureFlagsAsync(CancellationToken)` |
+| GetAvailableFeatureFlagsAsync | `Task<AvailableFeatureFlagsResponse> GetAvailableFeatureFlagsAsync(CancellationToken)` |
+| GetFeatureFlagAsync | `Task<FeatureFlagValue> GetFeatureFlagAsync(string, Guid, CancellationToken)` |
+| GetFeatureFlagsAsync | `Task<FeatureFlagListResponse> GetFeatureFlagsAsync(Guid, CancellationToken)` |
+| GetSubscriptionsWithFlagAsync | `Task<FeatureFlagListResponse> GetSubscriptionsWithFlagAsync(string, CancellationToken)` |
+| RemoveFeatureFlagAsync | `Task<bool> RemoveFeatureFlagAsync(string, Guid, CancellationToken)` |
+| RemoveFlagFromAllSubscriptionsAsync | `Task<RemoveFlagFromAllResponse> RemoveFlagFromAllSubscriptionsAsync(string, CancellationToken)` |
+| SetFeatureFlagAsync | `Task<FeatureFlagResponse> SetFeatureFlagAsync(SetFeatureFlagRequest, CancellationToken)` |
+
+### IStatus (3 members)
+| Method | Signature |
+|--------|-----------|
+| GetPcsWorkItemProcessorStatusAsync | `Task<Dictionary<string, string>> GetPcsWorkItemProcessorStatusAsync(CancellationToken)` |
+| StartPcsWorkItemProcessorsAsync | `Task<Dictionary<string, string>> StartPcsWorkItemProcessorsAsync(CancellationToken)` |
+| StopPcsWorkItemProcessorsAsync | `Task<Dictionary<string, string>> StopPcsWorkItemProcessorsAsync(CancellationToken)` |
+
+### IRepository (2 members)
+| Method | Signature |
+|--------|-----------|
+| GetMergePoliciesAsync | `Task<List<MergePolicy>> GetMergePoliciesAsync(string, string, CancellationToken)` |
+| ListRepositoriesAsync | `Task<List<RepositoryBranch>> ListRepositoriesAsync(string, string, CancellationToken)` |
+
+### IPipelines (4 members)
+| Method | Signature |
+|--------|-----------|
+| CreatePipelineAsync | `Task<ReleasePipeline> CreatePipelineAsync(string, int, string, CancellationToken)` |
+| DeletePipelineAsync | `Task<ReleasePipeline> DeletePipelineAsync(int, CancellationToken)` |
+| GetPipelineAsync | `Task<ReleasePipeline> GetPipelineAsync(int, CancellationToken)` |
+| ListAsync | `Task<List<ReleasePipeline>> ListAsync(string, int?, string, CancellationToken)` |
+
+### IGoal (2 members)
+| Method | Signature |
+|--------|-----------|
+| CreateAsync | `Task<Goal> CreateAsync(GoalRequestJson, int, string, CancellationToken)` |
+| GetGoalTimesAsync | `Task<Goal> GetGoalTimesAsync(int, string, CancellationToken)` |
+
+### IAzDo (1 member)
+| Method | Signature |
+|--------|-----------|
+| GetBuildStatusAsync | `Task<List<AzDoBuild>> GetBuildStatusAsync(string, string, int, int, string, string, CancellationToken)` |
+
+### IBuildTime (1 member)
+| Method | Signature |
+|--------|-----------|
+| GetBuildTimesAsync | `Task<BuildTime> GetBuildTimesAsync(int, int, CancellationToken)` |
+
+### IConfigurationIngestion (2 members)
+| Method | Signature |
+|--------|-----------|
+| DeleteNamespaceAsync | `Task<bool> DeleteNamespaceAsync(string, bool, CancellationToken)` |
+| IngestNamespaceAsync | `Task<ConfigurationUpdates> IngestNamespaceAsync(string, bool, ClientYamlConfiguration, CancellationToken)` |
+
+---
+
+## TriggerSubscriptionAsync — Exact Signatures
+
+**Three overloads exist:**
+
+1. **Simple trigger (Guid only):**
+   ```csharp
+   Task<Subscription> TriggerSubscriptionAsync(Guid subscriptionId, CancellationToken ct)
+   ```
+
+2. **With isCoherencyUpdate bool:**
+   ```csharp
+   Task<Subscription> TriggerSubscriptionAsync(Guid subscriptionId, bool isCoherencyUpdate, CancellationToken ct)
+   ```
+
+3. **With build ID + isCoherencyUpdate + subscriptionId:**
+   ```csharp
+   Task<Subscription> TriggerSubscriptionAsync(int barBuildId, bool isCoherencyUpdate, Guid subscriptionId, CancellationToken ct)
+   ```
+
+**Key finding:** Yes, the `bool isCoherencyUpdate` parameter exists in overloads 2 and 3. Our codebase currently uses overload 3 (`int, bool, Guid`). Overload 1 (Guid-only) is the simplest form for basic trigger use.
+
+---
+
+## PcsApiFactory — Client Construction
+
+Static class with 4 factory methods:
+| Method | Params | Description |
+|--------|--------|-------------|
+| `GetAnonymous()` | none | Unauthenticated access to production PCS |
+| `GetAnonymous(string)` | baseUri | Unauthenticated access to custom endpoint |
+| `GetAuthenticated(string, string, bool)` | barToken, federatedToken, disableInteractiveAuth | Authenticated access to production |
+| `GetAuthenticated(string, string, string, bool)` | baseUri, barToken, federatedToken, disableInteractiveAuth | Authenticated access to custom endpoint |
+
+---
+
+## Model Classes (44 total)
+
+Key models: Build (26 members), Subscription (16 members), BuildData (18 members), TrackedPullRequest (12 members), FlowRef (12 members), FlowEdge (9 members), Channel (5 members), DefaultChannel (7 members), BackflowStatus (5 members), SubscriptionBackflowStatus (7 members), SubscriptionHistoryItem (7 members), SubscriptionPolicy (5 members), MergePolicy (3 members), Asset (7 members), AssetLocation (5 members)
+
+Enums: `ClientUpdateFrequency` (8 values), `LocationType` (4 values), `UpdateFrequency` (8 values)
+
+Helper: `ChannelCategorizer` (1 member) in `.Helpers` namespace
+
+---
+
+## APIs We're NOT Currently Using (Potential Value)
+
+1. **IFeatureFlags** (8 methods) — Per-subscription feature flag management. Could be valuable for toggling subscription behavior without code changes. We don't expose any feature flag operations.
+
+2. **IConfigurationIngestion** (2 methods) — YAML-based namespace configuration management. Could enable bulk subscription/channel management from config files.
+
+3. **IStatus** (3 methods) — PCS work item processor status/control (start/stop/get). Could be useful for operational dashboards or health monitoring beyond what we currently do.
+
+4. **IPipelines** (4 methods) — Release pipeline CRUD. Could be useful if we ever need to manage release pipelines programmatically.
+
+5. **IGoal** (2 methods) — Build time goal tracking per channel/definition. Could power SLA monitoring.
+
+6. **IAzDo** (1 method) — Azure DevOps build status lookup. Could augment our build freshness data.
+
+7. **IBuildTime** (1 method) — Build time statistics. Could power performance trend analysis.
+
+8. **IRepository** (2 methods) — Merge policies and repository branch listing. Could help with subscription configuration auditing.
+
+9. **IBuilds.GetCommitAsync** — Get commit info for a build. Not currently exposed.
+
+10. **IBuilds.GetSourceManifestAsync** — Source manifest entries for a build. Could help trace dependencies.
+
+11. **IBuilds.GetBuildGraphAsync** — Full dependency graph for a build. Extremely valuable for understanding transitive dependencies.
+
+12. **IChannels.GetFlowGraphAsync** — Flow graph between channels. Could visualize the full .NET dependency flow.
+
+13. **ISubscriptions overload 1** (`TriggerSubscriptionAsync(Guid, CancellationToken)`) — Simpler trigger without requiring barBuildId.
+
+---
+
+## Version Information
+
+- All published versions are **prerelease** under `1.1.0-beta.*`
+- Version scheme: `1.1.0-beta.YYDDD.N` (year-day.build-number)
+- Latest: **1.1.0-beta.26118.5** (2026, day 118, build 5)
+- No stable (non-prerelease) versions exist
+- Versions are published to the dotnet-public Azure DevOps feed
+
+---
+
+## Key Discrepancies: NuGet vs. arcade-services Source
+
+**Version Drift:** The arcade-services repository source code does not match the published NuGet package exactly:
+
+1. **IBackflowStatus interface** — Exists in v1.1.0-beta.26118.5 NuGet but NOT in current arcade-services source
+2. **GetTrackedPullRequestBySubscriptionIdAsync** — Exists in NuGet but NOT in current source
+3. **TriggerSubscriptionAsync overloads 2 & 3** — Both exist in NuGet; only overload 1 in source
+4. **IFeatureFlags interface** — Full 8-member interface in NuGet; not verified in source
+
+**Implication:** The NuGet package is ahead of public source code. When updating arcade-services source, check for recent releases to the NuGet feed that may contain newer APIs.
+

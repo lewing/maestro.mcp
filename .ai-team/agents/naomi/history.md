@@ -103,6 +103,20 @@
 - **Issue #3 (subscription_health errors for dotnet/sdk):** The `GetSubscriptionHealthAsync` foreach loop had no error handling — a single failed `GetLatestBuildAsync` call would crash the entire method. Wrapped the per-subscription body in try/catch. On exception, the subscription is added to results with an `Error` field populated. Added optional `string? Error = null` to the `SubscriptionHealthResult` record. MCP tool layer now displays `⚠️ Error:` for any subscription that failed. This makes the tool resilient for repos with many subscriptions (dotnet/sdk has 59).
 - **Build:** 0 warnings, 0 errors. **Tests:** All 76 pass.
 
+### PCS Client NuGet API Inspection via dotnet-inspect (2026-02-19)
+- **Package:** `Microsoft.DotNet.ProductConstructionService.Client` v1.1.0-beta.26118.5 — 88 types, 183 methods, 307 properties across 17 interfaces.
+- **TriggerSubscriptionAsync has 3 overloads:** `(Guid, CT)`, `(Guid, bool isCoherencyUpdate, CT)`, and `(int barBuildId, bool isCoherencyUpdate, Guid, CT)`. Our code uses overload 3.
+- **Unused APIs with high value:** `IFeatureFlags` (8 methods, per-subscription feature toggles), `IBuilds.GetBuildGraphAsync` (dependency graph), `IChannels.GetFlowGraphAsync` (flow visualization), `IConfigurationIngestion` (YAML config management), `IStatus` (PCS processor control).
+- **All versions are prerelease** beta under `1.1.0-beta.*` scheme. No stable releases exist.
+- **PcsApiFactory** is static with 4 factory methods (2 anonymous, 2 authenticated). Each optionally takes a custom base URI.
+- **dotnet-inspect usage patterns:**
+  - `dotnet-inspect api <package> <TypeName>` — best way to get member signatures for a specific type
+  - `dotnet-inspect api --package <pkg>` — full type surface summary (no member details)
+  - `dotnet-inspect api <pkg> <Type> -m <Method> --select` — inspect specific method overloads
+  - `dotnet-inspect package <pkg> --versions --prerelease` — list available versions
+  - `-T q` flag suppresses tip output for cleaner results
+  - The `-t <Type>` filter flag shows matching types but NOT their members (use positional arg instead)
+
 ### Codeflow PR tracking APIs (v0.4.0) (2026-02-19)
 - **PCS Client `IPullRequest` interface:**
   - `GetTrackedPullRequestsAsync(CancellationToken)` → `Task<List<TrackedPullRequest>>`
