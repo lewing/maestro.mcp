@@ -151,7 +151,7 @@ public class MaestroApiClient : IMaestroApiClient
 
     public async Task<Subscription> TriggerSubscriptionAsync(Guid subscriptionId, int buildId, CancellationToken cancellationToken = default)
     {
-        return await _api.Subscriptions.TriggerSubscriptionAsync(buildId, true, subscriptionId, cancellationToken);
+        return await _api.Subscriptions.TriggerSubscriptionAsync(buildId, false, subscriptionId, cancellationToken);
     }
 
     public Task TriggerDailyUpdateAsync(CancellationToken cancellationToken = default)
