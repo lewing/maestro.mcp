@@ -208,13 +208,6 @@ Audited 48 existing tests. Found zero tests at MCP tool layer and zero security-
 3. **Cache has no max-size bound** — `ConcurrentDictionary` grows indefinitely; expired entries never proactively evicted.
 4. **No input validation on buildId** — Negative integers pass through; opaque API exception instead of friendly response.
 
-### Critical findings requiring code changes
-
-1. **Auth cascade untestable** — `MaestroApiClient.CreateApi()` uses statics; recommend `IApiFactory` interface.
-2. **No rate limiting on noCache** — Calls can hammer Maestro API; add minimum interval between bypasses.
-3. **Cache has no max-size bound** — `ConcurrentDictionary` grows indefinitely; expired entries never proactively evicted.
-4. **No input validation on buildId** — Negative integers pass through; opaque API exception instead of friendly response.
-
 ### Recommended action
 
 Extract `IApiFactory` interface for auth cascade in v0.2.1. Refactoring unblocks all 5 P1 auth tests. High-priority for security hardening.
@@ -474,3 +467,139 @@ Naomi implemented 2 P1 security fixes (file permissions I2, corruption recovery 
 - P1 security fixes merged and tested
 - Windows connection pool issue resolved
 - Threat model findings documented and prioritized
+
+## Session Summary: 2026-02-19 Bugfix #2 & #3
+
+**Requested by:** Larry Ewing
+
+**Lead:** Naomi (Backend Dev), Amos (Tester)  
+**Result:** ✅ All 76 tests passing, tool installed locally, commit pushed
+
+### Bug #2: build_freshness SSRF Allowlist Expanded
+
+**Problem:** `GetBuildFreshnessAsync` rejected `ci.dot.net` as an unexpected redirect domain. The aka.ms shortlinks for .NET channels now resolve there instead of only `*.blob.core.windows.net`.
+
+**Fix:** Added two new entries to the SSRF domain allowlist in `MaestroService.cs`:
+- `ci.dot.net` — exact host match (new Microsoft .NET build artifact domain)
+- `*.azureedge.net` — suffix match (known Microsoft CDN for .NET builds, e.g. `dotnetbuilds.azureedge.net`)
+
+**Rationale:** Both are legitimate Microsoft-owned domains used for .NET SDK/runtime build artifacts. The allowlist remains tight — only known Microsoft infrastructure domains are permitted.
+
+### Bug #3: subscription_health Error Resilience
+
+**Problem:** `GetSubscriptionHealthAsync` iterated all subscriptions sequentially. If any single `GetLatestBuildAsync` call threw, the entire method failed with an unhandled exception. Repos like dotnet/sdk (59 subscriptions) were particularly vulnerable.
+
+**Fix:**
+1. Wrapped per-subscription logic in try/catch
+2. Added `string? Error = null` optional parameter to `SubscriptionHealthResult` record
+3. On exception: subscription added to results with error message, processing continues
+4. MCP tool displays `⚠️ Error:` line for failed subscriptions
+
+**Rationale:** Partial results are far more useful than a complete failure. One flaky API call shouldn't prevent the user from seeing health data for the other 58 subscriptions.
+
+### Test Coverage
+
+Added 3 regression tests for bug #3 error handling (Amos).
+
+### Files Changed
+- `src/MaestroTool.Core/MaestroService.cs` — Both fixes
+- `src/MaestroTool.Core/MaestroMcpTools.cs` — Error display in subscription_health tool
+
+## Issue #1 Triage: Codeflow Feature Requests
+
+**Date:** 2026-02-19  
+**By:** Holden (Lead / Architect)  
+**Issue:** https://github.com/lewing/maestro.mcp/issues/1  
+**Scope:** 9 feature requests for codeflow analysis workflows
+
+### Executive Summary
+
+Issue #1 contains 9 well-scoped feature requests for enhancing maestro.mcp's usability in codeflow analysis workflows. All features are **feasible** with the current PCS client NuGet surface, though 3 require deeper investigation or GitHub API integration.
+
+**Recommended roadmap:**
+1. **v0.2.1 (sprint 1):** #1 + #2 + #3 — High-impact read/write fundamentals
+2. **v0.3 (sprint 2):** #4 + #5 + #6 — Health & visualization composites  
+3. **v0.4+ (backlog):** #7 + #8 + #9 — Specialized, lower-frequency queries
+
+### v0.2.1 Priority Items
+
+#### Feature #2: `maestro_force_trigger_subscription` — Force-Trigger a Subscription
+- **Feasibility:** ✅ Implementable (small effort)
+- **Effort:** 4 hours
+- **Details:** Add boolean parameter for force-trigger mode; uses `isCoherencyUpdate` flag in PCS API
+
+#### Feature #3: Target Branch Filtering on `maestro_subscriptions`
+- **Feasibility:** ✅ Implementable (trivial)
+- **Effort:** 2 hours
+- **Details:** Add optional `targetBranch` filter parameter; filter client-side post-fetch
+
+#### Feature #8: Channel Name Shorthand Resolution
+- **Feasibility:** ✅ Implementable (trivial)
+- **Effort:** 1 hour
+- **Details:** Resolve short names (e.g., `net11`, `10.0.2xx`) to full Maestro channel names
+
+### v0.3 Priority Items (Medium Impact)
+
+#### Feature #1: `maestro_codeflow_prs` — List Codeflow PRs for a Repo
+- **Feasibility:** ✅ Implementable (medium effort)
+- **Effort:** 2-3 days
+- **Blockers:** GitHub API integration required
+- **Technical:** Query subscriptions, GitHub PR search, health checks
+
+#### Feature #5: `maestro_flow_graph` — Dependency Flow Visualization
+- **Feasibility:** ✅ Implementable (medium effort)
+- **Effort:** 2-3 days
+- **Details:** Show inbound/outbound flows; returns JSON or Mermaid syntax
+
+#### Feature #6: `maestro_repo_flow_status` — Combined Health Endpoint
+- **Feasibility:** ✅ Implementable (low effort, composition)
+- **Effort:** 1-2 days
+- **Details:** Composite endpoint reusing existing methods
+
+### v0.2.2 (Pending Investigation)
+
+#### Feature #4: `maestro_subscription_history` — Build Application History
+- **Status:** 🔍 **Blocked on PCS API discovery**
+- **Effort:** Unknown (depends on PCS support)
+
+#### Feature #9: `maestro_build_assets` — List Build Assets
+- **Status:** 🔍 **Blocked on PCS API discovery**
+- **Effort:** Unknown (depends on PCS support)
+
+### v0.4+ (Backlog)
+
+#### Feature #7: `maestro_vmr_source_manifest` — VMR Source Manifest Reader
+- **Feasibility:** ✅ Implementable (niche use case)
+- **Effort:** 1-2 days
+- **Details:** Read and parse source-manifest.json from VMR; low frequency
+
+### Risk Assessment
+
+| Risk | Likelihood | Impact | Mitigation |
+|------|-----------|--------|-----------|
+| PCS API missing `history`/`assets` | Medium | Blocks #4 + #9 | Naomi investigates immediately |
+| GitHub API rate limiting | Low | Blocks #1 + #5 | Cache PR results (5 min TTL) |
+| Test coverage gaps | Medium | Release bugs | Amos writes integration tests |
+| User expectations on "force trigger" semantics | Medium | Support burden | Document behavior clearly |
+
+### Design Decisions
+
+1. **`maestro_force_trigger_subscription` vs boolean parameter:** Recommend separate tool (clearer intent)
+2. **Channel shorthand strategy:** Hardcoded mappings in v0.2.1; environment override in v0.3 if requested
+3. **`maestro_flow_graph` output format:** JSON (structured); Mermaid syntax as optional string field
+4. **GitHub API client:** Recommend Octokit (widely used, easy integration)
+
+### Questions for Larry
+
+1. Does the current `maestro_trigger_subscription` already force-trigger?
+2. GitHub API client preference?
+3. Is #7 (source-manifest parsing) likely to be heavily used?
+
+### Summary
+
+**All 9 features are architecturally sound.** No fundamental blockers. Roadmap prioritizes high-impact, low-effort wins (v0.2.1) before composite/visualization features (v0.3).
+
+**Next steps:**
+1. Naomi investigates PCS API surface for history/assets (1–2 hours)
+2. Team aligns on GitHub client strategy
+3. Kickoff v0.2.1 implementation
