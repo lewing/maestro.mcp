@@ -23,3 +23,5 @@
 - **Immediate P1 actions**: (1) Explicit file permissions on `~/.mstro/` directory and `cache.db` — use `File.SetUnixFileMode` on Linux/macOS. (2) `PRAGMA integrity_check` in `InitializeDatabase()` with auto-delete-and-recreate on corruption.
 
 📌 Threat model written to `.ai-team/decisions/inbox/holden-sqlite-threat-model.md`. 13 findings, 2 P1 items for next sprint, HMAC integrity on P2 backlog.
+
+📌 Team update (2026-02-19): P1 security fixes completed — file permissions (I2) and corruption auto-recovery (D2) implemented in CacheService. 6 security tests written. All 73 tests passing. Decided by Naomi, Amos.
