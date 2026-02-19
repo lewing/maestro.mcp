@@ -103,3 +103,24 @@
 - **Issue #3 (subscription_health errors for dotnet/sdk):** The `GetSubscriptionHealthAsync` foreach loop had no error handling — a single failed `GetLatestBuildAsync` call would crash the entire method. Wrapped the per-subscription body in try/catch. On exception, the subscription is added to results with an `Error` field populated. Added optional `string? Error = null` to the `SubscriptionHealthResult` record. MCP tool layer now displays `⚠️ Error:` for any subscription that failed. This makes the tool resilient for repos with many subscriptions (dotnet/sdk has 59).
 - **Build:** 0 warnings, 0 errors. **Tests:** All 76 pass.
 
+### Codeflow PR tracking APIs (v0.4.0) (2026-02-19)
+- **PCS Client `IPullRequest` interface:**
+  - `GetTrackedPullRequestsAsync(CancellationToken)` → `Task<List<TrackedPullRequest>>`
+  - `GetTrackedPullRequestBySubscriptionIdAsync(string subscriptionId, CancellationToken)` → `Task<TrackedPullRequest>` (throws `RestApiException` 404 if none)
+  - `UntrackPullRequestAsync(string id, CancellationToken)` → `Task` (available but not exposed)
+- **PCS Client `IBackflowStatus` interface:**
+  - `GetBackflowStatusAsync(int vmrBuildId, CancellationToken)` → `Task<BackflowStatus>` — **requires vmrBuildId parameter** (not parameterless)
+  - `TriggerBackflowStatusCalculationAsync(int vmrBuildId, CancellationToken)` → `Task`
+- **PCS Client `ISubscriptions` (history):**
+  - `GetSubscriptionHistoryAsync(Guid id, CancellationToken)` → `AsyncPageable<SubscriptionHistoryItem>` (Azure paging)
+  - `GetSubscriptionHistoryPageAsync(Guid id, int? page, int? perPage, CancellationToken)` → `Task<Page<SubscriptionHistoryItem>>` — used this for simplicity
+- **TrackedPullRequest model properties:** Id, Url, Channel, TargetBranch, SourceEnabled, LastUpdate, LastCheck, NextCheck, Updates (List\<PullRequestUpdate\>), HeadBranch, NextBuildsToApply
+- **PullRequestUpdate model:** SourceRepository, SubscriptionId, BuildId
+- **BackflowStatus model:** VmrCommitSha, ComputationTimestamp, BranchStatuses (IImmutableDictionary\<string, BranchBackflowStatus\>), IsValid
+- **BranchBackflowStatus:** Branch, DefaultChannelId, SubscriptionStatuses (List\<SubscriptionBackflowStatus\>), IsValid
+- **SubscriptionBackflowStatus:** TargetRepository, TargetBranch, LastBackflowedSha, CommitDistance, SubscriptionId, IsValid
+- **SubscriptionHistoryItem:** Timestamp, ErrorMessage, Success, SubscriptionId, Action, RetryUrl
+- **RestApiException** is in `Microsoft.DotNet.ProductConstructionService.Client` namespace (not Models). Used for 404 handling in tracked PR lookup.
+- **Cache key patterns:** `tracked-prs:{channelId}`, `tracked-pr:{subId}`, `backflow-status:{vmrBuildId}`, `sub-history:{subscriptionId}` — all use ShortTtl (5 min).
+- **No auth gating** on new APIs initially — will add if needed based on runtime testing.
+

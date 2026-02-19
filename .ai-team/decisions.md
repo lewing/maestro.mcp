@@ -603,3 +603,202 @@ Issue #1 contains 9 well-scoped feature requests for enhancing maestro.mcp's usa
 1. Naomi investigates PCS API surface for history/assets (1–2 hours)
 2. Team aligns on GitHub client strategy
 3. Kickoff v0.2.1 implementation
+
+
+### 2026-02-19: isCoherencyUpdate trigger semantics investigation
+
+**By:** Holden (via Coordinator — agents timed out on arcade-services search)
+
+**What:** `isCoherencyUpdate` is a **vestigial client-side parameter** that has no effect on the server.
+
+**Investigation findings:**
+
+1. **Server-side API** (`ProductConstructionService.Api/Api/v2018_07_16/Controllers/SubscriptionsController.cs:108`):
+   ```csharp
+   public virtual async Task<IActionResult> TriggerSubscription(Guid id, [FromQuery(Name = "bar-build-id")] int buildId = 0)
+   ```
+   NO `isCoherencyUpdate` parameter. The REST endpoint accepts only `bar-build-id` as a query parameter.
+
+2. **Current PCS Client** (Generated/Subscriptions.cs):
+   ```csharp
+   Task<Subscription> TriggerSubscriptionAsync(int barBuildId, Guid id, CancellationToken)
+   ```
+   Two-parameter version (plus cancellation). The `isCoherencyUpdate` bool has been REMOVED from the current source.
+
+3. **Our NuGet package** (v1.1.0-beta.26118.5) still has a 3-parameter overload including `bool isCoherencyUpdate`. This parameter was never serialized to the REST request — the HTTP call sends only `bar-build-id` and `api-version`.
+
+4. **Darc's usage** (`DarcLib/BarApiClient.cs:317-324`):
+   - `TriggerSubscriptionAsync(Guid subscriptionId)` → calls with `barBuildId: default (0)`
+   - `TriggerSubscriptionAsync(Guid subscriptionId, int sourceBuildId)` → calls with specific build
+   - Neither passes `isCoherencyUpdate`. Darc never used this parameter.
+
+5. **`isCoherencyUpdate` in the codebase** is only referenced in `PullRequestBuilderTests.cs` as a property on a test data model (`IsCoherencyUpdate`). It's an internal DependencyFlow concept, NOT an API parameter.
+
+**Conclusion:** Our code at `MaestroApiClient.cs:154` passes `true` for a parameter that:
+- Is never sent to the server
+- Has been removed from the current PCS client
+- Will cause a compile error when we update the NuGet package
+
+**Recommendation:**
+- ❌ **No separate `maestro_force_trigger_subscription` tool** — the concept doesn't exist server-side
+- ✅ **Note for NuGet update**: When we update the PCS client package, remove the `true` parameter from `TriggerSubscriptionAsync` call
+- ✅ **Close `add-force-trigger-tool` todo** — feature request was based on a misunderstanding
+- The existing `maestro_trigger_subscription` already correctly supports the two trigger modes: latest build (buildId=0) and specific build (buildId=N)
+
+**Why:** Needed to determine correct default for our trigger tool and whether to add force-trigger variant. Answer: no change needed — tool works correctly as-is.
+
+
+# Decision: Codeflow PR Tracking API Surface (v0.4.0)
+
+**Author:** Naomi (Backend Dev)
+**Date:** 2026-02-19
+**Status:** Implemented
+
+## Context
+
+Adding codeflow PR tracking tools to the MCP server. The PCS client v1.1.0-beta.26118.5 exposes `IPullRequest`, `IBackflowStatus`, and subscription history APIs.
+
+## Key Discoveries & Decisions
+
+### 1. BackflowStatus requires vmrBuildId
+
+The `IBackflowStatus.GetBackflowStatusAsync(int vmrBuildId, CancellationToken)` API requires a VMR build ID — it is NOT a parameterless "get current status" call. The MCP tool `maestro_backflow_status` therefore requires the user to provide a `vmrBuildId` parameter. A future enhancement could auto-resolve the latest VMR build.
+
+### 2. Subscription history uses Azure Paging
+
+`ISubscriptions.GetSubscriptionHistoryAsync` returns `AsyncPageable<SubscriptionHistoryItem>`, not a simple list. Used `GetSubscriptionHistoryPageAsync(id, page, perPage, ct)` instead, which returns a single `Page<T>` with `.Values` — simpler for cache layer integration. First page only (default page size) for the initial implementation.
+
+### 3. RestApiException for 404 handling
+
+`GetTrackedPullRequestBySubscriptionIdAsync` throws `RestApiException` (HTTP 404) when no PR is tracked for a subscription. The MCP tool layer catches this and returns a friendly message. The service/cache layer does NOT catch it — the exception propagates to let the MCP tool handle presentation.
+
+### 4. No auth gating initially
+
+All 4 new APIs are read-only. Skipping auth gating (unlike trigger tools) until runtime testing confirms whether anonymous access works. If any return 401, auth gating will be added at the service layer following the existing `TriggerSubscriptionAsync` pattern.
+
+### 5. TrackedPullRequest has rich metadata
+
+The model includes Channel, TargetBranch, HeadBranch, SourceEnabled, LastUpdate/LastCheck/NextCheck timestamps, and a list of `PullRequestUpdate` items (each with SourceRepository, SubscriptionId, BuildId). This is exposed fully in the MCP tool output.
+
+## Files Changed
+
+- `src/MaestroTool.Core/IMaestroApiClient.cs` — 4 new interface methods
+- `src/MaestroTool.Core/MaestroApiClient.cs` — 4 implementations
+- `src/MaestroTool.Core/MaestroService.cs` — 4 cached service methods
+- `src/MaestroTool.Core/MaestroMcpTools.cs` — 4 new MCP tools
+
+
+### 2026-02-19: PCS API destructive method survey
+
+**By:** Naomi (via Coordinator — agents timed out on arcade-services search)
+
+**What:** Comprehensive categorization of all PCS client API methods by safety level.
+
+**Survey of `IProductConstructionServiceApi` interfaces (from current arcade-services source):**
+
+#### ISubscriptions
+| Method | Category | We Expose | Notes |
+|--------|----------|-----------|-------|
+| `ListSubscriptionsAsync` | 🟢 Read | ✅ Yes | Filter by source/target repo, channel, enabled |
+| `GetSubscriptionAsync` | 🟢 Read | ✅ Yes | By GUID |
+| `GetSubscriptionHistoryAsync/PageAsync` | 🟢 Read | ✅ Yes | Subscription update history |
+| `TriggerSubscriptionAsync` | 🟡 Non-destructive action | ✅ Yes | Triggers processing of a build; idempotent |
+| `TriggerDailyUpdateAsync` | 🟡 Non-destructive action | ✅ Yes | Triggers all daily-update subscriptions |
+| `CreateAsync` | 🔴 Destructive write | ❌ No | Creates a subscription |
+| `UpdateSubscriptionAsync` | 🔴 Destructive write | ❌ No | Modifies subscription config |
+| `DeleteSubscriptionAsync` | 🔴 Destructive write | ❌ No | Deletes a subscription |
+
+#### IBuilds
+| Method | Category | We Expose | Notes |
+|--------|----------|-----------|-------|
+| `ListBuildsAsync/PageAsync` | 🟢 Read | ❌ No (use GetLatest) | Paginated build listing |
+| `GetBuildAsync` | 🟢 Read | ✅ Yes | By BAR ID |
+| `GetBuildGraphAsync` | 🟢 Read | ❌ No | Dependency graph — could be useful for Feature #6 |
+| `GetLatestAsync` | 🟢 Read | ✅ Yes | Latest build for repo+channel |
+| `GetCommitAsync` | 🟢 Read | ❌ No | Commit info for a build |
+| `CreateAsync` | 🔴 Destructive write | ❌ No | Creates a build record (CI pipeline use) |
+| `UpdateAsync` | 🔴 Destructive write | ❌ No | Modifies build metadata |
+
+#### IChannels
+| Method | Category | We Expose | Notes |
+|--------|----------|-----------|-------|
+| `ListChannelsAsync` | 🟢 Read | ✅ Yes | All channels |
+| `GetChannelAsync` | 🟢 Read | ❌ No | Single channel by ID |
+| `ListRepositoriesAsync` | 🟢 Read | ❌ No | Repos subscribed to a channel |
+| `GetFlowGraphAsync` | 🟢 Read | ❌ No | Dependency flow graph — Feature #6 candidate |
+| `CreateChannelAsync` | 🔴 Destructive write | ❌ No | Creates a channel |
+| `DeleteChannelAsync` | 🔴 Destructive write | ❌ No | Deletes a channel |
+| `AddBuildToChannelAsync` | 🔴 Destructive write | ❌ No | Assigns build to channel |
+| `RemoveBuildFromChannelAsync` | 🔴 Destructive write | ❌ No | Removes build from channel |
+
+#### IDefaultChannels
+| Method | Category | We Expose | Notes |
+|--------|----------|-----------|-------|
+| `ListAsync` | 🟢 Read | ✅ Yes | Default channel mappings |
+| `GetAsync` | 🟢 Read | ❌ No | Single default channel |
+| `CreateAsync` | 🔴 Destructive write | ❌ No | Creates default channel mapping |
+| `UpdateAsync` | 🔴 Destructive write | ❌ No | Modifies mapping |
+| `DeleteAsync` | 🔴 Destructive write | ❌ No | Deletes mapping |
+
+#### IPullRequest
+| Method | Category | We Expose | Notes |
+|--------|----------|-----------|-------|
+| `GetTrackedPullRequestsAsync` | 🟢 Read | ✅ Yes | All tracked PRs |
+| `UntrackPullRequestAsync` | 🔴 Destructive write | ❌ No | DELETE — untracks a PR |
+
+*Note: `GetTrackedPullRequestBySubscriptionIdAsync` exists in our NuGet package (v1.1.0-beta.26118.5) but NOT in the current arcade-services source.*
+
+#### IBackflowStatus
+*Note: This interface exists in our NuGet package but NOT in the current arcade-services source. May have been added post-release or in a different branch.*
+| Method | Category | We Expose | Notes |
+|--------|----------|-----------|-------|
+| `GetBackflowStatusAsync` | 🟢 Read | ✅ Yes | Backflow status for a VMR build |
+
+#### IAssets
+| Method | Category | We Expose | Notes |
+|--------|----------|-----------|-------|
+| `ListAssetsAsync/PageAsync` | 🟢 Read | ❌ No | Could support Feature #9 (build assets) |
+| `GetAssetAsync` | 🟢 Read | ❌ No | Single asset by ID |
+| `GetDarcVersionAsync` | 🟢 Read | ❌ No | Darc version info |
+| `BulkAddLocationsAsync` | 🔴 Destructive write | ❌ No | Adds asset locations (CI use) |
+| `AddAssetLocationToAssetAsync` | 🔴 Destructive write | ❌ No | |
+| `RemoveAssetLocationFromAssetAsync` | 🔴 Destructive write | ❌ No | |
+
+#### IRepository
+| Method | Category | We Expose | Notes |
+|--------|----------|-----------|-------|
+| `ListRepositoriesAsync` | 🟢 Read | ❌ No | Tracked repos and branches |
+| `GetMergePoliciesAsync` | 🟢 Read | ❌ No | Merge policies for repo+branch |
+| `GetHistoryAsync/PageAsync` | 🟢 Read | ❌ No | Repository action history |
+| `SetMergePoliciesAsync` | 🔴 Destructive write | ❌ No | Modifies merge policies |
+
+#### Other Interfaces
+| Interface | Method | Category | Notes |
+|-----------|--------|----------|-------|
+| `IGoal` | `GetGoalTimesAsync` | 🟢 Read | Build time goals |
+| `IGoal` | `CreateAsync` | 🔴 Destructive write | Sets build time goals |
+| `IPipelines` | `ListAsync` | 🟢 Read | Release pipelines |
+| `IPipelines` | `CreatePipelineAsync` | 🔴 Destructive write | Creates release pipeline |
+| `IAzDo` | `GetBuildStatusAsync` | 🟢 Read | AzDO build status |
+| `IBuildTime` | `GetBuildTimesAsync` | 🟢 Read | Build time metrics |
+| `IStatus` | `GetPcsWorkItemProcessorStatusAsync` | 🟢 Read | PCS worker status |
+| `IStatus` | `StartPcsWorkItemProcessorsAsync` | 🟡 Non-destructive action | Admin: starts workers |
+| `IStatus` | `StopPcsWorkItemProcessorsAsync` | 🔴 Destructive (admin) | Admin: stops workers |
+
+#### Summary
+| Category | Count | We Expose |
+|----------|-------|-----------|
+| 🟢 Read-only | ~30 | 10 of ~30 |
+| 🟡 Non-destructive action | 3 | 2 of 3 (trigger, daily update; not start-workers) |
+| 🔴 Destructive write | ~18 | 0 of ~18 |
+
+#### Candidates for Future Exposure (read-only, useful)
+1. `GetBuildGraphAsync` — dependency graph (Feature #6)
+2. `GetFlowGraphAsync` — channel flow graph (Feature #6)
+3. `ListAssetsAsync` — build assets (Feature #9)
+4. `GetCommitAsync` — commit info for builds
+5. `ListRepositoriesAsync` (Channels) — repos per channel
+6. `GetMergePoliciesAsync` — merge policy inspection
+
+**Why:** Need to know which APIs are safe to expose as MCP tools and which need gating behind config flags.
+

@@ -83,3 +83,15 @@
 - **Bug #2 (build_freshness domain allowlist)**: No unit tests written — `GetBuildFreshnessAsync` creates `HttpClient` inline, making HTTP-level domain validation untestable. This is a known gap documented in `decisions.md`. Domain allowlist fix validated via integration testing only.
 
 📌 Team update (2026-02-19): 3 regression tests for Issue #3 error resilience. All passing. Bug #2 domain allowlist is integration-test-only (untestable at unit level).
+
+### 2026-02-20 — v0.4.0 Codeflow PR tracking tests
+
+- **8 new tests written** (88 total, all passing) covering v0.4.0 codeflow PR tracking APIs: `GetTrackedPullRequestsAsync`, `GetTrackedPullRequestBySubscriptionIdAsync`, `GetBackflowStatusAsync`, `GetSubscriptionHistoryAsync`.
+- **TrackedPullRequest model**: Constructor takes `(bool sourceEnabled, DateTimeOffset lastUpdate, DateTimeOffset lastCheck)`. All properties are settable (Url, TargetBranch, HeadBranch, Channel, etc.). Created `CreateTrackedPullRequest` helper factory following existing pattern.
+- **MaestroService.GetTrackedPullRequestBySubscriptionIdAsync takes `string` not `Guid`**: The interface and service both use `string subscriptionId`. Tests use `Guid.NewGuid().ToString()` for subscription IDs.
+- **BackflowStatus model**: Constructor takes `(string vmrCommitSha, DateTimeOffset computationTimestamp, IImmutableDictionary<string, BranchBackflowStatus> branchStatuses)`. Requires `System.Collections.Immutable` using. Tests use `ImmutableDictionary<string, BranchBackflowStatus>.Empty` for the branch statuses parameter.
+- **SubscriptionHistoryItem model**: Constructor takes `(DateTimeOffset timestamp, bool success, Guid subscriptionId, string errorMessage, string action, string retryUrl)`. All properties are read-only. Tests verify both success and failure items.
+- **Test coverage pattern**: Same as existing: basic return, empty list, cache hit (Received(1)), noCache bypass (Received(2)), and `.Returns(first, second)` for successive mock values.
+- **Naomi's code landed first**: Interface and MaestroService already had the new methods when tests were written. Build succeeded on first try after fixing `Guid` → `string` parameter type mismatch.
+
+📌 Team update (2026-02-20): 8 codeflow PR tracking tests for v0.4.0. All 88 tests passing. TrackedPullRequest, BackflowStatus, and SubscriptionHistory APIs all covered.
