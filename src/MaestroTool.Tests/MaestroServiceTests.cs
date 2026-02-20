@@ -34,9 +34,9 @@ public class MaestroServiceTests : IDisposable
     private static Channel CreateChannel(int id = 1, string name = ".NET 10") =>
         new(id, name, "product");
 
-    private static Build CreateBuild(int id = 100, string? gitHubRepo = null, DateTimeOffset? date = null) =>
+    private static Build CreateBuild(int id = 100, string? gitHubRepo = null, DateTimeOffset? date = null, string? commit = null) =>
         new(id, date ?? DateTimeOffset.UtcNow, staleness: 0, released: false, stable: true,
-            commit: "abc123", channels: new List<Channel>(), assets: new List<Asset>(),
+            commit: commit ?? "abc123", channels: new List<Channel>(), assets: new List<Asset>(),
             dependencies: new List<BuildRef>(), incoherencies: new List<BuildIncoherence>())
         {
             GitHubRepository = gitHubRepo ?? "https://github.com/dotnet/runtime"
@@ -780,6 +780,215 @@ public class MaestroServiceTests : IDisposable
         Assert.Equal("https://github.com/dotnet/dotnet", r.TargetRepository);
         Assert.Equal("release/10.0", r.TargetBranch);
         Assert.Equal("TestChannel", r.ChannelName);
+    }
+
+    // ================================================================
+    // Subscription Health - GitHub Commit Distance (Issue #4)
+    // ================================================================
+
+    [Fact]
+    public async Task GetSubscriptionHealth_VmrSubscription_WithGitHubClient_ReturnsCommitsBehind()
+    {
+        // Arrange: VMR subscription with GitHub client that returns commit distance
+        var channel = CreateChannel(1, ".NET 10");
+        var lastAppliedBuild = CreateBuild(id: 100, gitHubRepo: "https://github.com/dotnet/dotnet", commit: "abc123");
+        var latestBuild = CreateBuild(id: 105, gitHubRepo: "https://github.com/dotnet/dotnet", commit: "def456");
+        
+        var sub = CreateSubscription(
+            source: "https://github.com/dotnet/dotnet",
+            target: "https://github.com/dotnet/aspnetcore",
+            channel: channel,
+            lastApplied: lastAppliedBuild);
+
+        var mockGitHub = Substitute.For<IGitHubApiClient>();
+        mockGitHub.CompareCommitsAsync("dotnet", "dotnet", "abc123", "def456", Arg.Any<CancellationToken>())
+            .Returns(new GitHubCompareResult(AheadBy: 33, BehindBy: 0, Status: "ahead", TotalCommits: 33));
+
+        var serviceWithGitHub = new MaestroService(_client, _cache, mockGitHub);
+
+        _client.ListSubscriptionsAsync(null, "https://github.com/dotnet/aspnetcore", null, true, Arg.Any<CancellationToken>())
+            .Returns(new List<Subscription> { sub });
+        _client.GetLatestBuildAsync(sub.SourceRepository, channel.Id, Arg.Any<CancellationToken>())
+            .Returns(latestBuild);
+
+        // Act
+        var results = await serviceWithGitHub.GetSubscriptionHealthAsync("https://github.com/dotnet/aspnetcore");
+
+        // Assert
+        Assert.Single(results);
+        Assert.True(results[0].IsStale);
+        Assert.Equal(5, results[0].BuildsBehind); // Approximate (105 - 100)
+        Assert.Equal(33, results[0].CommitsBehind); // Accurate from GitHub API
+    }
+
+    [Fact]
+    public async Task GetSubscriptionHealth_VmrSubscription_GitHubClientReturnsNull_FallsBackToBuildsBehind()
+    {
+        // Arrange: VMR subscription where GitHub API returns null (failure case)
+        var channel = CreateChannel(1, ".NET 10");
+        var lastAppliedBuild = CreateBuild(id: 100, gitHubRepo: "https://github.com/dotnet/dotnet", commit: "abc123");
+        var latestBuild = CreateBuild(id: 108, gitHubRepo: "https://github.com/dotnet/dotnet", commit: "def456");
+        
+        var sub = CreateSubscription(
+            source: "https://github.com/dotnet/dotnet",
+            target: "https://github.com/dotnet/aspnetcore",
+            channel: channel,
+            lastApplied: lastAppliedBuild);
+
+        var mockGitHub = Substitute.For<IGitHubApiClient>();
+        mockGitHub.CompareCommitsAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns((GitHubCompareResult?)null); // GitHub API failure
+
+        var serviceWithGitHub = new MaestroService(_client, _cache, mockGitHub);
+
+        _client.ListSubscriptionsAsync(null, "https://github.com/dotnet/aspnetcore", null, true, Arg.Any<CancellationToken>())
+            .Returns(new List<Subscription> { sub });
+        _client.GetLatestBuildAsync(sub.SourceRepository, channel.Id, Arg.Any<CancellationToken>())
+            .Returns(latestBuild);
+
+        // Act
+        var results = await serviceWithGitHub.GetSubscriptionHealthAsync("https://github.com/dotnet/aspnetcore");
+
+        // Assert
+        Assert.Single(results);
+        Assert.True(results[0].IsStale);
+        Assert.Equal(8, results[0].BuildsBehind); // Fallback works
+        Assert.Null(results[0].CommitsBehind); // GitHub API failed, so null
+    }
+
+    [Fact]
+    public async Task GetSubscriptionHealth_NonVmrSubscription_CommitsBehindIsNull()
+    {
+        // Arrange: Non-VMR subscription (dotnet/runtime) even with GitHub client available
+        var channel = CreateChannel(1, ".NET 10");
+        var lastAppliedBuild = CreateBuild(id: 100, gitHubRepo: "https://github.com/dotnet/runtime", commit: "abc123");
+        var latestBuild = CreateBuild(id: 105, gitHubRepo: "https://github.com/dotnet/runtime", commit: "def456");
+        
+        var sub = CreateSubscription(
+            source: "https://github.com/dotnet/runtime", // NOT VMR
+            target: "https://github.com/dotnet/aspnetcore",
+            channel: channel,
+            lastApplied: lastAppliedBuild);
+
+        var mockGitHub = Substitute.For<IGitHubApiClient>();
+        var serviceWithGitHub = new MaestroService(_client, _cache, mockGitHub);
+
+        _client.ListSubscriptionsAsync(null, "https://github.com/dotnet/aspnetcore", null, true, Arg.Any<CancellationToken>())
+            .Returns(new List<Subscription> { sub });
+        _client.GetLatestBuildAsync(sub.SourceRepository, channel.Id, Arg.Any<CancellationToken>())
+            .Returns(latestBuild);
+
+        // Act
+        var results = await serviceWithGitHub.GetSubscriptionHealthAsync("https://github.com/dotnet/aspnetcore");
+
+        // Assert
+        Assert.Single(results);
+        Assert.True(results[0].IsStale);
+        Assert.Equal(5, results[0].BuildsBehind);
+        Assert.Null(results[0].CommitsBehind); // Not VMR, so no commit distance
+        
+        // Verify GitHub client was never called
+        await mockGitHub.DidNotReceive().CompareCommitsAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetSubscriptionHealth_NullGitHubClient_CommitsBehindIsNull()
+    {
+        // Arrange: VMR subscription but NO GitHub client provided
+        var channel = CreateChannel(1, ".NET 10");
+        var lastAppliedBuild = CreateBuild(id: 100, gitHubRepo: "https://github.com/dotnet/dotnet", commit: "abc123");
+        var latestBuild = CreateBuild(id: 105, gitHubRepo: "https://github.com/dotnet/dotnet", commit: "def456");
+        
+        var sub = CreateSubscription(
+            source: "https://github.com/dotnet/dotnet",
+            target: "https://github.com/dotnet/aspnetcore",
+            channel: channel,
+            lastApplied: lastAppliedBuild);
+
+        // Use default service without GitHub client (null)
+        _client.ListSubscriptionsAsync(null, "https://github.com/dotnet/aspnetcore", null, true, Arg.Any<CancellationToken>())
+            .Returns(new List<Subscription> { sub });
+        _client.GetLatestBuildAsync(sub.SourceRepository, channel.Id, Arg.Any<CancellationToken>())
+            .Returns(latestBuild);
+
+        // Act
+        var results = await _service.GetSubscriptionHealthAsync("https://github.com/dotnet/aspnetcore");
+
+        // Assert
+        Assert.Single(results);
+        Assert.True(results[0].IsStale);
+        Assert.Equal(5, results[0].BuildsBehind); // BuildsBehind still works
+        Assert.Null(results[0].CommitsBehind); // No GitHub client, so null
+    }
+
+    [Fact]
+    public async Task GetSubscriptionHealth_VmrSubscription_UpToDate_CommitsBehindIsNull()
+    {
+        // Arrange: VMR subscription that is NOT stale (current)
+        var channel = CreateChannel(1, ".NET 10");
+        var currentBuild = CreateBuild(id: 100, gitHubRepo: "https://github.com/dotnet/dotnet", commit: "abc123");
+        
+        var sub = CreateSubscription(
+            source: "https://github.com/dotnet/dotnet",
+            target: "https://github.com/dotnet/aspnetcore",
+            channel: channel,
+            lastApplied: currentBuild);
+
+        var mockGitHub = Substitute.For<IGitHubApiClient>();
+        var serviceWithGitHub = new MaestroService(_client, _cache, mockGitHub);
+
+        _client.ListSubscriptionsAsync(null, "https://github.com/dotnet/aspnetcore", null, true, Arg.Any<CancellationToken>())
+            .Returns(new List<Subscription> { sub });
+        _client.GetLatestBuildAsync(sub.SourceRepository, channel.Id, Arg.Any<CancellationToken>())
+            .Returns(currentBuild); // Same build = not stale
+
+        // Act
+        var results = await serviceWithGitHub.GetSubscriptionHealthAsync("https://github.com/dotnet/aspnetcore");
+
+        // Assert
+        Assert.Single(results);
+        Assert.False(results[0].IsStale); // Not stale
+        Assert.Equal(0, results[0].BuildsBehind);
+        Assert.Null(results[0].CommitsBehind); // Not computed for up-to-date subscriptions
+        
+        // Verify GitHub client was never called (only called when stale)
+        await mockGitHub.DidNotReceive().CompareCommitsAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public void GitHubCompareResult_RecordEquality()
+    {
+        // Test that the record works correctly
+        var result1 = new GitHubCompareResult(AheadBy: 10, BehindBy: 5, Status: "ahead", TotalCommits: 10);
+        var result2 = new GitHubCompareResult(AheadBy: 10, BehindBy: 5, Status: "ahead", TotalCommits: 10);
+        var result3 = new GitHubCompareResult(AheadBy: 15, BehindBy: 5, Status: "ahead", TotalCommits: 15);
+
+        Assert.Equal(result1, result2);
+        Assert.NotEqual(result1, result3);
+        Assert.Equal(10, result1.AheadBy);
+        Assert.Equal(5, result1.BehindBy);
+    }
+
+    [Fact]
+    public void SubscriptionHealthResult_CommitsBehind_DefaultsToNull()
+    {
+        // Test that existing record instantiation without CommitsBehind still works
+        var result = new SubscriptionHealthResult(
+            SubscriptionId: Guid.NewGuid(),
+            SourceRepository: "https://github.com/dotnet/runtime",
+            TargetRepository: "https://github.com/dotnet/dotnet",
+            TargetBranch: "main",
+            ChannelName: ".NET 10",
+            IsStale: true,
+            BuildsBehind: 5,
+            LastAppliedBuildId: 100,
+            LastAppliedDate: DateTimeOffset.UtcNow,
+            LatestBuildId: 105,
+            LatestBuildDate: DateTimeOffset.UtcNow
+        );
+
+        Assert.Null(result.CommitsBehind); // Defaults to null when not specified
+        Assert.Null(result.Error); // Error also defaults to null
     }
 
     // ================================================================

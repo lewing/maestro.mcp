@@ -156,3 +156,23 @@
 - **Rate limit consideration:** GitHub anonymous API = 60 req/hour. Typical `subscription_health` call has ~10 VMR subscriptions, well within limits. Failures degrade gracefully to BAR ID arithmetic.
 - **Proposal written:** `.ai-team/decisions/inbox/naomi-issue4-commit-distance-approach.md` — awaiting team review before implementation.
 
+### GitHub Commit Distance Implementation (Issue #4) (2025-02-20)
+- **Implemented `IGitHubApiClient` interface + `GitHubApiClient` class** in `src/MaestroTool.Core/`. Uses single static `HttpClient` instance following existing project patterns.
+- **Auth cascade** (Larry-approved): 1. `GITHUB_TOKEN` env var → 2. `gh auth token` subprocess → 3. anonymous (60 req/hr). Auth method logged to stderr on first use.
+- **GitHub Compare API integration:** `GET https://api.github.com/repos/{owner}/{repo}/compare/{base}...{head}` returns `ahead_by`, `behind_by`, `status`, `total_commits`. Graceful degradation on ANY error (404, 403, timeout) — returns `null`.
+- **MaestroService updates:**
+  - Added optional `IGitHubApiClient?` constructor param (default `null`) — injected via DI
+  - Helper `IsVmrRepository(string?)` detects `github.com/dotnet/dotnet` URLs
+  - Helper `ParseGitHubUrl(string)` extracts owner/repo from GitHub URLs
+  - Updated `GetSubscriptionHealthAsync` to compute `CommitsBehind` for VMR subscriptions when GitHub client available
+  - Added `int? CommitsBehind` field to `SubscriptionHealthResult` record
+- **MCP tool display logic updated:** Shows "⚠️ STALE (33 commits behind)" when `CommitsBehind` available, falls back to "⚠️ STALE (~566 builds behind)" with `~` prefix to indicate approximation
+- **DI wiring in Program.cs:** Registered `IGitHubApiClient` singleton, updated `MaestroService` registration to explicit factory pattern to ensure 3rd constructor param is injected
+- **Build verification:** `dotnet build` succeeded (46.1s) — 0 warnings, 0 errors
+- **File paths:**
+  - `src/MaestroTool.Core/IGitHubApiClient.cs` — interface definition
+  - `src/MaestroTool.Core/GitHubApiClient.cs` — implementation with auth cascade
+  - `src/MaestroTool.Core/MaestroService.cs` — updated for commit distance
+  - `src/MaestroTool.Core/MaestroMcpTools.cs` — updated display logic
+  - `src/MaestroTool.Mcp/Program.cs` — DI registration
+

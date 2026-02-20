@@ -15,11 +15,13 @@ public class MaestroService
 
     private readonly IMaestroApiClient _client;
     private readonly CacheService _cache;
+    private readonly IGitHubApiClient? _gitHubClient;
 
-    public MaestroService(IMaestroApiClient client, CacheService cache)
+    public MaestroService(IMaestroApiClient client, CacheService cache, IGitHubApiClient? gitHubClient = null)
     {
         _client = client;
         _cache = cache;
+        _gitHubClient = gitHubClient;
     }
 
     public async Task<List<Subscription>> GetSubscriptionsAsync(
@@ -126,10 +128,30 @@ public class MaestroService
 
                 var isStale = latestBuild != null && lastApplied != null && latestBuild.Id != lastApplied.Id;
                 var buildsBehind = 0;
+                int? commitsBehind = null;
 
                 if (isStale && latestBuild != null && lastApplied != null)
                 {
                     buildsBehind = latestBuild.Id - lastApplied.Id; // Approximate
+
+                    // For VMR subscriptions, use GitHub compare API for accurate commit distance
+                    if (_gitHubClient != null && IsVmrRepository(sub.SourceRepository))
+                    {
+                        var parsedRepo = ParseGitHubUrl(sub.SourceRepository);
+                        if (parsedRepo.HasValue && 
+                            !string.IsNullOrEmpty(lastApplied.Commit) && 
+                            !string.IsNullOrEmpty(latestBuild.Commit))
+                        {
+                            var (owner, repo) = parsedRepo.Value;
+                            var compareResult = await _gitHubClient.CompareCommitsAsync(
+                                owner, repo, lastApplied.Commit, latestBuild.Commit, cancellationToken);
+                            
+                            if (compareResult != null)
+                            {
+                                commitsBehind = compareResult.AheadBy;
+                            }
+                        }
+                    }
                 }
 
                 results.Add(new SubscriptionHealthResult(
@@ -143,7 +165,8 @@ public class MaestroService
                     LastAppliedBuildId: lastApplied?.Id,
                     LastAppliedDate: lastApplied?.DateProduced,
                     LatestBuildId: latestBuild?.Id,
-                    LatestBuildDate: latestBuild?.DateProduced
+                    LatestBuildDate: latestBuild?.DateProduced,
+                    CommitsBehind: commitsBehind
                 ));
             }
             catch (Exception ex)
@@ -326,6 +349,30 @@ public class MaestroService
             () => _client.GetFlowGraphAsync(days, channelId, includeArcade, includeBuildTimes, includeDisabledSubscriptions, includedFrequencies, cancellationToken),
             ShortTtl);
     }
+
+    private static bool IsVmrRepository(string? repoUrl) =>
+        repoUrl != null && repoUrl.Contains("github.com/dotnet/dotnet", StringComparison.OrdinalIgnoreCase);
+
+    private static (string owner, string repo)? ParseGitHubUrl(string url)
+    {
+        try
+        {
+            var uri = new Uri(url);
+            if (!uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            var segments = uri.AbsolutePath.Trim('/').Split('/');
+            if (segments.Length >= 2)
+            {
+                return (segments[0], segments[1]);
+            }
+        }
+        catch
+        {
+            // Invalid URL
+        }
+        return null;
+    }
 }
 
 public record SubscriptionHealthResult(
@@ -340,7 +387,8 @@ public record SubscriptionHealthResult(
     DateTimeOffset? LastAppliedDate,
     int? LatestBuildId,
     DateTimeOffset? LatestBuildDate,
-    string? Error = null
+    string? Error = null,
+    int? CommitsBehind = null
 );
 
 public record BuildFreshnessResult(

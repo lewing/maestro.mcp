@@ -207,7 +207,19 @@ public class MaestroMcpTools
 
         foreach (var r in results)
         {
-            var status = r.IsStale ? $"⚠️ STALE ({r.BuildsBehind} behind)" : "✅ Current";
+            string status;
+            if (r.IsStale)
+            {
+                if (r.CommitsBehind.HasValue)
+                    status = $"⚠️ STALE ({r.CommitsBehind.Value} commits behind)";
+                else
+                    status = $"⚠️ STALE (~{r.BuildsBehind} builds behind)";
+            }
+            else
+            {
+                status = "✅ Current";
+            }
+
             sb.AppendLine($"**{r.SourceRepository}** → {r.TargetBranch}");
             sb.AppendLine($"  Channel: {r.ChannelName} | Status: {status}");
             if (r.Error != null)

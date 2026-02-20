@@ -1,0 +1,4 @@
+### 2025-02-20: GitHub Commit Distance Implementation (Issue #4)
+**By:** Naomi
+**What:** Implemented `IGitHubApiClient` with 3-tier auth cascade (GITHUB_TOKEN env var → gh CLI → anonymous) to provide accurate commit distances for VMR subscriptions via GitHub's Compare API. Updated `maestro_subscription_health` tool to show "33 commits behind" for VMR subs instead of wildly inaccurate BAR build ID arithmetic ("~566 builds behind").
+**Why:** BAR build IDs are globally sequential across all repos (not per-repo), causing 17x error for VMR subscriptions. GitHub Compare API provides ground truth commit distance. Graceful degradation ensures feature works in all environments (anonymous 60 req/hr sufficient for typical use). Optional dependency injection pattern allows MaestroService to work with or without GitHub client.

@@ -106,3 +106,21 @@
 - **Key pattern**: Default parameter tests use negative assertion (`Received(0)`) to prove the non-default value was NOT sent. This is more rigorous than just checking the default was sent.
 
 📌 Team update (2026-02-20): 3 force parameter tests for TriggerSubscriptionAsync. All 97 tests passing. Existing trigger tests updated for new 4-param signature.
+
+### 2026-02-20 — GitHub commit distance tests for Issue #4
+
+- **7 new tests written** (104 total, all passing) covering GitHub Compare API integration for VMR subscription health.
+- **CreateBuild helper extended**: Added optional `commit` parameter (defaults to "abc123") to support setting commit SHAs for tests. Build constructor takes commit as a parameter, not a settable property.
+- **Test coverage pattern**: All tests follow existing pattern — mock setup, service creation with optional IGitHubApiClient, API call assertions, result validation.
+- **MaestroService.GetSubscriptionHealthAsync with IGitHubApiClient**: Service constructor takes optional 3rd parameter `IGitHubApiClient? gitHubClient = null`. When provided AND subscription source is VMR (dotnet/dotnet) AND isStale, the service calls `CompareCommitsAsync` to get real commit distance.
+- **Test 1 (`VmrSubscription_WithGitHubClient_ReturnsCommitsBehind`)**: VMR subscription with GitHub client that returns `GitHubCompareResult(AheadBy: 33, ...)`. Asserts `CommitsBehind == 33` (accurate), `BuildsBehind == 5` (approximate).
+- **Test 2 (`VmrSubscription_GitHubClientReturnsNull_FallsBackToBuildsBehind`)**: GitHub API returns null (failure). Asserts `CommitsBehind` is null, `BuildsBehind` still works (fallback).
+- **Test 3 (`NonVmrSubscription_CommitsBehindIsNull`)**: Non-VMR source (dotnet/runtime) with GitHub client available. Asserts `CommitsBehind` is null, GitHub client never called (`.DidNotReceive()`).
+- **Test 4 (`NullGitHubClient_CommitsBehindIsNull`)**: VMR subscription but service constructed without GitHub client. Asserts `CommitsBehind` is null, `BuildsBehind` still works.
+- **Test 5 (`VmrSubscription_UpToDate_CommitsBehindIsNull`)**: VMR subscription NOT stale (current). Asserts `CommitsBehind` is null, GitHub client never called (only called when stale).
+- **Test 6 (`GitHubCompareResult_RecordEquality`)**: Record equality test for `GitHubCompareResult` record.
+- **Test 7 (`SubscriptionHealthResult_CommitsBehind_DefaultsToNull`)**: Record instantiation test — existing code without `CommitsBehind` parameter still works (defaults to null).
+- **Key finding**: `IsVmrRepository()` checks for "github.com/dotnet/dotnet" (case-insensitive substring). Only VMR subscriptions get commit distance computed. The GitHub client is ONLY called when: (1) service has non-null GitHub client, (2) source is VMR, (3) subscription is stale, (4) both builds have non-empty commit SHAs.
+- **SubscriptionHealthResult.CommitsBehind**: New optional `int? CommitsBehind = null` field added to the record. Defaults to null when not specified (backward compatible).
+
+📌 Team update (2026-02-20): 7 GitHub commit distance tests for Issue #4. All 104 tests passing. VMR subscriptions with GitHub client get accurate commit distance via Compare API.

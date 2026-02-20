@@ -6,7 +6,13 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton<IMaestroApiClient>(_ =>
     new MaestroApiClient(Environment.GetEnvironmentVariable("MAESTRO_BAR_TOKEN")));
 builder.Services.AddSingleton<CacheService>();
-builder.Services.AddSingleton<MaestroService>();
+builder.Services.AddSingleton<IGitHubApiClient, GitHubApiClient>();
+builder.Services.AddSingleton<MaestroService>(sp =>
+    new MaestroService(
+        sp.GetRequiredService<IMaestroApiClient>(),
+        sp.GetRequiredService<CacheService>(),
+        sp.GetRequiredService<IGitHubApiClient>()
+    ));
 
 var enableDestructive = bool.TryParse(
     Environment.GetEnvironmentVariable("MAESTRO_ENABLE_DESTRUCTIVE_ACTIONS"),
