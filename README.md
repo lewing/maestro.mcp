@@ -1,3 +1,7 @@
+[![Status](https://img.shields.io/badge/status-experimental-blueviolet)](#status)
+[![Platform](https://img.shields.io/badge/platform-GitHub%20Copilot-blue)](#how-it-works)
+[![NuGet](https://img.shields.io/nuget/vpre/lewing.maestro.mcp)](https://www.nuget.org/packages/lewing.maestro.mcp)
+
 # maestro.mcp — MCP server for Maestro/BAR dependency flow data
 
 An MCP server that provides cached access to [Maestro/BAR](https://maestro.dot.net) (Build Asset Registry) data for the .NET build infrastructure. Exposes 14 tools for querying subscriptions, builds, channels, and health status, plus triggering subscription updates and managing cache via the Model Context Protocol.
