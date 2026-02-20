@@ -43,17 +43,23 @@ public class GitHubApiClient : IGitHubApiClient
             process.StartInfo.FileName = "gh";
             process.StartInfo.Arguments = "auth token";
             process.StartInfo.RedirectStandardOutput = true;
+            process.StartInfo.RedirectStandardError = true;
             process.StartInfo.UseShellExecute = false;
             process.StartInfo.CreateNoWindow = true;
             process.Start();
-            var token = process.StandardOutput.ReadToEnd().Trim();
-            if (!process.WaitForExit(5000))
+
+            // Read stdout/stderr async to avoid deadlock (ReadToEnd blocks until process exits)
+            var outputTask = process.StandardOutput.ReadToEndAsync();
+            process.StandardError.ReadToEndAsync(); // drain stderr to prevent buffer deadlock
+
+            if (!process.WaitForExit(15000))
             {
                 try { process.Kill(); } catch { }
                 Console.Error.WriteLine("[maestro-mcp] GitHub auth: gh CLI timed out");
                 return null;
             }
-            
+
+            var token = outputTask.Result.Trim();
             if (process.ExitCode == 0 && token.Length > 0)
             {
                 Console.Error.WriteLine("[maestro-mcp] GitHub auth: using gh CLI token");
