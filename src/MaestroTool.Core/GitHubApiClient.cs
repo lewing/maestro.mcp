@@ -1,12 +1,14 @@
 using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace MaestroTool.Core;
 
 public class GitHubApiClient : IGitHubApiClient
 {
     private static readonly HttpClient _httpClient = CreateHttpClient();
+    private static readonly Regex _shaPattern = new(@"^[0-9a-fA-F]{7,40}$", RegexOptions.Compiled);
 
     private static HttpClient CreateHttpClient()
     {
@@ -45,7 +47,12 @@ public class GitHubApiClient : IGitHubApiClient
             process.StartInfo.CreateNoWindow = true;
             process.Start();
             var token = process.StandardOutput.ReadToEnd().Trim();
-            process.WaitForExit();
+            if (!process.WaitForExit(5000))
+            {
+                try { process.Kill(); } catch { }
+                Console.Error.WriteLine("[maestro-mcp] GitHub auth: gh CLI timed out");
+                return null;
+            }
             
             if (process.ExitCode == 0 && token.Length > 0)
             {
@@ -65,6 +72,9 @@ public class GitHubApiClient : IGitHubApiClient
 
     public async Task<GitHubCompareResult?> CompareCommitsAsync(string owner, string repo, string baseSha, string headSha, CancellationToken cancellationToken = default)
     {
+        if (!_shaPattern.IsMatch(baseSha) || !_shaPattern.IsMatch(headSha))
+            return null;
+
         var url = $"https://api.github.com/repos/{owner}/{repo}/compare/{baseSha}...{headSha}";
         
         try

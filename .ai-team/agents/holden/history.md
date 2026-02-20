@@ -37,3 +37,15 @@
 📌 Threat model written to `.ai-team/decisions/inbox/holden-sqlite-threat-model.md`. 13 findings, 2 P1 items for next sprint, HMAC integrity on P2 backlog.
 
 📌 Team update (2026-02-19): P1 security fixes completed — file permissions (I2) and corruption auto-recovery (D2) implemented in CacheService. 6 security tests written. All 73 tests passing. Decided by Naomi, Amos.
+
+### GitHub Auth Cascade Threat Model (2025-07-16)
+
+- Conducted STRIDE-informed analysis of the v0.6.0 GitHub auth cascade (`GitHubApiClient.cs`): GITHUB_TOKEN env var → `gh auth token` subprocess → anonymous fallback. 9 findings total — 0 Critical, 0 High, 2 Medium, 4 Low, 3 Info.
+- **Most significant finding**: `process.WaitForExit()` with no timeout on the `gh auth token` subprocess call (GH-T1, Medium). This runs in a static initializer, so a hung `gh` process blocks the entire MCP server indefinitely. Fix: add 5-second timeout and kill on hang.
+- **Static HttpClient token lifetime** (GH-T4, Medium): Token is set once at type-load time and never refreshed. Acceptable for short-lived MCP subprocess sessions, but needs documentation that token changes require restart.
+- **Token handling is clean**: Confirmed the token value is never logged, never included in error messages, never persisted. Only auth method names go to stderr. `AuthenticationHeaderValue` validates the token format, preventing header injection.
+- **URL construction is low-risk**: The `owner`/`repo`/`baseSha`/`headSha` parameters come from internal BAR API data, not MCP tool parameters. `IsVmrRepository` restricts to dotnet/dotnet. `ParseGitHubUrl` validates github.com host. SHA format validation (`^[0-9a-f]{7,40}$`) recommended as defense-in-depth but not urgent.
+- **PATH-based executable resolution** for `gh` is standard practice and accepted — requires prior machine compromise to exploit.
+- **Pattern observed**: The separation between "what goes to stderr" (auth method) vs "what stays in scope" (token value) is a good security pattern worth maintaining across the codebase.
+
+📌 Threat model written to `.ai-team/decisions/inbox/holden-threat-model-github-auth.md`. 1 P1 fix (subprocess timeout), 2 P2 backlog items, 6 accepted.
