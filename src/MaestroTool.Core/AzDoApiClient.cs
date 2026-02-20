@@ -40,20 +40,35 @@ public class AzDoApiClient : IAzDoApiClient
         try
         {
             var process = new Process();
-            process.StartInfo.FileName = "az";
-            process.StartInfo.Arguments = "account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798";
+            // Use cmd /c on Windows because az is az.cmd (batch file)
+            if (OperatingSystem.IsWindows())
+            {
+                process.StartInfo.FileName = "cmd.exe";
+                process.StartInfo.Arguments = "/c az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798";
+            }
+            else
+            {
+                process.StartInfo.FileName = "az";
+                process.StartInfo.Arguments = "account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798";
+            }
             process.StartInfo.RedirectStandardOutput = true;
+            process.StartInfo.RedirectStandardError = true;
             process.StartInfo.UseShellExecute = false;
             process.StartInfo.CreateNoWindow = true;
             process.Start();
-            var output = process.StandardOutput.ReadToEnd().Trim();
-            if (!process.WaitForExit(5000))
+
+            // Read stdout async to avoid deadlock (ReadToEnd blocks until process exits)
+            var outputTask = process.StandardOutput.ReadToEndAsync();
+            process.StandardError.ReadToEndAsync(); // drain stderr to prevent buffer deadlock
+
+            if (!process.WaitForExit(15000))
             {
                 try { process.Kill(); } catch { }
                 Console.Error.WriteLine("[maestro-mcp] AzDO auth: az CLI timed out");
                 return null;
             }
-            
+
+            var output = outputTask.Result.Trim();
             if (process.ExitCode == 0 && output.Length > 0)
             {
                 var doc = JsonDocument.Parse(output);
@@ -107,7 +122,7 @@ public class AzDoApiClient : IAzDoApiClient
 
             return null;
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             Console.Error.WriteLine($"[maestro-mcp] AzDO commits API auth failed for {org}/{project}/{repo} — set AZDO_TOKEN for internal repos");
             return null;
