@@ -138,17 +138,37 @@ public class MaestroService
                     if (_gitHubClient != null && IsVmrRepository(sub.SourceRepository))
                     {
                         var parsedRepo = ParseGitHubUrl(sub.SourceRepository);
-                        if (parsedRepo.HasValue && 
-                            !string.IsNullOrEmpty(lastApplied.Commit) && 
-                            !string.IsNullOrEmpty(latestBuild.Commit))
+                        if (parsedRepo.HasValue)
                         {
-                            var (owner, repo) = parsedRepo.Value;
-                            var compareResult = await _gitHubClient.CompareCommitsAsync(
-                                owner, repo, lastApplied.Commit, latestBuild.Commit, cancellationToken);
-                            
-                            if (compareResult != null)
+                            // Fetch full build objects if commit SHAs are missing
+                            var lastAppliedCommit = lastApplied.Commit;
+                            var latestBuildCommit = latestBuild.Commit;
+
+                            if (string.IsNullOrEmpty(lastAppliedCommit) && lastApplied.Id > 0)
                             {
-                                commitsBehind = compareResult.AheadBy;
+                                Console.Error.WriteLine($"[maestro-mcp] Fetching full build {lastApplied.Id} for commit SHA");
+                                var fullLastApplied = await GetBuildAsync(lastApplied.Id, noCache, cancellationToken);
+                                lastAppliedCommit = fullLastApplied?.Commit;
+                            }
+
+                            if (string.IsNullOrEmpty(latestBuildCommit) && latestBuild.Id > 0)
+                            {
+                                Console.Error.WriteLine($"[maestro-mcp] Fetching full build {latestBuild.Id} for commit SHA");
+                                var fullLatestBuild = await GetBuildAsync(latestBuild.Id, noCache, cancellationToken);
+                                latestBuildCommit = fullLatestBuild?.Commit;
+                            }
+
+                            if (!string.IsNullOrEmpty(lastAppliedCommit) && !string.IsNullOrEmpty(latestBuildCommit))
+                            {
+                                var (owner, repo) = parsedRepo.Value;
+                                Console.Error.WriteLine($"[maestro-mcp] Comparing commits {lastAppliedCommit}...{latestBuildCommit} in {owner}/{repo}");
+                                var compareResult = await _gitHubClient.CompareCommitsAsync(
+                                    owner, repo, lastAppliedCommit, latestBuildCommit, cancellationToken);
+                                
+                                if (compareResult != null)
+                                {
+                                    commitsBehind = compareResult.AheadBy;
+                                }
                             }
                         }
                     }

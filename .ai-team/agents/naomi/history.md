@@ -176,3 +176,19 @@
   - `src/MaestroTool.Core/MaestroMcpTools.cs` — updated display logic
   - `src/MaestroTool.Mcp/Program.cs` — DI registration
 
+### Commit SHA Fetch Fix (Issue #5) (2025-02-20)
+- **Root cause:** PCS subscription API returns embedded `LastAppliedBuild` objects without full commit SHA field populated. The GitHub Compare API code added in v0.6.0 was being silently skipped due to null/empty commit SHAs.
+- **Fix implemented:** In `GetSubscriptionHealthAsync`, when `lastApplied.Commit` or `latestBuild.Commit` is null/empty, the code now fetches the full build using `GetBuildAsync(buildId)` to retrieve the commit SHA before attempting GitHub compare.
+- **Defensive approach:** Only fetch full build when commit is null/empty AND build ID > 0. If full build also has null commit, gracefully fall back to builds-behind (BAR ID arithmetic).
+- **Diagnostic logging added:**
+  - `[maestro-mcp] Fetching full build {buildId} for commit SHA` — when fetching full build
+  - `[maestro-mcp] Comparing commits {sha1}...{sha2} in {owner}/{repo}` — before GitHub compare call
+- **Tests added (3 new tests, 107 total passing):**
+  1. `SubscriptionHealth_FetchesFullBuildWhenLastAppliedCommitIsNull` — verifies full build fetch for lastApplied
+  2. `SubscriptionHealth_FetchesFullBuildWhenLatestBuildCommitIsNull` — verifies full build fetch for latestBuild
+  3. `SubscriptionHealth_FallsBackToBuildsBehindWhenBothCommitsAreNull` — verifies graceful fallback when both commits unavailable
+- **Test discovery:** `CreateBuild` helper defaults `commit` parameter to `"abc123"` when null is passed. Tests must use empty string `""` to simulate missing commits.
+- **Files modified:**
+  - `src/MaestroTool.Core/MaestroService.cs` — added full build fetch logic (lines 138-168)
+  - `src/MaestroTool.Tests/MaestroServiceTests.cs` — added 3 new tests
+

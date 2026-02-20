@@ -956,6 +956,138 @@ public class MaestroServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task SubscriptionHealth_FetchesFullBuildWhenLastAppliedCommitIsNull()
+    {
+        // Arrange - LastAppliedBuild has null Commit SHA
+        var channel = CreateChannel(1, ".NET 10");
+        var lastAppliedBuild = CreateBuild(id: 90, gitHubRepo: "https://github.com/dotnet/dotnet", commit: ""); // Empty commit
+        var latestBuild = CreateBuild(id: 95, gitHubRepo: "https://github.com/dotnet/dotnet", commit: "def456");
+        var sub = CreateSubscription(
+            source: "https://github.com/dotnet/dotnet",
+            target: "https://github.com/dotnet/aspnetcore",
+            channel: channel,
+            lastApplied: lastAppliedBuild);
+
+        // Mock full build with commit SHA
+        var fullLastAppliedBuild = CreateBuild(id: 90, gitHubRepo: "https://github.com/dotnet/dotnet", commit: "abc123");
+        
+        var mockGitHub = Substitute.For<IGitHubApiClient>();
+        mockGitHub.CompareCommitsAsync("dotnet", "dotnet", "abc123", "def456", Arg.Any<CancellationToken>())
+            .Returns(new GitHubCompareResult(AheadBy: 33, BehindBy: 0, Status: "ahead", TotalCommits: 33));
+
+        var serviceWithGitHub = new MaestroService(_client, _cache, mockGitHub);
+
+        _client.ListSubscriptionsAsync(null, "https://github.com/dotnet/aspnetcore", null, true, Arg.Any<CancellationToken>())
+            .Returns(new List<Subscription> { sub });
+        _client.GetLatestBuildAsync(sub.SourceRepository, channel.Id, Arg.Any<CancellationToken>())
+            .Returns(latestBuild);
+        _client.GetBuildAsync(90, Arg.Any<CancellationToken>())
+            .Returns(fullLastAppliedBuild); // Return full build with commit
+
+        // Act
+        var results = await serviceWithGitHub.GetSubscriptionHealthAsync("https://github.com/dotnet/aspnetcore");
+
+        // Assert
+        Assert.Single(results);
+        Assert.True(results[0].IsStale);
+        Assert.Equal(5, results[0].BuildsBehind);
+        Assert.Equal(33, results[0].CommitsBehind); // Should have commit distance
+
+        // Verify GetBuildAsync was called to fetch full build
+        await _client.Received(1).GetBuildAsync(90, Arg.Any<CancellationToken>());
+        await mockGitHub.Received(1).CompareCommitsAsync("dotnet", "dotnet", "abc123", "def456", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task SubscriptionHealth_FetchesFullBuildWhenLatestBuildCommitIsNull()
+    {
+        // Arrange - LatestBuild has null Commit SHA
+        var channel = CreateChannel(1, ".NET 10");
+        var lastAppliedBuild = CreateBuild(id: 90, gitHubRepo: "https://github.com/dotnet/dotnet", commit: "abc123");
+        var latestBuild = CreateBuild(id: 95, gitHubRepo: "https://github.com/dotnet/dotnet", commit: ""); // Empty commit
+        var sub = CreateSubscription(
+            source: "https://github.com/dotnet/dotnet",
+            target: "https://github.com/dotnet/aspnetcore",
+            channel: channel,
+            lastApplied: lastAppliedBuild);
+
+        // Mock full build with commit SHA
+        var fullLatestBuild = CreateBuild(id: 95, gitHubRepo: "https://github.com/dotnet/dotnet", commit: "def456");
+        
+        var mockGitHub = Substitute.For<IGitHubApiClient>();
+        mockGitHub.CompareCommitsAsync("dotnet", "dotnet", "abc123", "def456", Arg.Any<CancellationToken>())
+            .Returns(new GitHubCompareResult(AheadBy: 33, BehindBy: 0, Status: "ahead", TotalCommits: 33));
+
+        var serviceWithGitHub = new MaestroService(_client, _cache, mockGitHub);
+
+        _client.ListSubscriptionsAsync(null, "https://github.com/dotnet/aspnetcore", null, true, Arg.Any<CancellationToken>())
+            .Returns(new List<Subscription> { sub });
+        _client.GetLatestBuildAsync(sub.SourceRepository, channel.Id, Arg.Any<CancellationToken>())
+            .Returns(latestBuild);
+        _client.GetBuildAsync(95, Arg.Any<CancellationToken>())
+            .Returns(fullLatestBuild); // Return full build with commit
+
+        // Act
+        var results = await serviceWithGitHub.GetSubscriptionHealthAsync("https://github.com/dotnet/aspnetcore");
+
+        // Assert
+        Assert.Single(results);
+        Assert.True(results[0].IsStale);
+        Assert.Equal(5, results[0].BuildsBehind);
+        Assert.Equal(33, results[0].CommitsBehind); // Should have commit distance
+
+        // Verify GetBuildAsync was called to fetch full build
+        await _client.Received(1).GetBuildAsync(95, Arg.Any<CancellationToken>());
+        await mockGitHub.Received(1).CompareCommitsAsync("dotnet", "dotnet", "abc123", "def456", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task SubscriptionHealth_FallsBackToBuildsBehindWhenBothCommitsAreNull()
+    {
+        // Arrange - Both builds have null commits, even after fetching full builds
+        var channel = CreateChannel(1, ".NET 10");
+        var lastAppliedBuild = CreateBuild(id: 90, gitHubRepo: "https://github.com/dotnet/dotnet", commit: "");
+        var latestBuild = CreateBuild(id: 95, gitHubRepo: "https://github.com/dotnet/dotnet", commit: "");
+        var sub = CreateSubscription(
+            source: "https://github.com/dotnet/dotnet",
+            target: "https://github.com/dotnet/aspnetcore",
+            channel: channel,
+            lastApplied: lastAppliedBuild);
+
+        // Mock full builds that also have empty commits (edge case)
+        var fullLastAppliedBuild = CreateBuild(id: 90, gitHubRepo: "https://github.com/dotnet/dotnet", commit: "");
+        var fullLatestBuild = CreateBuild(id: 95, gitHubRepo: "https://github.com/dotnet/dotnet", commit: "");
+        
+        var mockGitHub = Substitute.For<IGitHubApiClient>();
+        var serviceWithGitHub = new MaestroService(_client, _cache, mockGitHub);
+
+        _client.ListSubscriptionsAsync(null, "https://github.com/dotnet/aspnetcore", null, true, Arg.Any<CancellationToken>())
+            .Returns(new List<Subscription> { sub });
+        _client.GetLatestBuildAsync(sub.SourceRepository, channel.Id, Arg.Any<CancellationToken>())
+            .Returns(latestBuild);
+        _client.GetBuildAsync(90, Arg.Any<CancellationToken>())
+            .Returns(fullLastAppliedBuild);
+        _client.GetBuildAsync(95, Arg.Any<CancellationToken>())
+            .Returns(fullLatestBuild);
+
+        // Act
+        var results = await serviceWithGitHub.GetSubscriptionHealthAsync("https://github.com/dotnet/aspnetcore");
+
+        // Assert
+        Assert.Single(results);
+        Assert.True(results[0].IsStale);
+        Assert.Equal(5, results[0].BuildsBehind); // Falls back to build IDs
+        Assert.Null(results[0].CommitsBehind); // No commit distance available
+
+        // Verify both GetBuildAsync calls were made
+        await _client.Received(1).GetBuildAsync(90, Arg.Any<CancellationToken>());
+        await _client.Received(1).GetBuildAsync(95, Arg.Any<CancellationToken>());
+        
+        // Verify GitHub compare was never called (no commits available)
+        await mockGitHub.DidNotReceive().CompareCommitsAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public void GitHubCompareResult_RecordEquality()
     {
         // Test that the record works correctly
