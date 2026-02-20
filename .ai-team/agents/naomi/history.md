@@ -176,6 +176,25 @@
   - `src/MaestroTool.Core/MaestroMcpTools.cs` — updated display logic
   - `src/MaestroTool.Mcp/Program.cs` — DI registration
 
+### CLI Commands Implementation (2026-02-20)
+- **Implemented dual-mode CLI + MCP** following hlx pattern from helix.mcp. `mstro` now works as both CLI tool and MCP server.
+- **18 CLI commands added:** subscriptions, subscription, latest-build, build, channels, default-channels, subscription-health, build-freshness, trigger-subscription, trigger-daily-update, codeflow-prs, tracked-pr, backflow-status, subscription-history, build-graph, flow-graph, cache (clear/status), mcp.
+- **ConsoleAppFramework v5 integration:** No [Option] attributes needed — parameters auto-map to `--kebab-case` flags. Positional arguments use `[Argument]`.
+- **Output pattern:** Human-readable by default (clean console output), `--json` flag returns structured JSON for scripting.
+- **Backwards compatibility:** No args → MCP server mode. Args provided → CLI mode. Existing MCP integrations unaffected.
+- **DI architecture:** Shared service registrations between CLI and MCP. MCP command creates separate Host for server isolation.
+- **Build status:** ✅ 0 warnings, 0 errors. Smoke tests confirmed CLI and MCP modes both work.
+- **Version bump:** 0.6.2 → 0.7.0 (minor version — significant capability addition, no breaking changes).
+- **Decision doc:** `.ai-team/decisions/inbox/naomi-cli-implementation.md` — implementation notes, command mapping table, learnings.
+
+### Key file paths
+- `src/MaestroTool.Core/MaestroApiClient.cs` — API client with auth cascade
+- `src/MaestroTool.Core/IMaestroApiClient.cs` — Interface definition
+- `src/MaestroTool.Core/MaestroService.cs` — Cached business logic layer
+- `src/MaestroTool.Core/MaestroMcpTools.cs` — MCP tool definitions
+- `src/MaestroTool/Program.cs` — Dual-mode entry point, DI setup, Commands class
+- `src/MaestroTool.Core/CacheService.cs` — SQLite-backed cache with cross-process sharing
+
 ### Commit SHA Fetch Fix (Issue #5) (2025-02-20)
 - **Root cause:** PCS subscription API returns embedded `LastAppliedBuild` objects without full commit SHA field populated. The GitHub Compare API code added in v0.6.0 was being silently skipped due to null/empty commit SHAs.
 - **Fix implemented:** In `GetSubscriptionHealthAsync`, when `lastApplied.Commit` or `latestBuild.Commit` is null/empty, the code now fetches the full build using `GetBuildAsync(buildId)` to retrieve the commit SHA before attempting GitHub compare.

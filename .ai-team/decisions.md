@@ -1377,3 +1377,792 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 - **Code review + iteration:** 1-2 hours
 - **Total:** 6-8 hours (1 work day)
 
+
+---
+
+# GitHub Commit Distance Test Coverage (Issue #4)
+
+**Date**: 2026-02-20  
+**Author**: Amos (Tester)  
+**Status**: Complete
+
+## Summary
+
+Wrote 7 comprehensive tests for the GitHub Compare API integration that adds real commit distance to VMR subscription health. All tests pass. Test coverage validates the feature's behavior across all edge cases.
+
+## Tests Added
+
+1. **VmrSubscription_WithGitHubClient_ReturnsCommitsBehind** — Happy path: VMR subscription with working GitHub client returns accurate commit distance (33 commits).
+
+2. **VmrSubscription_GitHubClientReturnsNull_FallsBackToBuildsBehind** — GitHub API failure: When Compare API returns null, `CommitsBehind` is null but `BuildsBehind` (approximate) still works.
+
+3. **NonVmrSubscription_CommitsBehindIsNull** — Non-VMR source repo (dotnet/runtime): Even with GitHub client available, `CommitsBehind` is null. Verifies GitHub client is never called for non-VMR repos.
+
+4. **NullGitHubClient_CommitsBehindIsNull** — Optional dependency: VMR subscription works without GitHub client. `BuildsBehind` still computed, `CommitsBehind` is null.
+
+5. **VmrSubscription_UpToDate_CommitsBehindIsNull** — Current subscriptions: When subscription is NOT stale, `CommitsBehind` is null (not computed). GitHub client never called.
+
+6. **GitHubCompareResult_RecordEquality** — Record validation: Ensures the new `GitHubCompareResult` record works correctly.
+
+7. **SubscriptionHealthResult_CommitsBehind_DefaultsToNull** — Backward compatibility: Existing code without `CommitsBehind` parameter still works (defaults to null).
+
+## Key Design Decisions Validated
+
+### VMR-Only Feature
+The GitHub Compare API is ONLY called when:
+1. Service has non-null `IGitHubApiClient`
+2. Source repository is VMR ("github.com/dotnet/dotnet")
+3. Subscription is stale (last applied ≠ latest)
+4. Both builds have non-empty commit SHAs
+
+This is correct — commit distance is most valuable for VMR backflow tracking, not general subscription health.
+
+### Graceful Degradation
+When GitHub API fails (returns null), the service doesn't throw or corrupt the health result. It simply leaves `CommitsBehind` as null and returns the approximate `BuildsBehind` (ID diff). This is good — the feature is additive, not breaking.
+
+### Backward Compatibility
+The `CommitsBehind` field is optional (`int? CommitsBehind = null`) on `SubscriptionHealthResult`. Existing code that constructs health results without this field continues to work. Tests confirm this.
+
+## Test Pattern Established
+
+### CreateBuild Helper Extension
+Extended `CreateBuild` to accept optional `commit` parameter (defaults to "abc123"). Build's `Commit` property is read-only and set via constructor, not `with` syntax.
+
+```csharp
+private static Build CreateBuild(int id = 100, string? gitHubRepo = null, DateTimeOffset? date = null, string? commit = null) =>
+    new(id, date ?? DateTimeOffset.UtcNow, staleness: 0, released: false, stable: true,
+        commit: commit ?? "abc123", channels: new List<Channel>(), assets: new List<Asset>(),
+        dependencies: new List<BuildRef>(), incoherencies: new List<BuildIncoherence>())
+    {
+        GitHubRepository = gitHubRepo ?? "https://github.com/dotnet/runtime"
+    };
+```
+
+### Mock GitHub Client Pattern
+```csharp
+var mockGitHub = Substitute.For<IGitHubApiClient>();
+mockGitHub.CompareCommitsAsync("dotnet", "dotnet", "abc123", "def456", Arg.Any<CancellationToken>())
+    .Returns(new GitHubCompareResult(AheadBy: 33, BehindBy: 0, Status: "ahead", TotalCommits: 33));
+
+var serviceWithGitHub = new MaestroService(_client, _cache, mockGitHub);
+```
+
+### Negative Assertions for Untaken Paths
+Tests verify GitHub client is NOT called for non-VMR subscriptions:
+```csharp
+await mockGitHub.DidNotReceive().CompareCommitsAsync(
+    Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+```
+
+## Edge Cases Covered
+
+✅ GitHub API returns valid result  
+✅ GitHub API returns null (failure)  
+✅ Non-VMR subscription (GitHub client not used)  
+✅ No GitHub client provided (null)  
+✅ Subscription is current (not stale)  
+✅ Record backward compatibility  
+
+## Future Test Considerations
+
+### NOT Tested (Requires Integration Testing)
+- **GitHubApiClient HTTP behavior**: The actual HTTP client implementation (`GitHubApiClient.CompareCommitsAsync`) is not unit tested. This is acceptable — HTTP clients are hard to unit test and better suited for integration tests.
+- **GitHub API rate limiting**: How the system behaves under rate limit errors (429 responses). This is not mocked in unit tests.
+- **Partial repository URLs**: Edge cases like "dotnet/dotnet" without "https://" or "github.com/dotnet/dotnet.git" with ".git" suffix. The `ParseGitHubUrl` helper handles these, but not explicitly tested.
+
+These gaps are acceptable for the feature's scope. The unit tests validate the business logic (when to call GitHub, how to handle results). Integration tests or manual testing can validate HTTP behavior.
+
+## Recommendation
+
+**APPROVED FOR MERGE** — Test coverage is comprehensive for the feature scope. All 104 tests pass. The GitHub commit distance feature is well-tested and ready for production.
+
+
+---
+
+### 2026-02-20: CLI architecture — ConsoleAppFramework integration
+
+**By:** Holden  
+**Date:** 2026-02-20  
+**Status:** Proposed
+
+**What:** Architecture for adding CLI commands following hlx pattern from helix.mcp  
+**Why:** Users want `mstro` to work as both CLI tool and MCP server. Current implementation is MCP-only.
+
+## Overview
+
+This document defines the architecture for adding ConsoleAppFramework CLI commands to `mstro`, transforming it from MCP-only to dual-mode (CLI + MCP). The design follows the established pattern from `helix.mcp` (hlx).
+
+## Key Design Decisions
+
+### 1. Program.cs Refactor
+
+**Current state (MCP-only):**
+```csharp
+var builder = Host.CreateApplicationBuilder(args);
+// Register services
+builder.Services.AddMcpServer(...).WithStdioServerTransport()...;
+await builder.Build().RunAsync();
+```
+
+**New state (dual-mode):**
+```csharp
+// DI setup (shared by both CLI and MCP)
+var services = new ServiceCollection();
+services.AddSingleton<IMaestroApiClient>(...);
+services.AddSingleton<CacheService>();
+services.AddSingleton<MaestroService>();
+services.AddSingleton<IGitHubApiClient>(...);
+services.AddSingleton(new MaestroToolOptions { ... });
+
+// Build provider for ConsoleAppFramework
+ConsoleApp.ServiceProvider = services.BuildServiceProvider();
+
+// Create app with Commands class
+var app = ConsoleApp.Create();
+app.Add<Commands>();
+
+// Default to MCP if no args
+app.Run(args.Length == 0 ? ["mcp"] : args);
+```
+
+**Rationale:**
+- `ConsoleApp.ServiceProvider` makes DI available to all commands via constructor injection
+- `args.Length == 0 ? ["mcp"] : args` ensures backwards compatibility — no args = MCP mode
+- The `[Command("mcp")]` handler in `Commands` creates a SEPARATE `Host.CreateApplicationBuilder()` for MCP hosting (not in the main ConsoleApp DI)
+
+### 2. Commands Class Design
+
+**Single class:** `Commands.cs` in `MaestroTool` project  
+**Pattern:** Like hlx, all commands in one class for simplicity
+
+**Constructor injection:**
+```csharp
+public class Commands
+{
+    private readonly MaestroService _service;
+    private readonly CacheService _cache;
+    
+    public Commands(MaestroService service, CacheService cache)
+    {
+        _service = service;
+        _cache = cache;
+    }
+    
+    [Command("mcp")]
+    public async Task McpAsync()
+    {
+        // Create SEPARATE Host.CreateApplicationBuilder for MCP
+        var builder = Host.CreateApplicationBuilder();
+        builder.Services.AddSingleton(_service);
+        builder.Services.AddSingleton(_cache);
+        builder.Services.AddMcpServer(...).WithStdioServerTransport()...;
+        await builder.Build().RunAsync();
+    }
+    
+    [Command("subscriptions")]
+    public async Task SubscriptionsAsync(
+        string? sourceRepository = null,
+        string? targetRepository = null,
+        ...)
+    {
+        // CLI implementation
+    }
+}
+```
+
+**Rationale:**
+- Single-class keeps navigation simple for 17 commands
+- Constructor injection reuses existing services
+- MCP command creates its own host to keep separation clean
+
+### 3. CLI Command Mapping
+
+Map each MCP tool name to CLI command (remove `maestro_` prefix, convert underscore to space):
+
+| MCP Tool Name                    | CLI Command                  | Notes |
+|----------------------------------|------------------------------|-------|
+| `maestro_subscriptions`          | `mstro subscriptions`        | |
+| `maestro_subscription`           | `mstro subscription`         | Requires subscription ID |
+| `maestro_latest_build`           | `mstro latest-build`         | Kebab-case for consistency |
+| `maestro_build`                  | `mstro build`                | |
+| `maestro_channels`               | `mstro channels`             | |
+| `maestro_default_channels`       | `mstro default-channels`     | |
+| `maestro_subscription_health`    | `mstro subscription-health`  | |
+| `maestro_build_freshness`        | `mstro build-freshness`      | |
+| `maestro_trigger_subscription`   | `mstro trigger-subscription` | Requires auth |
+| `maestro_trigger_daily_update`   | `mstro trigger-daily-update` | Requires auth |
+| `maestro_clear_cache`            | `mstro cache clear`          | Grouped under cache |
+| `maestro_codeflow_prs`           | `mstro codeflow-prs`         | |
+| `maestro_tracked_pr`             | `mstro tracked-pr`           | |
+| `maestro_backflow_status`        | `mstro backflow-status`      | |
+| `maestro_subscription_history`   | `mstro subscription-history` | |
+| `maestro_build_graph`            | `mstro build-graph`          | |
+| `maestro_flow_graph`             | `mstro flow-graph`           | |
+| (new)                            | `mstro cache status`         | Show cache stats |
+
+**Naming conventions:**
+- Use kebab-case for multi-word commands (matches hlx pattern: `hlx job-logs`)
+- Remove `maestro_` prefix (redundant in CLI context)
+- Group cache operations: `mstro cache clear`, `mstro cache status`
+
+### 4. Output Format Strategy
+
+**Human-readable by default:**
+```bash
+$ mstro subscriptions --target-repository https://github.com/dotnet/runtime
+Found 23 subscriptions to dotnet/runtime:
+  - dotnet/roslyn → runtime/main (.NET 10 RC1)
+  - dotnet/sdk → runtime/release/10.0-rc1 (.NET 10 RC1)
+  ...
+```
+
+**--json flag for structured output:**
+```bash
+$ mstro subscriptions --json
+[{"id": "...", "sourceRepository": "...", ...}]
+```
+
+**Implementation pattern:**
+```csharp
+[Command("subscriptions")]
+public async Task SubscriptionsAsync(
+    string? sourceRepository = null,
+    string? targetRepository = null,
+    bool json = false)
+{
+    var result = await _service.GetSubscriptionsAsync(sourceRepository, targetRepository);
+    
+    if (json)
+    {
+        Console.WriteLine(JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
+    }
+    else
+    {
+        Console.WriteLine($"Found {result.Count} subscription(s):");
+        foreach (var sub in result)
+        {
+            Console.WriteLine($"  - {sub.SourceRepository} → {sub.TargetRepository} ({sub.Channel?.Name})");
+        }
+    }
+}
+```
+
+**Rationale:**
+- Human output is scannable, matches user expectations for CLI tools
+- `--json` flag provides machine-parseable output for scripting
+- This matches hlx pattern exactly
+
+### 5. Cache Commands
+
+**Cache clear:**
+```bash
+$ mstro cache clear
+Cache cleared successfully
+```
+
+**Cache status:**
+```bash
+$ mstro cache status
+Cache location: ~/.mstro/cache.db
+Database size: 2.3 MB
+Entry count: 47 entries
+Oldest entry: 2026-02-18 14:23:01 UTC
+Newest entry: 2026-02-20 09:15:47 UTC
+```
+
+**Implementation:**
+- `cache clear` → calls `_cache.Clear()`
+- `cache status` → queries SQLite for row count, file size, min/max timestamps
+- Both follow hlx pattern of grouped cache commands
+
+### 6. MCP Default Mode
+
+**Behavior:**
+```bash
+$ mstro                # No args → MCP server mode
+$ mstro subscriptions  # Args provided → CLI mode
+```
+
+**Implementation:** `app.Run(args.Length == 0 ? ["mcp"] : args)`
+
+**Rationale:**
+- Backwards compatibility — existing MCP integrations don't break
+- Explicit `mstro mcp` also works for clarity
+- Users can choose CLI or MCP without environment variables
+
+### 7. Version Bump
+
+**Current:** 0.6.2  
+**Proposed:** 0.7.0
+
+**Rationale:**
+- CLI feature is a significant capability addition (minor version bump)
+- Not breaking changes to existing MCP surface (not 1.0.0)
+- Follows semantic versioning
+
+## Required Changes
+
+### Files to modify:
+1. **Program.cs** — Refactor to ConsoleAppFramework pattern
+2. **MaestroTool.csproj** — Add ConsoleAppFramework package, bump version to 0.7.0
+
+### Files to create:
+3. **Commands.cs** — New class with all 18 commands (17 MCP + cache status)
+
+### Dependencies to add:
+- `ConsoleAppFramework` (latest stable)
+
+## Implementation Notes
+
+### Parameter Mapping
+- MCP tool parameters → ConsoleAppFramework command parameters (same names)
+- Positional args: `[Argument]` attribute for required params
+- Named params: optional method parameters with defaults
+- Example:
+  ```csharp
+  [Command("subscription")]
+  public async Task SubscriptionAsync(
+      [Argument] string subscriptionId,  // Positional (required)
+      bool json = false,                 // Named (optional)
+      bool noCache = false)              // Named (optional)
+  ```
+
+### Error Handling
+- CLI commands should catch exceptions and print user-friendly messages
+- Example:
+  ```csharp
+  try {
+      var result = await _service.GetSubscriptionAsync(...);
+      // Display result
+  }
+  catch (Exception ex) {
+      Console.Error.WriteLine($"Error: {ex.Message}");
+      return 1; // Non-zero exit code
+  }
+  ```
+
+### Auth Validation
+- Destructive commands (trigger-subscription, trigger-daily-update) should check auth level before attempting
+- Example:
+  ```csharp
+  var client = _service._client; // Internal access or add AuthLevel property
+  if (client.AuthLevel == AuthLevel.Anonymous) {
+      Console.Error.WriteLine("Authentication required. Run 'darc authenticate' or set MAESTRO_BAR_TOKEN.");
+      return 1;
+  }
+  ```
+
+## Testing Strategy
+
+1. **Unit tests:** Add tests for Commands class methods (mock MaestroService)
+2. **Integration tests:** End-to-end CLI invocations with real service
+3. **MCP compatibility:** Ensure `mstro` (no args) still works as MCP server
+4. **Smoke test commands:**
+   - `mstro subscriptions --json`
+   - `mstro channels`
+   - `mstro cache status`
+   - `mstro mcp` (explicit)
+
+## Open Questions
+
+1. **Help text:** Should we add `[CommandHelp]` attributes to commands for better `--help` output?
+   - **Recommendation:** Yes, add brief descriptions matching MCP tool descriptions
+   
+2. **Color output:** Should human-readable output use ANSI colors (like `dotnet` CLI)?
+   - **Recommendation:** No for v0.7.0 — keep output simple, add in v0.8.0 if requested
+   
+3. **Progress indicators:** For long-running operations (flow-graph), show progress?
+   - **Recommendation:** No for v0.7.0 — most operations are fast (<2s)
+
+## References
+
+- Helix.mcp reference: https://github.com/lewing/helix.mcp
+- ConsoleAppFramework docs: https://github.com/Cysharp/ConsoleAppFramework
+
+
+---
+
+# Threat Model: GitHub Auth Cascade (v0.6.0)
+
+**Author:** Holden (Lead / Architect)  
+**Date:** 2025-07-16  
+**Scope:** `GitHubApiClient.cs` — 3-tier GitHub auth cascade and Compare API integration  
+**Framework:** STRIDE-informed analysis  
+**Context:** Read-only MCP tool server, calls GitHub Compare API for public repos (dotnet/dotnet). Runs as MCP subprocess hosted by Copilot CLI.
+
+---
+
+## Summary
+
+The GitHub auth cascade is **reasonably secure for its scope** — a single-purpose, read-only tool calling one public API endpoint. The most significant finding is the subprocess `WaitForExit()` with no timeout (Medium severity, fix now). The rest are low-severity items appropriate for a dev-local tool, with two "fix later" items worth addressing when time allows.
+
+**Findings:** 9 total — 0 Critical, 0 High, 2 Medium, 4 Low, 3 Info
+
+---
+
+## Findings
+
+### GH-T1: Subprocess Hang — `WaitForExit()` with No Timeout
+
+- **Category:** Denial of Service  
+- **Severity:** Medium  
+- **Description:** `process.WaitForExit()` on line 48 has no timeout. If `gh auth token` hangs (broken pipe, stuck credential helper, network timeout in gh's own auth flow), the entire MCP server startup blocks indefinitely. The static initializer makes this worse — the `HttpClient` is created during type loading, so a hang here freezes the first request and potentially all subsequent ones.
+- **Mitigation:** Add `process.WaitForExit(5000)` (5-second timeout). If it doesn't exit in time, kill the process and fall through to anonymous. Also consider `process.StartInfo.RedirectStandardError = true` to capture any error output for diagnostics.
+- **Priority:** **Fix now** — easy fix, prevents a real startup hang scenario.
+
+### GH-T2: PATH-Based Executable Resolution
+
+- **Category:** Tampering / Elevation of Privilege  
+- **Severity:** Low  
+- **Description:** `FileName = "gh"` resolves via the system PATH. A malicious `gh` binary earlier in PATH could intercept the call and harvest the intent (though the subprocess output — a token — flows back to *our* process, not the other way). In the reverse direction, a trojan `gh` could return a malicious token, but since we only use it as a Bearer token against `api.github.com`, the worst outcome is auth failure.
+- **Mitigation:** Accepted. This is the standard pattern for CLI tool integration. The attack requires prior machine compromise (modifying PATH or dropping a binary), at which point the attacker already has access to `gh auth token` directly. No action needed.
+- **Priority:** **Accept**
+
+### GH-T3: Token Not Logged — Confirmed Safe
+
+- **Category:** Information Disclosure  
+- **Severity:** Info  
+- **Description:** The code correctly logs only the *method* of authentication ("using GITHUB_TOKEN env var", "using gh CLI token") to stderr, never the token value itself. The token variable stays in local scope and is only assigned to `DefaultRequestHeaders.Authorization`. No string interpolation includes the token.
+- **Mitigation:** None needed — this is correct behavior.
+- **Priority:** **Accept** (already handled correctly)
+
+### GH-T4: Static HttpClient — Token Lifetime and Rotation
+
+- **Category:** Spoofing / Information Disclosure  
+- **Severity:** Medium  
+- **Description:** The `HttpClient` is created once in a static initializer and lives for the process lifetime. If the underlying token is rotated (GITHUB_TOKEN env var changes, `gh auth` re-authenticates), the MCP server continues using the stale token until restarted. This isn't a *leak* risk, but it means: (1) Token revocation doesn't take effect until restart. (2) If the initial auth fails and falls back to anonymous, the server stays anonymous forever — no retry.
+- **Mitigation:** For this tool's scope (short-lived MCP subprocess, restarted per session), this is acceptable. Document that token changes require server restart. For longer-lived deployments, consider a `DelegatingHandler` that refreshes the token lazily.
+- **Priority:** **Fix later** — document the restart requirement. Consider lazy refresh if the server becomes long-lived.
+
+### GH-T5: URL Construction — Limited SSRF Surface
+
+- **Category:** Spoofing / Server-Side Request Forgery  
+- **Severity:** Low  
+- **Description:** The Compare API URL is constructed via string interpolation: `$"https://api.github.com/repos/{owner}/{repo}/compare/{baseSha}...{headSha}"`. The parameters `owner`, `repo`, `baseSha`, `headSha` come from *internal* data — specifically `MaestroService.ParseGitHubUrl()` which parses stored repository URLs, and `Build.Commit` values from the Maestro/BAR API. These are **not user-supplied MCP tool parameters**. The `IsVmrRepository` guard further limits this to URLs containing `github.com/dotnet/dotnet`. A path-traversal attempt in a SHA (e.g., `../../other-endpoint`) would produce a 404 from GitHub's API routing, not an SSRF.
+- **Mitigation:** The existing guardrails (ParseGitHubUrl validates `github.com` host, IsVmrRepository restricts to dotnet/dotnet, parameters come from trusted BAR API data) are sufficient. For defense-in-depth, could add SHA format validation (`^[0-9a-f]{7,40}$`), but this is a minor hardening.
+- **Priority:** **Fix later** — add SHA regex validation as defense-in-depth.
+
+### GH-T6: Error Message Information Disclosure
+
+- **Category:** Information Disclosure  
+- **Severity:** Low  
+- **Description:** Error messages include `response.StatusCode` and `owner/repo` (line 76), and `ex.Message` for exceptions (line 93). The status code and owner/repo are not sensitive — they're public repo identifiers. The `ex.Message` could theoretically include internal details (e.g., DNS resolution failures revealing internal network topology), but since the only target is `api.github.com`, this is negligible.
+- **Mitigation:** Accepted. The error messages go to stderr (not to the MCP tool response — the method returns `null` on failure). The MaestroService caller handles `null` gracefully by omitting the `CommitsBehind` field.
+- **Priority:** **Accept**
+
+### GH-T7: Token Scope — Broader Than Needed
+
+- **Category:** Elevation of Privilege  
+- **Severity:** Low  
+- **Description:** `GITHUB_TOKEN` and `gh auth token` typically return tokens with broader scopes than read-only public repo access (e.g., `repo`, `write:packages`). This tool only needs `public_repo` read access (or no token at all for public repos). If the token leaked, it could be used for more than compare API calls.
+- **Mitigation:** Accepted for now. We can't control the user's token scope — this is inherent to reusing ambient credentials. The token is handled safely (not logged, not persisted, not forwarded). Document that users can create a fine-grained PAT with only `public_repo:read` if they want minimal scope.
+- **Priority:** **Accept** — document recommendation for fine-grained PATs in README.
+
+### GH-T8: Rate Limiting / DoS via MCP
+
+- **Category:** Denial of Service  
+- **Severity:** Info  
+- **Description:** The Compare API is called inside `GetSubscriptionHealthAsync`, which iterates subscriptions. A target repository with many subscriptions could trigger many GitHub API calls. However: (1) The `IsVmrRepository` guard limits calls to dotnet/dotnet subscriptions only. (2) Results are cached via `CacheService` (5-minute TTL on subscription health). (3) GitHub's own rate limits (5000 req/hr authenticated, 60 req/hr anonymous) provide natural throttling. (4) The MCP server is single-user (subprocess per Copilot session).
+- **Mitigation:** None needed. The existing caching and GitHub rate limits are sufficient. The LLM caller has no incentive to DoS its own tool.
+- **Priority:** **Accept**
+
+### GH-T9: MCP Trust Boundary — Subprocess Output Not Sanitized
+
+- **Category:** Tampering  
+- **Severity:** Info  
+- **Description:** The `gh auth token` subprocess output is `.Trim()`-ed and used as a Bearer token. If a compromised `gh` binary returned output with embedded newlines or HTTP header injection characters, the `AuthenticationHeaderValue` constructor would reject malformed values (it validates the token parameter). The `ReadToEnd().Trim()` pattern is safe for single-line token output.
+- **Mitigation:** None needed. `AuthenticationHeaderValue` provides validation. The `.Trim()` handles trailing newlines from stdout.
+- **Priority:** **Accept**
+
+---
+
+## Architecture Assessment
+
+### What's Done Right
+
+1. **Token never logged** — Only auth method names go to stderr.
+2. **Graceful degradation** — Each auth tier falls through to the next on failure. Catch-all around subprocess prevents crashes.
+3. **Scoped API surface** — Only one endpoint (`/repos/{o}/{r}/compare/{b}...{h}`), read-only, public repos only.
+4. **Input source is trusted** — owner/repo/SHA come from BAR API responses, not from MCP tool parameters.
+5. **stderr for diagnostics** — Auth logging goes to stderr, which is the correct channel for MCP servers (doesn't pollute tool responses).
+
+### What Should Be Improved
+
+| Priority | Finding | Action |
+|----------|---------|--------|
+| **Fix now** | GH-T1: `WaitForExit()` no timeout | Add 5-second timeout, kill on hang |
+| **Fix later** | GH-T4: Static token, no rotation | Document restart requirement |
+| **Fix later** | GH-T5: SHA format validation | Add `^[0-9a-f]{7,40}$` regex |
+| **Accept** | GH-T2, T3, T6, T7, T8, T9 | Current implementation is appropriate |
+
+---
+
+## Decision
+
+The GitHub auth cascade is **approved for v0.6.0** with one P1 fix required:
+
+- **GH-T1 (subprocess timeout)** should be fixed before the next release. Assign to Naomi.
+- **GH-T4 and GH-T5** go on the backlog as P2 hardening items.
+- All other findings are accepted — the risk profile is appropriate for a single-user, read-only, dev-local MCP tool.
+
+**Decided by:** Holden  
+**Participants:** Holden (analysis), Larry (requested)
+
+
+---
+
+### 2026-02-20: CLI Implementation — ConsoleAppFramework Integration Complete
+
+**By:** Naomi  
+**Date:** 2026-02-20  
+**Status:** Implemented
+
+**What:** Implemented CLI commands for mstro using ConsoleAppFramework following hlx pattern  
+**Why:** Users want `mstro` to work as both CLI tool and MCP server
+
+## Implementation Summary
+
+Successfully refactored `mstro` from MCP-only to dual-mode (CLI + MCP) following the architecture designed by Holden.
+
+### Changes Made
+
+1. **MaestroTool.csproj**
+   - Added `ConsoleAppFramework` v5.* package reference
+   - Bumped version from 0.6.2 → 0.7.0
+
+2. **Program.cs Refactor**
+   - Replaced Host-based setup with `ConsoleApp.Create()` pattern
+   - Shared DI registrations between CLI and MCP modes
+   - Added `ConsoleApp.ServiceProvider = services.BuildServiceProvider()`
+   - Default behavior: no args → MCP mode, args provided → CLI mode
+   - MCP command creates separate Host for MCP server isolation
+
+3. **Commands Class** (all in Program.cs like hlx)
+   - 18 CLI commands implemented (17 MCP tools + cache status)
+   - Constructor injection: `MaestroService`, `CacheService`
+   - Human-readable output by default with `--json` flag for structured output
+   - Common parameters: `json`, `noCache` on all commands
+   - Positional arguments use `[Argument]` attribute
+   - Optional parameters map automatically to `--option-name` flags
+
+### Command Mapping
+
+| CLI Command | Service Method | Notes |
+|-------------|---------------|-------|
+| `mstro` (no args) | — | Starts MCP server (backwards compatible) |
+| `mstro mcp` | — | Explicit MCP mode |
+| `mstro subscriptions` | `GetSubscriptionsAsync` | Filters: source, target, channel, branch |
+| `mstro subscription <id>` | `GetSubscriptionAsync` | Includes health check |
+| `mstro latest-build <repo>` | `GetLatestBuildAsync` | Optional channel filter |
+| `mstro build <id>` | `GetBuildAsync` | — |
+| `mstro channels` | `GetChannelsAsync` | — |
+| `mstro default-channels` | `GetDefaultChannelsAsync` | Filters: repo, branch |
+| `mstro subscription-health <repo>` | `GetSubscriptionHealthAsync` | Shows commits/builds behind |
+| `mstro build-freshness <channel>` | `GetBuildFreshnessAsync` | aka.ms URL resolution |
+| `mstro trigger-subscription <id> <build>` | `TriggerSubscriptionAsync` | Requires auth, optional --force |
+| `mstro trigger-daily-update` | `TriggerDailyUpdateAsync` | Requires auth |
+| `mstro codeflow-prs` | `GetTrackedPullRequestsAsync` | Optional channel filter |
+| `mstro tracked-pr <id>` | `GetTrackedPullRequestBySubscriptionIdAsync` | — |
+| `mstro backflow-status <vmr-build-id>` | `GetBackflowStatusAsync` | — |
+| `mstro subscription-history <id>` | `GetSubscriptionHistoryAsync` | Shows last 20 entries |
+| `mstro build-graph <id>` | `GetBuildGraphAsync` | — |
+| `mstro flow-graph <channel-id>` | `GetFlowGraphAsync` | Optional: days, includeArcade, etc. |
+| `mstro cache clear` | `CacheService.Clear()` | — |
+| `mstro cache status` | — | Shows cache location/stats |
+
+### Output Format Pattern
+
+**Human-readable (default):**
+```
+$ mstro channels
+Found 159 channel(s):
+
+- .NET 10 (ID: 4567)
+- .NET 10 RC1 (ID: 4568)
+...
+```
+
+**JSON (--json flag):**
+```
+$ mstro channels --json
+[
+  {
+    "id": 4567,
+    "name": ".NET 10",
+    ...
+  }
+]
+```
+
+### Parameter Patterns
+
+- **Positional:** `[Argument] string subscriptionId` → `mstro subscription abc-123`
+- **Optional:** `string? channelName = null` → `mstro subscriptions --channel-name ".NET 10"`
+- **Boolean:** `bool json = false` → `mstro subscriptions --json`
+- **No [Option] attributes needed** — ConsoleAppFramework v5 auto-maps parameters
+
+### Error Handling
+
+- Auth failures exit with code 1 and `🔒` error prefix
+- Invalid input exits with code 1 and user-friendly message to stderr
+- Service exceptions propagate (not caught at command level)
+- Progress messages go to stderr to keep stdout clean for JSON output
+
+### Key Learnings
+
+1. **ConsoleAppFramework v5 API change:** Earlier versions (v4) used `[Option]` attributes, but v5 auto-maps parameters by name. Parameters automatically become `--kebab-case` flags.
+
+2. **Separate DI for MCP:** The MCP command creates its own `Host.CreateApplicationBuilder()` with separate service registrations. This keeps MCP server lifecycle isolated from CLI command execution.
+
+3. **Backwards compatibility:** `args.Length == 0 ? ["mcp"] : args` ensures existing MCP integrations don't break.
+
+4. **IGitHubApiClient wiring:** Required explicit factory pattern in DI registration to ensure 3rd constructor parameter is injected into `MaestroService`.
+
+5. **Build verification:** 0 warnings, 0 errors. ConsoleAppFramework works with .NET 10 without issues.
+
+### Testing Plan
+
+1. **Manual smoke test:** Run each command with sample data
+2. **MCP compatibility:** Verify `mstro` (no args) still works as MCP server
+3. **JSON output:** Verify `--json` flag returns valid JSON on all commands
+4. **Auth gating:** Verify trigger commands fail gracefully when unauthenticated
+
+### Next Steps
+
+1. Update README.md with CLI usage examples
+2. Add unit tests for Commands class (mock MaestroService)
+3. Consider adding `--help` text for parameters (ConsoleAppFramework supports `[Description]` on params)
+4. Consider adding color output for human-readable mode (v0.8.0 feature)
+
+## Files Modified
+
+- `src/MaestroTool/MaestroTool.csproj` — Added ConsoleAppFramework, bumped version
+- `src/MaestroTool/Program.cs` — Refactored to dual-mode, added Commands class
+
+## Build Status
+
+✅ `dotnet build` succeeded — 0 warnings, 0 errors
+
+
+---
+
+# Decision: Fetch Full Build for Commit SHA When Null
+
+**Date:** 2025-02-20  
+**Author:** Naomi (Backend Developer)  
+**Status:** Implemented
+
+## Problem
+
+User feedback reported that `maestro_subscription_health` was still showing "591 builds behind" instead of "commits behind" for VMR subscriptions, even after the GitHub Compare API integration was added in v0.6.0.
+
+Root cause: The PCS subscription API returns embedded/summary `Build` objects in the `LastAppliedBuild` property. These embedded builds often have the `Commit` field as null/empty because the PCS API doesn't always serialize all fields for embedded objects. As a result, the GitHub Compare API code was being silently skipped due to the null check gating condition.
+
+## Decision
+
+When computing subscription health for VMR subscriptions:
+
+1. **Check if commit SHAs are null/empty BEFORE attempting GitHub compare**
+2. **Fetch full build objects using `GetBuildAsync(buildId)` when commit is missing**
+3. **Add defensive checks**: Only fetch if build ID > 0
+4. **Graceful fallback**: If full build fetch also returns null commit, fall back to builds-behind (BAR ID arithmetic)
+5. **Add diagnostic logging** to make debugging easier:
+   - `[maestro-mcp] Fetching full build {buildId} for commit SHA`
+   - `[maestro-mcp] Comparing commits {sha1}...{sha2} in {owner}/{repo}`
+
+## Implementation
+
+Modified `MaestroService.GetSubscriptionHealthAsync()` (lines 133-168):
+
+```csharp
+// For VMR subscriptions, use GitHub compare API for accurate commit distance
+if (_gitHubClient != null && IsVmrRepository(sub.SourceRepository))
+{
+    var parsedRepo = ParseGitHubUrl(sub.SourceRepository);
+    if (parsedRepo.HasValue)
+    {
+        // Fetch full build objects if commit SHAs are missing
+        var lastAppliedCommit = lastApplied.Commit;
+        var latestBuildCommit = latestBuild.Commit;
+
+        if (string.IsNullOrEmpty(lastAppliedCommit) && lastApplied.Id > 0)
+        {
+            Console.Error.WriteLine($"[maestro-mcp] Fetching full build {lastApplied.Id} for commit SHA");
+            var fullLastApplied = await GetBuildAsync(lastApplied.Id, noCache, cancellationToken);
+            lastAppliedCommit = fullLastApplied?.Commit;
+        }
+
+        if (string.IsNullOrEmpty(latestBuildCommit) && latestBuild.Id > 0)
+        {
+            Console.Error.WriteLine($"[maestro-mcp] Fetching full build {latestBuild.Id} for commit SHA");
+            var fullLatestBuild = await GetBuildAsync(latestBuild.Id, noCache, cancellationToken);
+            latestBuildCommit = fullLatestBuild?.Commit;
+        }
+
+        if (!string.IsNullOrEmpty(lastAppliedCommit) && !string.IsNullOrEmpty(latestBuildCommit))
+        {
+            var (owner, repo) = parsedRepo.Value;
+            Console.Error.WriteLine($"[maestro-mcp] Comparing commits {lastAppliedCommit}...{latestBuildCommit} in {owner}/{repo}");
+            var compareResult = await _gitHubClient.CompareCommitsAsync(
+                owner, repo, lastAppliedCommit, latestBuildCommit, cancellationToken);
+            
+            if (compareResult != null)
+            {
+                commitsBehind = compareResult.AheadBy;
+            }
+        }
+    }
+}
+```
+
+## Testing
+
+Added 3 comprehensive tests to verify the fix:
+
+1. **`SubscriptionHealth_FetchesFullBuildWhenLastAppliedCommitIsNull`**  
+   Tests that when `LastAppliedBuild.Commit` is null/empty, the service fetches the full build via `GetBuildAsync()` and successfully retrieves the commit SHA for GitHub compare.
+
+2. **`SubscriptionHealth_FetchesFullBuildWhenLatestBuildCommitIsNull`**  
+   Tests that when `latestBuild.Commit` is null/empty, the service fetches the full build and successfully uses it for GitHub compare.
+
+3. **`SubscriptionHealth_FallsBackToBuildsBehindWhenBothCommitsAreNull`**  
+   Tests that when BOTH builds have null commits (even after full build fetch), the service gracefully falls back to builds-behind without crashing.
+
+**Test discovery note:** The `CreateBuild` helper defaults `commit` parameter to `"abc123"` when `null` is passed. Tests must use empty string `""` to simulate missing commits.
+
+## Impact
+
+- **Minimal code changes**: Only modified the VMR commit distance calculation block in one method
+- **No breaking changes**: Graceful fallback preserves existing behavior when commits unavailable
+- **Performance**: Adds 0-2 additional PCS API calls per VMR subscription when commits are missing. Mitigated by cache layer (LongTtl for builds)
+- **User experience**: VMR subscriptions now correctly show "33 commits behind" instead of "591 builds behind"
+
+## Alternatives Considered
+
+1. **Always fetch full builds for all subscriptions**  
+   Rejected: Wasteful for non-VMR subscriptions and when commits are already populated
+
+2. **Use BackflowStatus API CommitDistance field**  
+   Rejected: Testing showed BackflowStatus API is unreliable (errors on multiple VMR builds)
+
+3. **Store full builds in subscription cache**  
+   Rejected: More complex, harder to maintain, unclear ownership of data transformation
+
+## Files Modified
+
+- `src/MaestroTool.Core/MaestroService.cs` — added full build fetch logic
+- `src/MaestroTool.Tests/MaestroServiceTests.cs` — added 3 new tests
+
+## Related
+
+- Issue #5: maestro_subscription_health reporting wrong commit count
+- Issue #4: Initial GitHub Compare API integration (v0.6.0)
+
+
+---
+
+### 2025-02-20: GitHub Commit Distance Implementation (Issue #4)
+**By:** Naomi
+**What:** Implemented `IGitHubApiClient` with 3-tier auth cascade (GITHUB_TOKEN env var → gh CLI → anonymous) to provide accurate commit distances for VMR subscriptions via GitHub's Compare API. Updated `maestro_subscription_health` tool to show "33 commits behind" for VMR subs instead of wildly inaccurate BAR build ID arithmetic ("~566 builds behind").
+**Why:** BAR build IDs are globally sequential across all repos (not per-repo), causing 17x error for VMR subscriptions. GitHub Compare API provides ground truth commit distance. Graceful degradation ensures feature works in all environments (anonymous 60 req/hr sufficient for typical use). Optional dependency injection pattern allows MaestroService to work with or without GitHub client.
+
