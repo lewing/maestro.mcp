@@ -145,3 +145,14 @@
 - MCP tool description updated to document force behavior. Success message differentiates force vs normal trigger.
 - Decided as team to add as optional param to existing tool rather than a separate `maestro_force_trigger_subscription` tool.
 
+### Issue #4 Analysis: VMR Commit Distance Problem (2025-02-20)
+- **Root cause identified:** `BuildsBehind` calculation on line 132 of `MaestroService.cs` uses BAR build ID arithmetic (`latestBuild.Id - lastApplied.Id`). BAR IDs are globally sequential across ALL repos, not per-repo. For VMR subscriptions (dotnet/dotnet → X), this gives 17x inflated numbers (566 builds vs 33 actual commits).
+- **BackflowStatus API unreliable:** Tested on VMR builds 302627, 302612, 302391 — all error. Cannot use `CommitDistance` field as primary solution.
+- **Proven solution exists:** `Get-CodeflowStatus.ps1` uses GitHub compare API (`/repos/{owner}/{repo}/compare/{base}...{head}`) with 100% eval accuracy vs 0% for MCP-only workflows using BAR IDs.
+- **Build model properties:** PCS `Build` model has `Commit` (SHA), `GitHubRepository`/`AzureDevOpsRepository`, `DateProduced`, `Id`. Already have everything needed to look up commits via `GetBuildAsync(lastAppliedBuildId)` and `GetBuildAsync(latestBuildId)`, then call GitHub compare.
+- **Scope decision:** Fix applies only to VMR-sourced subscriptions (dotnet/dotnet → X). Non-VMR subscriptions continue using BAR ID arithmetic (acceptable approximation for non-VMR scenarios).
+- **Technical approach chosen:** Add `IGitHubApiClient` interface + HttpClient implementation, inject into `MaestroService` as optional dependency. Compute `CommitsBehind` for VMR subscriptions, gracefully fall back to `BuildsBehind` (BAR IDs) if GitHub API unavailable. No new NuGet dependencies (HttpClientFactory already available).
+- **Display strategy:** Prefer "33 commits behind" when available, fall back to "~566 builds behind" with note "Using BAR build count (approximate)" when GitHub API unavailable.
+- **Rate limit consideration:** GitHub anonymous API = 60 req/hour. Typical `subscription_health` call has ~10 VMR subscriptions, well within limits. Failures degrade gracefully to BAR ID arithmetic.
+- **Proposal written:** `.ai-team/decisions/inbox/naomi-issue4-commit-distance-approach.md` — awaiting team review before implementation.
+

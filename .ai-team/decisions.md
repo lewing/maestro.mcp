@@ -1064,3 +1064,316 @@ Helper: `ChannelCategorizer` (1 member) in `.Helpers` namespace
 
 **Implication:** The NuGet package is ahead of public source code. When updating arcade-services source, check for recent releases to the NuGet feed that may contain newer APIs.
 
+
+
+---
+# Decision: Force trigger as optional parameter
+
+**Author:** Naomi (Backend Developer)
+**Date:** 2025-07-16
+**Scope:** `maestro_trigger_subscription` MCP tool
+
+## Decision
+Added `force` as an optional boolean parameter (`default: false`) to the existing `maestro_trigger_subscription` tool rather than creating a separate `maestro_force_trigger_subscription` tool.
+
+## Rationale
+- Keeps the tool surface area small — one tool, one concept (trigger), with a modifier flag.
+- The PCS client already has the `isCoherencyUpdate` boolean on `TriggerSubscriptionAsync`. When `force=true`, we pass `true` to `isCoherencyUpdate`, which overwrites the existing PR branch with fresh VMR content.
+- Dedup keys include the force flag, so `trigger(sub, build, force=false)` and `trigger(sub, build, force=true)` are tracked independently.
+
+## Impact
+- **All 4 layers modified:** `IMaestroApiClient`, `MaestroApiClient`, `MaestroService`, `MaestroMcpTools`
+- **Backward compatible:** `force` defaults to `false`, so existing callers are unaffected.
+- **Tests:** Build passes with 0 warnings, 0 errors. Existing tests that call `TriggerSubscriptionAsync` without `force` param will continue to work due to default value.
+
+
+---
+# Issue #4: VMR Commit Distance Fix — Technical Proposal
+
+**Author:** Naomi (Backend Developer)  
+**Date:** 2025-02-20  
+**Status:** Proposal for team review
+
+## Problem Summary
+
+`maestro_subscription_health` reports `BuildsBehind` using BAR build ID arithmetic (`latestBuild.Id - lastApplied.Id`). For VMR subscriptions (dotnet/dotnet → X), this gives wildly inflated numbers:
+- **BAR ID delta:** 566 builds behind (misleading)
+- **Actual VMR commit distance:** 33 commits behind (correct)
+
+This 17x error occurs because BAR IDs are globally sequential across ALL repos, not per-repo. The current calculation treats BAR ID differences as commit counts, which is fundamentally incorrect.
+
+The `maestro_backflow_status` API should provide accurate commit distance via `CommitDistance` field, but testing shows it **errors for all VMR builds** (302627, 302612, 302391), making it unreliable.
+
+## Recommended Approach
+
+**Option B: Direct GitHub Compare API Integration**
+
+Add a GitHub compare API client to compute real commit distance for VMR subscriptions. This mirrors the proven approach in `Get-CodeflowStatus.ps1`.
+
+### Why This Approach
+
+1. **Proven reliability:** `Get-CodeflowStatus.ps1` uses GitHub compare API successfully (100% eval accuracy vs 0% for MCP-only workflows)
+2. **No PCS dependency:** BackflowStatus API is erroring and cannot be relied upon
+3. **Public API, no auth needed:** GitHub compare API works anonymously for public repos (dotnet/dotnet)
+4. **Targeted fix:** Only applies to VMR-sourced subscriptions (dotnet/dotnet → X), doesn't affect other subscription types
+5. **Clean fallback:** If GitHub API fails, fall back to existing BAR ID arithmetic (visible to user as approximate)
+
+### Rejected Alternatives
+
+- **Option A (BackflowStatus API + fallback):** Unreliable. Errors on tested builds, would require fallback 100% of time.
+- **Option C (Hybrid):** Unnecessary complexity. BackflowStatus API is not functional enough to justify the extra layer.
+
+## Implementation Plan
+
+### 1. New GitHub API Client Interface
+
+**File:** `src/MaestroTool.Core/IGitHubApiClient.cs` (new)
+
+```csharp
+public interface IGitHubApiClient
+{
+    /// <summary>
+    /// Compare two commits and get the ahead/behind count.
+    /// </summary>
+    /// <param name="owner">Repository owner (e.g., "dotnet")</param>
+    /// <param name="repo">Repository name (e.g., "dotnet")</param>
+    /// <param name="baseSha">Base commit SHA</param>
+    /// <param name="headSha">Head commit SHA</param>
+    /// <returns>Ahead/behind count, or null if comparison fails</returns>
+    Task<GitHubCompareResult?> CompareCommitsAsync(
+        string owner,
+        string repo,
+        string baseSha,
+        string headSha,
+        CancellationToken cancellationToken = default);
+}
+
+public record GitHubCompareResult(int AheadBy, int BehindBy, string Status);
+```
+
+### 2. HttpClient-Based Implementation
+
+**File:** `src/MaestroTool.Core/GitHubApiClient.cs` (new)
+
+```csharp
+public class GitHubApiClient : IGitHubApiClient
+{
+    private readonly HttpClient _http;
+    
+    public GitHubApiClient(IHttpClientFactory factory)
+    {
+        _http = factory.CreateClient("GitHub");
+        _http.DefaultRequestHeaders.Add("User-Agent", "maestro-mcp");
+        _http.DefaultRequestHeaders.Add("Accept", "application/vnd.github.v3+json");
+    }
+    
+    public async Task<GitHubCompareResult?> CompareCommitsAsync(...)
+    {
+        // GET /repos/{owner}/{repo}/compare/{base}...{head}
+        // Parse JSON response: { ahead_by, behind_by, status }
+        // Return null on 404/500/timeout (graceful degradation)
+    }
+}
+```
+
+### 3. Service Layer Integration
+
+**File:** `src/MaestroTool.Core/MaestroService.cs` (modify `GetSubscriptionHealthAsync`)
+
+```csharp
+// Add constructor dependency
+private readonly IGitHubApiClient? _github;
+
+public MaestroService(IMaestroApiClient client, CacheService cache, IGitHubApiClient? github = null)
+{
+    _client = client;
+    _cache = cache;
+    _github = github; // Optional to keep tests simple
+}
+
+// In GetSubscriptionHealthAsync, after computing buildsBehind:
+int? commitsBehind = null;
+
+// Only for VMR subscriptions (dotnet/dotnet source)
+if (isStale && _github != null && IsVmrRepository(sub.SourceRepository))
+{
+    try
+    {
+        var lastAppliedBuild = await GetBuildAsync(lastApplied.Id, noCache, cancellationToken);
+        var latestBuildData = await GetBuildAsync(latestBuild.Id, noCache, cancellationToken);
+        
+        var compare = await _github.CompareCommitsAsync(
+            "dotnet", "dotnet",
+            lastAppliedBuild.Commit, // Base SHA
+            latestBuildData.Commit,  // Head SHA
+            cancellationToken);
+        
+        if (compare != null)
+        {
+            commitsBehind = compare.AheadBy; // Head is ahead of base
+        }
+    }
+    catch (Exception ex)
+    {
+        // Log to stderr, continue with BAR ID arithmetic
+        Console.Error.WriteLine($"[maestro-mcp] GitHub compare failed: {ex.Message}");
+    }
+}
+
+// Update result record to include commitsBehind
+```
+
+**Helper method:**
+```csharp
+private static bool IsVmrRepository(string repo)
+{
+    return repo.Contains("github.com/dotnet/dotnet", StringComparison.OrdinalIgnoreCase);
+}
+```
+
+### 4. Update SubscriptionHealthResult Record
+
+**File:** `src/MaestroTool.Core/MaestroService.cs` (line 331)
+
+```csharp
+public record SubscriptionHealthResult(
+    Guid SubscriptionId,
+    string SourceRepository,
+    string TargetRepository,
+    string TargetBranch,
+    string ChannelName,
+    bool IsStale,
+    int BuildsBehind,
+    int? CommitsBehind, // NEW FIELD
+    int? LastAppliedBuildId,
+    DateTimeOffset? LastAppliedDate,
+    int? LatestBuildId,
+    DateTimeOffset? LatestBuildDate,
+    string? Error = null
+);
+```
+
+### 5. MCP Tool Display Update
+
+**File:** `src/MaestroTool.Core/MaestroMcpTools.cs` (line 210)
+
+```csharp
+// Update display logic to prefer CommitsBehind when available
+var status = r.IsStale 
+    ? (r.CommitsBehind.HasValue 
+        ? $"⚠️ STALE ({r.CommitsBehind} commits behind)" 
+        : $"⚠️ STALE (~{r.BuildsBehind} builds behind)")
+    : "✅ Current";
+
+// Add note if BAR ID arithmetic was used
+if (r.IsStale && !r.CommitsBehind.HasValue)
+    sb.AppendLine($"  Note: Using BAR build count (approximate)");
+```
+
+### 6. DI Setup
+
+**File:** `src/MaestroTool.Mcp/Program.cs`
+
+```csharp
+// Add HttpClientFactory
+builder.Services.AddHttpClient();
+
+// Register GitHub client (optional, graceful degradation if not registered)
+builder.Services.AddSingleton<IGitHubApiClient, GitHubApiClient>();
+```
+
+## Dependencies
+
+- **Microsoft.Extensions.Http** (already in project via transitive deps from ASP.NET Core)
+- **System.Text.Json** (already in project)
+- No new package references required
+
+## Risks & Tradeoffs
+
+### Risks
+
+1. **GitHub API rate limits:** Anonymous access = 60 req/hour. For typical usage (single `subscription_health` call with ~10 VMR subscriptions), this is fine. Rate limit errors would fall back to BAR ID arithmetic.
+2. **Network failures:** GitHub API downtime would degrade to BAR ID arithmetic. Acceptable because tool remains functional.
+3. **Commit SHAs not found:** If either build's commit SHA is invalid/deleted, GitHub returns 404. Falls back to BAR ID arithmetic.
+
+### Tradeoffs
+
+- **Slightly slower first call:** Adds ~200-500ms per VMR subscription (GitHub API latency). Mitigated by:
+  - Caching (build lookups already cached at LongTtl)
+  - Only applies to VMR subscriptions (dotnet/dotnet → X)
+  - Parallel execution if multiple VMR subs exist
+- **More moving parts:** Introduces HTTP client dependency. Mitigated by:
+  - Using built-in `IHttpClientFactory` (standard .NET pattern)
+  - Optional dependency in service layer (doesn't break existing tests)
+  - Clear fallback behavior (BAR ID arithmetic, visible to user)
+
+## Testing Strategy
+
+1. **Unit tests for GitHubApiClient:**
+   - Mock HttpClient with HttpMessageHandler
+   - Test successful compare (ahead_by, behind_by, status)
+   - Test 404 (commit not found) → returns null
+   - Test 500/timeout → returns null
+
+2. **Integration test for GetSubscriptionHealthAsync:**
+   - Mock GitHub client to return specific commit distances
+   - Verify CommitsBehind field is populated for VMR subscriptions
+   - Verify BuildsBehind fallback for non-VMR subscriptions
+   - Verify graceful degradation when GitHub client is null
+
+3. **Manual smoke test:**
+   - Run `maestro_subscription_health` for dotnet/dotnet
+   - Verify commit distance matches `Get-CodeflowStatus.ps1` output
+   - Test with GitHub API unavailable (network disconnect) → verify BAR ID fallback
+
+## Scope of Change
+
+### Files Modified
+- `src/MaestroTool.Core/MaestroService.cs` (~30 lines: constructor, GetSubscriptionHealthAsync logic, IsVmrRepository helper, record update)
+- `src/MaestroTool.Core/MaestroMcpTools.cs` (~5 lines: display logic)
+- `src/MaestroTool.Mcp/Program.cs` (~2 lines: DI registration)
+
+### Files Added
+- `src/MaestroTool.Core/IGitHubApiClient.cs` (~15 lines)
+- `src/MaestroTool.Core/GitHubApiClient.cs` (~80 lines)
+- `src/MaestroTool.Tests/GitHubApiClientTests.cs` (~150 lines)
+- `src/MaestroTool.Tests/MaestroServiceCommitDistanceTests.cs` (~100 lines)
+
+**Total:** ~380 lines added/modified across 7 files
+
+## Questions for Team
+
+1. **Scope decision:** Should this fix also apply to `maestro_backflow_status` tool? (Currently only fixing `subscription_health`)
+2. **Display format:** Prefer "33 commits behind" or "33 VMR commits behind" to disambiguate from BAR builds?
+3. **Fallback messaging:** Should we surface GitHub API errors in the tool output or only log to stderr?
+4. **Future work:** Should we add GitHub auth support (via PAT) for higher rate limits, or is anonymous sufficient?
+
+## Commit Message Draft
+
+```
+Fix #4: Add VMR commit distance to subscription health
+
+Replace BAR build ID arithmetic with GitHub compare API for VMR
+subscriptions (dotnet/dotnet → X). For a dotnet/runtime backflow
+scenario, this changes from "566 builds behind" (misleading) to
+"33 commits behind" (accurate).
+
+- Add IGitHubApiClient + HttpClient-based implementation
+- Update GetSubscriptionHealthAsync to compute CommitsBehind for VMR
+- Update SubscriptionHealthResult record with CommitsBehind field
+- Update MCP tool display to prefer commit distance when available
+- Graceful fallback to BAR ID arithmetic if GitHub API unavailable
+- Add unit and integration tests
+
+Fixes: https://github.com/lewing/maestro.mcp/issues/4
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+```
+
+## Timeline Estimate
+
+- **Implementation:** 3-4 hours
+- **Testing:** 2 hours
+- **Code review + iteration:** 1-2 hours
+- **Total:** 6-8 hours (1 work day)
+
