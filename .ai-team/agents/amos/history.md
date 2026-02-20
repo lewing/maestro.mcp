@@ -124,3 +124,14 @@
 - **SubscriptionHealthResult.CommitsBehind**: New optional `int? CommitsBehind = null` field added to the record. Defaults to null when not specified (backward compatible).
 
 📌 Team update (2026-02-20): 7 GitHub commit distance tests for Issue #4. All 104 tests passing. VMR subscriptions with GitHub client get accurate commit distance via Compare API.
+
+### 2026-02-20 — Issue #6: Widen commit distance to all GitHub-hosted repos
+
+- **3 new tests written, 1 old test replaced** (109 total, all passing) for Issue #6 which widens `IsVmrRepository()` gate to `IsGitHubRepository()`.
+- **Replaced `GetSubscriptionHealth_NonVmrSubscription_CommitsBehindIsNull`** with `GetSubscriptionHealth_GitHubHostedSubscription_ReturnsCommitsBehind`. The old test asserted non-VMR GitHub repos get `CommitsBehind = null`. After Issue #6, non-VMR GitHub repos (e.g., dotnet/runtime) SHOULD get CommitsBehind populated. New test uses distinct commit SHAs (aaa111/bbb222) and verifies CompareCommitsAsync is called with parsed owner/repo ("dotnet"/"runtime").
+- **New: `GetSubscriptionHealth_AzDoHostedSubscription_CommitsBehindIsNull`**: AzDO-hosted source repo (`https://dev.azure.com/dnceng/internal/_git/dotnet-runtime`). Asserts CommitsBehind remains null because `ParseGitHubUrl` returns null for non-github.com hosts. Verifies GitHub client `DidNotReceive()` CompareCommitsAsync.
+- **New: `GetSubscriptionHealth_NonVmrGitHubRepo_CallsCompareWithCorrectOwnerRepo`**: Uses dotnet/roslyn as source repo. Verifies CompareCommitsAsync called with "dotnet"/"roslyn" (not "dotnet"/"dotnet"). Includes negative assertion that VMR params were NOT used — confirms URL parsing correctly extracts owner/repo from any GitHub URL.
+- **Existing VMR tests unaffected**: The VMR (dotnet/dotnet) tests (`VmrSubscription_WithGitHubClient_ReturnsCommitsBehind`, `VmrSubscription_GitHubClientReturnsNull_FallsBackToBuildsBehind`, `VmrSubscription_UpToDate_CommitsBehindIsNull`, full-build-fetch tests) all continue to pass — VMR is just one case of a GitHub-hosted repo now.
+- **Key insight**: `IsGitHubRepository()` checks `repoUrl.Contains("github.com", OrdinalIgnoreCase)` while `ParseGitHubUrl()` does `uri.Host.Equals("github.com")`. Both reject AzDO URLs. The tests validate both the gate AND the URL parsing together.
+
+📌 Team update (2026-02-20): 3 tests for Issue #6 (widen commit distance to all GitHub repos). Replaced 1 VMR-only test. All 109 tests passing. AzDO repos confirmed excluded; non-VMR GitHub repos now get commit distance.

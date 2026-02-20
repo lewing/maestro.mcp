@@ -211,3 +211,15 @@
   - `src/MaestroTool.Core/MaestroService.cs` — added full build fetch logic (lines 138-168)
   - `src/MaestroTool.Tests/MaestroServiceTests.cs` — added 3 new tests
 
+### Commit Distance for All GitHub Repos (Issue #6) (2025-02-20)
+- **Root cause:** `GetSubscriptionHealthAsync` gated commit distance computation on `IsVmrRepository()`, which only matched `github.com/dotnet/dotnet`. All other GitHub-hosted source repos (e.g., `dotnet/runtime`, `dotnet/sdk`) fell back to BAR build ID deltas, wildly overstating staleness (e.g., 340 builds behind when actual commits behind is 1).
+- **Fix:** Changed gate from `IsVmrRepository(sub.SourceRepository)` to `IsGitHubRepository(sub.SourceRepository)`. The existing `ParseGitHubUrl` method already correctly parses ANY `github.com` URL into owner/repo, so the commit distance logic worked for all GitHub repos without further changes.
+- **New helper:** Added `IsGitHubRepository(string?)` — delegates to `ParseGitHubUrl` for readability. `IsVmrRepository` retained for potential future use.
+- **Display logic verified:** Both `MaestroMcpTools.cs` (line 213) and `Program.cs` (line 337) already handle `CommitsBehind` generically via `.HasValue` — no changes needed.
+- **Version bump:** 0.7.0 → 0.7.1 in `MaestroTool.csproj` and `Program.cs` server info.
+- **Build:** 0 warnings, 0 errors.
+- **Files modified:**
+  - `src/MaestroTool.Core/MaestroService.cs` — changed gate, added `IsGitHubRepository` helper, updated comment
+  - `src/MaestroTool/MaestroTool.csproj` — version bump
+  - `src/MaestroTool/Program.cs` — version string bump
+

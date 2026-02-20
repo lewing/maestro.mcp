@@ -783,7 +783,7 @@ public class MaestroServiceTests : IDisposable
     }
 
     // ================================================================
-    // Subscription Health - GitHub Commit Distance (Issue #4)
+    // Subscription Health - GitHub Commit Distance (Issue #4, #6)
     // ================================================================
 
     [Fact]
@@ -857,20 +857,23 @@ public class MaestroServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task GetSubscriptionHealth_NonVmrSubscription_CommitsBehindIsNull()
+    public async Task GetSubscriptionHealth_GitHubHostedSubscription_ReturnsCommitsBehind()
     {
-        // Arrange: Non-VMR subscription (dotnet/runtime) even with GitHub client available
+        // Arrange: Non-VMR GitHub-hosted subscription (dotnet/runtime) — Issue #6 widens commit distance to all GitHub repos
         var channel = CreateChannel(1, ".NET 10");
-        var lastAppliedBuild = CreateBuild(id: 100, gitHubRepo: "https://github.com/dotnet/runtime", commit: "abc123");
-        var latestBuild = CreateBuild(id: 105, gitHubRepo: "https://github.com/dotnet/runtime", commit: "def456");
+        var lastAppliedBuild = CreateBuild(id: 100, gitHubRepo: "https://github.com/dotnet/runtime", commit: "aaa111");
+        var latestBuild = CreateBuild(id: 105, gitHubRepo: "https://github.com/dotnet/runtime", commit: "bbb222");
         
         var sub = CreateSubscription(
-            source: "https://github.com/dotnet/runtime", // NOT VMR
+            source: "https://github.com/dotnet/runtime", // Non-VMR GitHub repo
             target: "https://github.com/dotnet/aspnetcore",
             channel: channel,
             lastApplied: lastAppliedBuild);
 
         var mockGitHub = Substitute.For<IGitHubApiClient>();
+        mockGitHub.CompareCommitsAsync("dotnet", "runtime", "aaa111", "bbb222", Arg.Any<CancellationToken>())
+            .Returns(new GitHubCompareResult(AheadBy: 12, BehindBy: 0, Status: "ahead", TotalCommits: 12));
+
         var serviceWithGitHub = new MaestroService(_client, _cache, mockGitHub);
 
         _client.ListSubscriptionsAsync(null, "https://github.com/dotnet/aspnetcore", null, true, Arg.Any<CancellationToken>())
@@ -885,10 +888,85 @@ public class MaestroServiceTests : IDisposable
         Assert.Single(results);
         Assert.True(results[0].IsStale);
         Assert.Equal(5, results[0].BuildsBehind);
-        Assert.Null(results[0].CommitsBehind); // Not VMR, so no commit distance
+        Assert.Equal(12, results[0].CommitsBehind); // GitHub-hosted repos now get commit distance
+
+        // Verify GitHub client WAS called with correct owner/repo parsed from the URL
+        await mockGitHub.Received(1).CompareCommitsAsync("dotnet", "runtime", "aaa111", "bbb222", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetSubscriptionHealth_AzDoHostedSubscription_CommitsBehindIsNull()
+    {
+        // Arrange: AzDO-hosted subscription — cannot use GitHub Compare API
+        var channel = CreateChannel(1, ".NET 10");
+        var lastAppliedBuild = CreateBuild(id: 200, gitHubRepo: "https://dev.azure.com/dnceng/internal/_git/dotnet-runtime", commit: "ccc333");
+        var latestBuild = CreateBuild(id: 210, gitHubRepo: "https://dev.azure.com/dnceng/internal/_git/dotnet-runtime", commit: "ddd444");
         
-        // Verify GitHub client was never called
+        var sub = CreateSubscription(
+            source: "https://dev.azure.com/dnceng/internal/_git/dotnet-runtime",
+            target: "https://github.com/dotnet/dotnet",
+            channel: channel,
+            lastApplied: lastAppliedBuild);
+
+        var mockGitHub = Substitute.For<IGitHubApiClient>();
+        var serviceWithGitHub = new MaestroService(_client, _cache, mockGitHub);
+
+        _client.ListSubscriptionsAsync(null, "https://github.com/dotnet/dotnet", null, true, Arg.Any<CancellationToken>())
+            .Returns(new List<Subscription> { sub });
+        _client.GetLatestBuildAsync(sub.SourceRepository, channel.Id, Arg.Any<CancellationToken>())
+            .Returns(latestBuild);
+
+        // Act
+        var results = await serviceWithGitHub.GetSubscriptionHealthAsync("https://github.com/dotnet/dotnet");
+
+        // Assert
+        Assert.Single(results);
+        Assert.True(results[0].IsStale);
+        Assert.Equal(10, results[0].BuildsBehind);
+        Assert.Null(results[0].CommitsBehind); // AzDO repos can't use GitHub compare
+
+        // Verify GitHub client was never called for non-GitHub source repos
         await mockGitHub.DidNotReceive().CompareCommitsAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetSubscriptionHealth_NonVmrGitHubRepo_CallsCompareWithCorrectOwnerRepo()
+    {
+        // Arrange: Non-VMR GitHub repo (dotnet/roslyn) — verify owner/repo parsing and CompareCommitsAsync invocation
+        var channel = CreateChannel(1, ".NET 10");
+        var lastAppliedBuild = CreateBuild(id: 300, gitHubRepo: "https://github.com/dotnet/roslyn", commit: "eee555");
+        var latestBuild = CreateBuild(id: 307, gitHubRepo: "https://github.com/dotnet/roslyn", commit: "fff666");
+        
+        var sub = CreateSubscription(
+            source: "https://github.com/dotnet/roslyn",
+            target: "https://github.com/dotnet/dotnet",
+            channel: channel,
+            lastApplied: lastAppliedBuild);
+
+        var mockGitHub = Substitute.For<IGitHubApiClient>();
+        mockGitHub.CompareCommitsAsync("dotnet", "roslyn", "eee555", "fff666", Arg.Any<CancellationToken>())
+            .Returns(new GitHubCompareResult(AheadBy: 47, BehindBy: 0, Status: "ahead", TotalCommits: 47));
+
+        var serviceWithGitHub = new MaestroService(_client, _cache, mockGitHub);
+
+        _client.ListSubscriptionsAsync(null, "https://github.com/dotnet/dotnet", null, true, Arg.Any<CancellationToken>())
+            .Returns(new List<Subscription> { sub });
+        _client.GetLatestBuildAsync(sub.SourceRepository, channel.Id, Arg.Any<CancellationToken>())
+            .Returns(latestBuild);
+
+        // Act
+        var results = await serviceWithGitHub.GetSubscriptionHealthAsync("https://github.com/dotnet/dotnet");
+
+        // Assert
+        Assert.Single(results);
+        Assert.True(results[0].IsStale);
+        Assert.Equal(7, results[0].BuildsBehind);
+        Assert.Equal(47, results[0].CommitsBehind); // Commit distance computed for non-VMR GitHub repos
+
+        // Verify CompareCommitsAsync called with "dotnet"/"roslyn" — NOT "dotnet"/"dotnet" (VMR)
+        await mockGitHub.Received(1).CompareCommitsAsync("dotnet", "roslyn", "eee555", "fff666", Arg.Any<CancellationToken>());
+        // Ensure it wasn't called with VMR params
+        await mockGitHub.DidNotReceive().CompareCommitsAsync("dotnet", "dotnet", Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]

@@ -134,8 +134,8 @@ public class MaestroService
                 {
                     buildsBehind = latestBuild.Id - lastApplied.Id; // Approximate
 
-                    // For VMR subscriptions, use GitHub compare API for accurate commit distance
-                    if (_gitHubClient != null && IsVmrRepository(sub.SourceRepository))
+                    // For GitHub-hosted source repos, use GitHub compare API for accurate commit distance
+                    if (_gitHubClient != null && IsGitHubRepository(sub.SourceRepository))
                     {
                         var parsedRepo = ParseGitHubUrl(sub.SourceRepository);
                         if (parsedRepo.HasValue)
@@ -372,6 +372,9 @@ public class MaestroService
 
     private static bool IsVmrRepository(string? repoUrl) =>
         repoUrl != null && repoUrl.Contains("github.com/dotnet/dotnet", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsGitHubRepository(string? repoUrl) =>
+        repoUrl != null && ParseGitHubUrl(repoUrl) != null;
 
     private static (string owner, string repo)? ParseGitHubUrl(string url)
     {
