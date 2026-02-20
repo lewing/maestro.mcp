@@ -16,12 +16,14 @@ public class MaestroService
     private readonly IMaestroApiClient _client;
     private readonly CacheService _cache;
     private readonly IGitHubApiClient? _gitHubClient;
+    private readonly IAzDoApiClient? _azDoClient;
 
-    public MaestroService(IMaestroApiClient client, CacheService cache, IGitHubApiClient? gitHubClient = null)
+    public MaestroService(IMaestroApiClient client, CacheService cache, IGitHubApiClient? gitHubClient = null, IAzDoApiClient? azDoClient = null)
     {
         _client = client;
         _cache = cache;
         _gitHubClient = gitHubClient;
+        _azDoClient = azDoClient;
     }
 
     public async Task<List<Subscription>> GetSubscriptionsAsync(
@@ -169,6 +171,34 @@ public class MaestroService
                                 {
                                     commitsBehind = compareResult.AheadBy;
                                 }
+                            }
+                        }
+                    }
+                    else if (_azDoClient != null && IsAzDoRepository(sub.SourceRepository))
+                    {
+                        var parsed = ParseAzDoUrl(sub.SourceRepository);
+                        if (parsed.HasValue)
+                        {
+                            var lastAppliedCommit = lastApplied.Commit;
+                            var latestBuildCommit = latestBuild.Commit;
+
+                            if (string.IsNullOrEmpty(lastAppliedCommit) && lastApplied.Id > 0)
+                            {
+                                var fullLastApplied = await GetBuildAsync(lastApplied.Id, noCache, cancellationToken);
+                                lastAppliedCommit = fullLastApplied?.Commit;
+                            }
+
+                            if (string.IsNullOrEmpty(latestBuildCommit) && latestBuild.Id > 0)
+                            {
+                                var fullLatestBuild = await GetBuildAsync(latestBuild.Id, noCache, cancellationToken);
+                                latestBuildCommit = fullLatestBuild?.Commit;
+                            }
+
+                            if (!string.IsNullOrEmpty(lastAppliedCommit) && !string.IsNullOrEmpty(latestBuildCommit))
+                            {
+                                var (org, project, repo) = parsed.Value;
+                                commitsBehind = await _azDoClient.GetCommitCountAsync(
+                                    org, project, repo, lastAppliedCommit, latestBuildCommit, cancellationToken);
                             }
                         }
                     }
@@ -373,10 +403,13 @@ public class MaestroService
     private static bool IsVmrRepository(string? repoUrl) =>
         repoUrl != null && repoUrl.Contains("github.com/dotnet/dotnet", StringComparison.OrdinalIgnoreCase);
 
-    private static bool IsGitHubRepository(string? repoUrl) =>
+    internal static bool IsGitHubRepository(string? repoUrl) =>
         repoUrl != null && ParseGitHubUrl(repoUrl) != null;
 
-    private static (string owner, string repo)? ParseGitHubUrl(string url)
+    internal static bool IsAzDoRepository(string? repoUrl) =>
+        repoUrl != null && ParseAzDoUrl(repoUrl) != null;
+
+    internal static (string owner, string repo)? ParseGitHubUrl(string url)
     {
         try
         {
@@ -388,6 +421,39 @@ public class MaestroService
             if (segments.Length >= 2)
             {
                 return (segments[0], segments[1]);
+            }
+        }
+        catch
+        {
+            // Invalid URL
+        }
+        return null;
+    }
+
+    internal static (string org, string project, string repo)? ParseAzDoUrl(string url)
+    {
+        try
+        {
+            var uri = new Uri(url.TrimEnd('/').Split('?')[0]);
+            
+            // Modern: https://dev.azure.com/{org}/{project}/_git/{repo}
+            if (uri.Host.Equals("dev.azure.com", StringComparison.OrdinalIgnoreCase))
+            {
+                var segments = uri.AbsolutePath.Trim('/').Split('/');
+                if (segments.Length >= 4 && segments[2].Equals("_git", StringComparison.OrdinalIgnoreCase))
+                {
+                    return (segments[0], segments[1], segments[3]);
+                }
+            }
+            // Legacy: https://{org}.visualstudio.com/{project}/_git/{repo}
+            else if (uri.Host.EndsWith(".visualstudio.com", StringComparison.OrdinalIgnoreCase))
+            {
+                var org = uri.Host.Substring(0, uri.Host.IndexOf('.'));
+                var segments = uri.AbsolutePath.Trim('/').Split('/');
+                if (segments.Length >= 3 && segments[1].Equals("_git", StringComparison.OrdinalIgnoreCase))
+                {
+                    return (org, segments[0], segments[2]);
+                }
             }
         }
         catch

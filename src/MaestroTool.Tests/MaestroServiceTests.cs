@@ -895,9 +895,9 @@ public class MaestroServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task GetSubscriptionHealth_AzDoHostedSubscription_CommitsBehindIsNull()
+    public async Task GetSubscriptionHealth_AzDoSource_NoAzDoClient_CommitsBehindIsNull()
     {
-        // Arrange: AzDO-hosted subscription — cannot use GitHub Compare API
+        // Arrange: AzDO-hosted subscription — no AzDO client injected (backward compat)
         var channel = CreateChannel(1, ".NET 10");
         var lastAppliedBuild = CreateBuild(id: 200, gitHubRepo: "https://dev.azure.com/dnceng/internal/_git/dotnet-runtime", commit: "ccc333");
         var latestBuild = CreateBuild(id: 210, gitHubRepo: "https://dev.azure.com/dnceng/internal/_git/dotnet-runtime", commit: "ddd444");
@@ -927,6 +927,203 @@ public class MaestroServiceTests : IDisposable
 
         // Verify GitHub client was never called for non-GitHub source repos
         await mockGitHub.DidNotReceive().CompareCommitsAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetSubscriptionHealth_AzDoSource_WithAzDoClient_ReturnsCommitsBehind()
+    {
+        // Arrange: AzDO-hosted subscription with IAzDoApiClient injected
+        var channel = CreateChannel(1, ".NET 10");
+        var lastAppliedBuild = CreateBuild(id: 200, gitHubRepo: "https://dev.azure.com/dnceng/internal/_git/dotnet-runtime", commit: "aaa111");
+        var latestBuild = CreateBuild(id: 215, gitHubRepo: "https://dev.azure.com/dnceng/internal/_git/dotnet-runtime", commit: "bbb222");
+        
+        var sub = CreateSubscription(
+            source: "https://dev.azure.com/dnceng/internal/_git/dotnet-runtime",
+            target: "https://github.com/dotnet/dotnet",
+            channel: channel,
+            lastApplied: lastAppliedBuild);
+
+        var mockAzDo = Substitute.For<IAzDoApiClient>();
+        mockAzDo.GetCommitCountAsync("dnceng", "internal", "dotnet-runtime", "aaa111", "bbb222", Arg.Any<CancellationToken>())
+            .Returns(42);
+
+        var serviceWithAzDo = new MaestroService(_client, _cache, null, mockAzDo);
+
+        _client.ListSubscriptionsAsync(null, "https://github.com/dotnet/dotnet", null, true, Arg.Any<CancellationToken>())
+            .Returns(new List<Subscription> { sub });
+        _client.GetLatestBuildAsync(sub.SourceRepository, channel.Id, Arg.Any<CancellationToken>())
+            .Returns(latestBuild);
+
+        // Act
+        var results = await serviceWithAzDo.GetSubscriptionHealthAsync("https://github.com/dotnet/dotnet");
+
+        // Assert
+        Assert.Single(results);
+        Assert.True(results[0].IsStale);
+        Assert.Equal(15, results[0].BuildsBehind);
+        Assert.Equal(42, results[0].CommitsBehind); // AzDO client returned commit count
+
+        await mockAzDo.Received(1).GetCommitCountAsync("dnceng", "internal", "dotnet-runtime", "aaa111", "bbb222", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetSubscriptionHealth_AzDoSource_CommitsBehindCapped()
+    {
+        // Arrange: AzDO client returns 1000 (the cap)
+        var channel = CreateChannel(1, ".NET 10");
+        var lastAppliedBuild = CreateBuild(id: 100, gitHubRepo: "https://dev.azure.com/dnceng/internal/_git/dotnet-runtime", commit: "old111");
+        var latestBuild = CreateBuild(id: 200, gitHubRepo: "https://dev.azure.com/dnceng/internal/_git/dotnet-runtime", commit: "new222");
+        
+        var sub = CreateSubscription(
+            source: "https://dev.azure.com/dnceng/internal/_git/dotnet-runtime",
+            target: "https://github.com/dotnet/dotnet",
+            channel: channel,
+            lastApplied: lastAppliedBuild);
+
+        var mockAzDo = Substitute.For<IAzDoApiClient>();
+        mockAzDo.GetCommitCountAsync("dnceng", "internal", "dotnet-runtime", "old111", "new222", Arg.Any<CancellationToken>())
+            .Returns(1000);
+
+        var serviceWithAzDo = new MaestroService(_client, _cache, null, mockAzDo);
+
+        _client.ListSubscriptionsAsync(null, "https://github.com/dotnet/dotnet", null, true, Arg.Any<CancellationToken>())
+            .Returns(new List<Subscription> { sub });
+        _client.GetLatestBuildAsync(sub.SourceRepository, channel.Id, Arg.Any<CancellationToken>())
+            .Returns(latestBuild);
+
+        // Act
+        var results = await serviceWithAzDo.GetSubscriptionHealthAsync("https://github.com/dotnet/dotnet");
+
+        // Assert
+        Assert.Single(results);
+        Assert.Equal(1000, results[0].CommitsBehind); // Capped at 1000
+    }
+
+    [Fact]
+    public async Task GetSubscriptionHealth_AzDoSource_AzDoClientReturnsNull_CommitsBehindIsNull()
+    {
+        // Arrange: AzDO client injected but returns null (auth failure, API error)
+        var channel = CreateChannel(1, ".NET 10");
+        var lastAppliedBuild = CreateBuild(id: 100, gitHubRepo: "https://dev.azure.com/dnceng/internal/_git/dotnet-runtime", commit: "aaa111");
+        var latestBuild = CreateBuild(id: 110, gitHubRepo: "https://dev.azure.com/dnceng/internal/_git/dotnet-runtime", commit: "bbb222");
+        
+        var sub = CreateSubscription(
+            source: "https://dev.azure.com/dnceng/internal/_git/dotnet-runtime",
+            target: "https://github.com/dotnet/dotnet",
+            channel: channel,
+            lastApplied: lastAppliedBuild);
+
+        var mockAzDo = Substitute.For<IAzDoApiClient>();
+        mockAzDo.GetCommitCountAsync("dnceng", "internal", "dotnet-runtime", "aaa111", "bbb222", Arg.Any<CancellationToken>())
+            .Returns((int?)null);
+
+        var serviceWithAzDo = new MaestroService(_client, _cache, null, mockAzDo);
+
+        _client.ListSubscriptionsAsync(null, "https://github.com/dotnet/dotnet", null, true, Arg.Any<CancellationToken>())
+            .Returns(new List<Subscription> { sub });
+        _client.GetLatestBuildAsync(sub.SourceRepository, channel.Id, Arg.Any<CancellationToken>())
+            .Returns(latestBuild);
+
+        // Act
+        var results = await serviceWithAzDo.GetSubscriptionHealthAsync("https://github.com/dotnet/dotnet");
+
+        // Assert
+        Assert.Single(results);
+        Assert.True(results[0].IsStale);
+        Assert.Equal(10, results[0].BuildsBehind);
+        Assert.Null(results[0].CommitsBehind); // AzDO client failed, so null
+    }
+
+    [Fact]
+    public async Task GetSubscriptionHealth_MixedSubscriptions_UsesCorrectClient()
+    {
+        // Arrange: Mix of GitHub and AzDO source repos
+        var channel = CreateChannel(1, ".NET 10");
+        
+        var gitHubLastApplied = CreateBuild(id: 100, gitHubRepo: "https://github.com/dotnet/runtime", commit: "gh111");
+        var gitHubLatest = CreateBuild(id: 105, gitHubRepo: "https://github.com/dotnet/runtime", commit: "gh222");
+        
+        var azDoLastApplied = CreateBuild(id: 200, gitHubRepo: "https://dev.azure.com/dnceng/internal/_git/dotnet-aspnetcore", commit: "az111");
+        var azDoLatest = CreateBuild(id: 208, gitHubRepo: "https://dev.azure.com/dnceng/internal/_git/dotnet-aspnetcore", commit: "az222");
+        
+        var gitHubSub = CreateSubscription(
+            source: "https://github.com/dotnet/runtime",
+            target: "https://github.com/dotnet/dotnet",
+            channel: channel,
+            lastApplied: gitHubLastApplied);
+            
+        var azDoSub = CreateSubscription(
+            source: "https://dev.azure.com/dnceng/internal/_git/dotnet-aspnetcore",
+            target: "https://github.com/dotnet/dotnet",
+            channel: channel,
+            lastApplied: azDoLastApplied);
+
+        var mockGitHub = Substitute.For<IGitHubApiClient>();
+        mockGitHub.CompareCommitsAsync("dotnet", "runtime", "gh111", "gh222", Arg.Any<CancellationToken>())
+            .Returns(new GitHubCompareResult(AheadBy: 5, BehindBy: 0, Status: "ahead", TotalCommits: 5));
+
+        var mockAzDo = Substitute.For<IAzDoApiClient>();
+        mockAzDo.GetCommitCountAsync("dnceng", "internal", "dotnet-aspnetcore", "az111", "az222", Arg.Any<CancellationToken>())
+            .Returns(8);
+
+        var serviceWithBoth = new MaestroService(_client, _cache, mockGitHub, mockAzDo);
+
+        _client.ListSubscriptionsAsync(null, "https://github.com/dotnet/dotnet", null, true, Arg.Any<CancellationToken>())
+            .Returns(new List<Subscription> { gitHubSub, azDoSub });
+        _client.GetLatestBuildAsync("https://github.com/dotnet/runtime", channel.Id, Arg.Any<CancellationToken>())
+            .Returns(gitHubLatest);
+        _client.GetLatestBuildAsync("https://dev.azure.com/dnceng/internal/_git/dotnet-aspnetcore", channel.Id, Arg.Any<CancellationToken>())
+            .Returns(azDoLatest);
+
+        // Act
+        var results = await serviceWithBoth.GetSubscriptionHealthAsync("https://github.com/dotnet/dotnet");
+
+        // Assert
+        Assert.Equal(2, results.Count);
+        
+        var gitHubResult = results.First(r => r.SourceRepository == "https://github.com/dotnet/runtime");
+        Assert.Equal(5, gitHubResult.CommitsBehind);
+        
+        var azDoResult = results.First(r => r.SourceRepository == "https://dev.azure.com/dnceng/internal/_git/dotnet-aspnetcore");
+        Assert.Equal(8, azDoResult.CommitsBehind);
+
+        // Verify correct client called for each repo type
+        await mockGitHub.Received(1).CompareCommitsAsync("dotnet", "runtime", "gh111", "gh222", Arg.Any<CancellationToken>());
+        await mockAzDo.Received(1).GetCommitCountAsync("dnceng", "internal", "dotnet-aspnetcore", "az111", "az222", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetSubscriptionHealth_AzDoSource_UpToDate_SkipsApiCall()
+    {
+        // Arrange: AzDO subscription that is NOT stale (up to date)
+        var channel = CreateChannel(1, ".NET 10");
+        var currentBuild = CreateBuild(id: 100, gitHubRepo: "https://dev.azure.com/dnceng/internal/_git/dotnet-runtime", commit: "abc123");
+        
+        var sub = CreateSubscription(
+            source: "https://dev.azure.com/dnceng/internal/_git/dotnet-runtime",
+            target: "https://github.com/dotnet/dotnet",
+            channel: channel,
+            lastApplied: currentBuild);
+
+        var mockAzDo = Substitute.For<IAzDoApiClient>();
+        var serviceWithAzDo = new MaestroService(_client, _cache, null, mockAzDo);
+
+        _client.ListSubscriptionsAsync(null, "https://github.com/dotnet/dotnet", null, true, Arg.Any<CancellationToken>())
+            .Returns(new List<Subscription> { sub });
+        _client.GetLatestBuildAsync(sub.SourceRepository, channel.Id, Arg.Any<CancellationToken>())
+            .Returns(currentBuild); // Same build = not stale
+
+        // Act
+        var results = await serviceWithAzDo.GetSubscriptionHealthAsync("https://github.com/dotnet/dotnet");
+
+        // Assert
+        Assert.Single(results);
+        Assert.False(results[0].IsStale);
+        Assert.Equal(0, results[0].BuildsBehind);
+        Assert.Null(results[0].CommitsBehind); // Not computed for up-to-date subscriptions
+
+        // Verify AzDO client was NOT called
+        await mockAzDo.DidNotReceive().GetCommitCountAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]

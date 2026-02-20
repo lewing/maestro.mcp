@@ -14,11 +14,13 @@ var services = new ServiceCollection();
 services.AddSingleton<IMaestroApiClient>(_ =>
     new MaestroApiClient(Environment.GetEnvironmentVariable("MAESTRO_BAR_TOKEN")));
 services.AddSingleton<IGitHubApiClient>(_ => new GitHubApiClient());
+services.AddSingleton<IAzDoApiClient>(_ => new AzDoApiClient());
 services.AddSingleton<CacheService>();
 services.AddSingleton<MaestroService>(sp => new MaestroService(
     sp.GetRequiredService<IMaestroApiClient>(),
     sp.GetRequiredService<CacheService>(),
-    sp.GetRequiredService<IGitHubApiClient>()));
+    sp.GetRequiredService<IGitHubApiClient>(),
+    sp.GetRequiredService<IAzDoApiClient>()));
 
 var enableDestructive = bool.TryParse(
     Environment.GetEnvironmentVariable("MAESTRO_ENABLE_DESTRUCTIVE_ACTIONS"),
@@ -63,11 +65,13 @@ public class Commands
         builder.Services.AddSingleton<IMaestroApiClient>(_ =>
             new MaestroApiClient(Environment.GetEnvironmentVariable("MAESTRO_BAR_TOKEN")));
         builder.Services.AddSingleton<IGitHubApiClient>(_ => new GitHubApiClient());
+        builder.Services.AddSingleton<IAzDoApiClient>(_ => new AzDoApiClient());
         builder.Services.AddSingleton<CacheService>();
         builder.Services.AddSingleton<MaestroService>(sp => new MaestroService(
             sp.GetRequiredService<IMaestroApiClient>(),
             sp.GetRequiredService<CacheService>(),
-            sp.GetRequiredService<IGitHubApiClient>()));
+            sp.GetRequiredService<IGitHubApiClient>(),
+            sp.GetRequiredService<IAzDoApiClient>()));
 
         var enableDestructive = bool.TryParse(
             Environment.GetEnvironmentVariable("MAESTRO_ENABLE_DESTRUCTIVE_ACTIONS"),
