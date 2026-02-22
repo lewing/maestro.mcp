@@ -133,5 +133,39 @@
 - **New: `GetSubscriptionHealth_NonVmrGitHubRepo_CallsCompareWithCorrectOwnerRepo`**: Uses dotnet/roslyn as source repo. Verifies CompareCommitsAsync called with "dotnet"/"roslyn" (not "dotnet"/"dotnet"). Includes negative assertion that VMR params were NOT used — confirms URL parsing correctly extracts owner/repo from any GitHub URL.
 - **Existing VMR tests unaffected**: The VMR (dotnet/dotnet) tests (`VmrSubscription_WithGitHubClient_ReturnsCommitsBehind`, `VmrSubscription_GitHubClientReturnsNull_FallsBackToBuildsBehind`, `VmrSubscription_UpToDate_CommitsBehindIsNull`, full-build-fetch tests) all continue to pass — VMR is just one case of a GitHub-hosted repo now.
 - **Key insight**: `IsGitHubRepository()` checks `repoUrl.Contains("github.com", OrdinalIgnoreCase)` while `ParseGitHubUrl()` does `uri.Host.Equals("github.com")`. Both reject AzDO URLs. The tests validate both the gate AND the URL parsing together.
-
+
 📌 Team update (2026-02-20): 3 tests for Issue #6 (widen commit distance to all GitHub repos). Replaced 1 VMR-only test. All 109 tests passing. AzDO repos confirmed excluded; non-VMR GitHub repos now get commit distance.
+
+### 2026-02-20 — dotnet-replay stats command test coverage
+
+- **25 tests written** for the new `stats` command (issue #13) covering aggregation, grouping, filtering, JSON output, edge cases, and CI threshold validation.
+- **Test pattern: Process execution with temp fixtures** — All dotnet-replay tests run the tool as a subprocess via `dotnet run replay.cs -- <args>`. Tests create temporary JSON fixture files in `testdata/stats/`, invoke the replay tool, and capture stdout. This matches the existing pattern in `SummaryOutputTests.cs` and `EdgeCaseTests.cs`.
+- **Waza JSON format** — Test fixtures mimic Waza evaluation output with minimal fields: `model`, `result` (pass/fail), `duration_ms`, `score`, and `timestamp`. Some tests add `task` field for filter testing.
+- **Test categories implemented**:
+  1. **Basic aggregation (5 tests)**: Multiple file aggregation, JSON validity, required fields (total/passed/failed/pass_rate), average duration calculation, pass rate percentage.
+  2. **Group-by model (3 tests)**: Groups by model name with per-group counts and pass rates, both JSON and plain text output.
+  3. **Filtering (3 tests)**: `--filter-model`, `--filter-task`, and combined filters to subset files before aggregation.
+  4. **Edge cases (7 tests)**: Empty directory, single file, mixed formats (Waza + Copilot JSONL), malformed JSON (graceful skip), missing model field, no matching files.
+  5. **CI threshold (3 tests)**: `--fail-threshold` parameter with exit codes — below threshold exits 1, above exits 0, exact match exits 0.
+- **Helper factory methods**: `CreateWazaFiles()`, `CreateWazaFilesWithTask()`, `CreateWazaFilesWithMissingFields()` generate minimal test fixtures. Each file gets unique GUID-based name to avoid collisions. `RunStats()` and `RunStatsWithExitCode()` wrap process execution.
+- **Compilation dependency**: Tests won't compile until Naomi implements the stats command in replay.cs. Required: `ExpandGlob()`, `ExtractStats()`, `OutputStatsReport()`, `FileStats` type, and command-line arg parsing for `stats`, `--group-by`, `--filter-model`, `--filter-task`, `--fail-threshold`.
+- **Test data cleanup**: Test fixtures are created in `testdata/stats/` subdirectory. No explicit cleanup in tests — xUnit runs tests in parallel so each test uses unique file names. Directory persists after test run (acceptable for local dev; CI can clean entire test directory).
+- **Key pattern difference from maestro.mcp tests**: dotnet-replay tests are **integration tests** (subprocess invocation), not unit tests. No mocking needed. Tests verify end-to-end behavior including arg parsing, file I/O, and output formatting.
+
+📌 Team update (2026-02-20): 25 stats command tests written for issue #13. Tests blocked on Naomi's stats implementation. Pattern follows existing process-based integration tests.
+
+### 2026-02-22 — Issue #8 regression tests for anonymous fallback URI fix
+
+- **3 new tests written** (123 total, all passing) in new `MaestroApiClientTests.cs` for Issue #8: `PcsApiFactory.GetAnonymous()` crash with `UriFormatException: empty URI`.
+- **These are integration tests** — they construct a real `MaestroApiClient` (hitting the real `PcsApiFactory` from NuGet), unlike all other tests which mock `IMaestroApiClient`.
+- **Environment-adaptive assertions**: On machines with cached darc auth records (`~/.darc/.auth-record-<appId>`), the cascade resolves at `AuthLevel.EntraId`; on machines without, it falls to `AuthLevel.Anonymous`. Tests accept either outcome — the key assertion is that the constructor **does not throw** `UriFormatException`.
+- **Test 1 (`Constructor_NoBarToken_DoesNotThrowUriFormatException`)**: Clears `MAESTRO_BAR_TOKEN` env var, constructs client with `barToken: null`. Verifies no crash and auth level is either EntraId or Anonymous.
+- **Test 2 (`Constructor_EmptyBarToken_FallsBackWithoutCrashing`)**: Same as above but with `barToken: ""`. Verifies empty string is treated as "no token" (same as null).
+- **Test 3 (`AuthLevel_HasExpectedValues`)**: Enum value sanity check — Pat=0, EntraId=1, Anonymous=2.
+- **Key finding**: Naomi's fix adds `DefaultBaseUri = "https://maestro.dot.net"` constant and passes it to all three `PcsApiFactory` overloads (`GetAuthenticated(uri, token, ...)`, `GetAuthenticated(uri, null!, ...)`, `GetAnonymous(uri)`). The no-arg `GetAnonymous()` overload was the crash — it constructs `ProductConstructionServiceApiOptions` without a URI.
+- **Limitation**: Cannot force the anonymous path on machines with darc auth cached. The auth cascade has no seam to skip tier 2 (EntraId). A true anonymous-only test would require either a test environment without darc, or refactoring `MaestroApiClient` to accept an `IApiFactory` abstraction. Filed as known gap.
+
+📌 Team update (2026-02-22): 3 regression tests for Issue #8 anonymous fallback URI fix. All 123 tests passing. Integration-style tests exercise real PcsApiFactory.
+
+📌 Team update (2026-02-22): Always pass DefaultBaseUri to PcsApiFactory — decided by Naomi
+

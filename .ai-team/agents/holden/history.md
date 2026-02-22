@@ -2,6 +2,26 @@
 
 ## Learnings
 
+### dotnet-replay Architecture & Feature Scoping (2026-02-20)
+
+- **Single-file .NET 10 app design**: dotnet-replay is intentionally monolithic (~3300 lines in replay.cs) for easy distribution via `dnx`. Code organization relies on function nesting, helper utilities reuse, and pluggable format detection. This design choice constrains how new features are added — they must be thin wrappers around core parsing/rendering functions, not separate modules.
+
+- **Pluggable format detection and parsing**: The tool detects and parses three transcript formats independently: (1) Copilot CLI JSONL events, (2) Claude Code JSONL, (3) Waza evaluation JSON. Each format has a dedicated parser (`ParseJsonlData`, `ParseWazaData`, `ParseClaudeData`) that normalizes to common data structures (`JsonlData`, `WazaData` records). This architecture is **ideal for adding new features** — diff, grep, and stats all leverage the same parsers and can reuse turn extraction utilities.
+
+- **Rich turn-level metadata**: All transcript formats expose full turn data with timestamps, roles, content, and tool calls encoded in `JsonElement` structures. The existing code already navigates JSON structure introspection well (witness the summary mode extracting validation data from Waza transcripts, tool call counts from Copilot events). This makes feature implementation straightforward — no need to extend the data model.
+
+- **Existing mode infrastructure is extensible**: The codebase already has multiple "modes" (interactive pager, stream, JSON, summary). New features (diff, grep, stats) should follow the same pattern: a command dispatcher at the top level checks for the mode flag (e.g., `if (cliArgs[0] == "diff")`), then routes to a feature-specific function. Each feature can inherit the existing `--json` and color/formatting utilities.
+
+- **Test structure is mature**: Three test files (SummaryOutputTests, JsonOutputTests, EdgeCaseTests) cover existing modes comprehensively with xUnit. The pattern is to load sample transcripts (Copilot, Waza, malformed edge cases), invoke the parser, and validate output. Adding diff/grep/stats tests should follow the same structure: use existing sample data, add new test cases for alignment accuracy or search correctness.
+
+- **Turn alignment for diff is feasible but algorithmic**: Issue #11's turn alignment algorithm is the core complexity. Strategy: for evaluation transcripts where both models solve the same task, exact timestamp matching works most of the time. Fuzzy matching (Levenshtein distance > 80%) handles cases where prompts differ slightly. Turn count will be similar for models on same task, so O(n²) or O(n log n) alignment is acceptable for transcript sizes <1000 turns.
+
+- **Glob expansion and cross-platform file discovery**: Issues #12 and #13 require handling shell globs (e.g., `results/*.json`). Best approach: use `Directory.GetFiles` with pattern matching rather than relying on shell expansion — ensures consistent behavior across platforms. This utility should be shared between grep and stats.
+
+- **Output format consistency**: All features should support `--json` for pipeline consumption and human-readable table/tree format for interactive use. The existing Spectre.Console markup system is excellent for this — it already powers colored output, tables (witness SummaryOutputTests validating table layout), and aligned text.
+
+- **Recommended implementation order**: #13 (stats, 2–3 days) → #12 (grep, 3–4 days) → #11 (diff, 5–7 days). This order maximizes value delivery (stats immediately useful for Arena), reuses glob/extraction utilities across features, and delays the most complex algorithm (turn alignment) until last.
+
 ### Issue #1 Triage: Codeflow Feature Requests (2026-02-19)
 
 - Triaged 9 feature requests from Issue #1 covering codeflow analysis workflows. **All 9 are architecturally feasible** with current PCS client surface. No fundamental blockers.
@@ -49,3 +69,6 @@
 - **Pattern observed**: The separation between "what goes to stderr" (auth method) vs "what stays in scope" (token value) is a good security pattern worth maintaining across the codebase.
 
 📌 Threat model written to `.ai-team/decisions/inbox/holden-threat-model-github-auth.md`. 1 P1 fix (subprocess timeout), 2 P2 backlog items, 6 accepted.
+
+📌 Team update (2026-02-22): Always pass DefaultBaseUri to PcsApiFactory — decided by Naomi
+

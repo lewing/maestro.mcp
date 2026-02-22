@@ -2,6 +2,15 @@
 
 ## Learnings
 
+### PcsApiFactory base URI fix (2026-02-22)
+- **Root cause of #8**: `PcsApiFactory.GetAnonymous()` (parameterless) internally creates `ProductConstructionServiceApiOptions()` with no base URI, causing `UriFormatException: Invalid URI: The URI is empty.`
+- **PcsApiFactory has 4 overloads** — two without base URI (crash-prone) and two with `string baseUri`:
+  - `GetAnonymous()` and `GetAuthenticated(accessToken, managedIdentityId, disableInteractiveAuth)` — **do not use these**
+  - `GetAnonymous(string baseUri)` and `GetAuthenticated(string baseUri, accessToken, managedIdentityId, disableInteractiveAuth)` — **always use these**
+- **Fix pattern**: Added `private const string DefaultBaseUri = "https://maestro.dot.net"` and passed it to all three PcsApiFactory call sites (BAR token auth, Entra ID auth, anonymous fallback).
+- **All three auth paths were vulnerable**, not just anonymous. The parameterless `GetAuthenticated` could also fail if the internal credential resolver didn't inject a URI.
+- **Version**: 0.8.3 → 0.8.4
+
 ### SQLite Cache Migration (2026-02-18)
 - **Migrated CacheService from in-memory ConcurrentDictionary to SQLite** for cross-process cache sharing. Multiple `mstro` instances (VS Code, Copilot CLI, etc.) now share cached PCS API data via `~/.mstro/cache.db`.
 - **WAL (Write-Ahead Logging) mode** enables concurrent reads across processes. `PRAGMA busy_timeout=5000` handles write contention.
@@ -222,4 +231,40 @@
   - `src/MaestroTool.Core/MaestroService.cs` — changed gate, added `IsGitHubRepository` helper, updated comment
   - `src/MaestroTool/MaestroTool.csproj` — version bump
   - `src/MaestroTool/Program.cs` — version string bump
+
+### dotnet-replay stats command (Issue #13 lewing/dotnet-replay) (2025-02-20)
+- **Implemented `replay stats` command** to aggregate statistics across multiple transcript files (JSONL and Waza JSON formats).
+- **Key features:**
+  - Supports glob patterns for file input (`results/*.json`)
+  - Aggregates: total sessions, pass/fail counts, average duration, tool call counts
+  - Group by model or task (`--group-by model`, `--group-by task`)
+  - Filter by model or task name (`--filter-model`, `--filter-task`)
+  - CI integration with pass rate threshold (`--fail-threshold N` exits with code 1 if pass rate < N%)
+  - JSON output mode (`--json`) for scripting
+- **Implementation approach:**
+  - Added stats command dispatch early in CLI arg parsing (line ~100)
+  - Created `ExpandGlob()` helper for Windows-style path glob expansion
+  - Created `ExtractStats()` helper that:
+    - Auto-detects format (Copilot JSONL, Claude JSONL, Waza JSON)
+    - Reuses existing parse functions (`ParseJsonlData`, `ParseClaudeData`, `ParseWazaData`)
+    - Extracts model name from agent string for Copilot/Claude transcripts
+    - Returns unified `FileStats` record with all relevant metrics
+  - Created `OutputStatsReport()` for both console and JSON output formats
+  - Added `FileStats` record to hold per-file statistics
+- **Architecture patterns learned:**
+  - dotnet-replay is a **single-file .NET 10 app** with file-scoped statements (no namespace/class wrapper)
+  - All local functions must be defined at top level
+  - Records go at the bottom of the file after all code
+  - Existing summary extraction logic (`OutputSummary`, `OutputWazaSummary`) provided reference for stat calculation
+  - Format detection logic (line 770-816) cleanly separates JSONL vs Waza JSON handling
+- **Build verification:**
+  - `dotnet build replay.cs` succeeded with 1 pre-existing warning (unreachable code at line 2384)
+  - All 35 existing tests pass (30.8s runtime)
+  - Fixed minor test compilation error in `StatsOutputTests.cs` (anonymous array type inference)
+- **Files modified:**
+  - `D:\lewing\dotnet-replay\replay.cs` — added stats command, helpers, FileStats record, updated help text
+  - `D:\lewing\dotnet-replay\tests\StatsOutputTests.cs` — fixed array type inference
+
+
+📌 Team update (2026-02-22): Always pass DefaultBaseUri to PcsApiFactory — decided by Naomi
 

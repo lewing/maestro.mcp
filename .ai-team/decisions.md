@@ -2166,3 +2166,118 @@ Added 3 comprehensive tests to verify the fix:
 **What:** Implemented `IGitHubApiClient` with 3-tier auth cascade (GITHUB_TOKEN env var → gh CLI → anonymous) to provide accurate commit distances for VMR subscriptions via GitHub's Compare API. Updated `maestro_subscription_health` tool to show "33 commits behind" for VMR subs instead of wildly inaccurate BAR build ID arithmetic ("~566 builds behind").
 **Why:** BAR build IDs are globally sequential across all repos (not per-repo), causing 17x error for VMR subscriptions. GitHub Compare API provides ground truth commit distance. Graceful degradation ensures feature works in all environments (anonymous 60 req/hr sufficient for typical use). Optional dependency injection pattern allows MaestroService to work with or without GitHub client.
 
+
+---
+
+### 2026-02-20: AzDO API client auth and interface design
+**By:** Holden (with input from Naomi, Amos)
+
+**What:**
+1. **Separate IAzDoApiClient interface** with Task<int?> GetCommitCountAsync(org, project, repo, baseSha, headSha, ct) — parallel to IGitHubApiClient, not unified.
+2. **Auth cascade**: AZDO_TOKEN env var → z account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 → anonymous. Token acquisition extracted into IAzDoTokenProvider for testability.
+3. **URL parsing**: ParseAzDoUrl returns (org, project, repo)?, handles both dev.azure.com/{org}/{project}/_git/{repo} and {org}.visualstudio.com/{project}/_git/{repo} legacy format.
+4. **Commit cap**: $top=1000, no pagination. Array length = commit count, capped at 1000.
+5. **Integration**: IAzDoApiClient? as optional 4th param to MaestroService constructor. Sibling lse if branch in GetSubscriptionHealthAsync.
+6. **Degradation**: Return 
+ull on any failure, log actionable stderr message. Existing null-handling in SubscriptionHealthResult covers fallback.
+
+**Why:**
+- Separate interface avoids lowest-common-denominator abstraction between APIs with different capabilities (GitHub compare is richer than AzDO commit listing).
+- Auth cascade mirrors the proven GitHubApiClient pattern. IAzDoTokenProvider extraction is the key addition — it isolates subprocess calls for testability and prevents CI flake from missing z CLI.
+- Optional constructor param guarantees backward compatibility: all existing tests and 3-arg call sites continue to work unchanged.
+- 1000-cap eliminates pagination complexity for an informational metric. If you're 1000+ commits behind, the exact number doesn't matter.
+- int? return type aligns directly with the existing CommitsBehind field on SubscriptionHealthResult, requiring no model changes.
+
+---
+
+### 2026-02-20: dotnet-replay Scoping Analysis (Issues #11, #12, #13)
+**By:** Holden (Lead Architect)
+**Status:** Complete — three issues scoped, ready for roadmap planning
+
+**What:** Architectural feasibility assessment for three dotnet-replay feature requests:
+- **Issue #11 (diff mode):** Medium effort (5–7 days) — Compare two eval runs side-by-side with turn alignment and tool call diffs
+- **Issue #12 (grep/search):** Small-Medium effort (3–4 days) — Search multiple transcripts with pattern matching and context
+- **Issue #13 (batch stats):** Small effort (2–3 days) — Aggregate stats across transcript batches with grouping and filtering
+
+**Why:**
+All three features are **architecturally feasible** and align well with dotnet-replay's existing codebase design (single-file .NET 10 app with pluggable format detection, modular rendering pipeline, comprehensive test coverage).
+
+**Recommended build order:** #13 → #12 → #11 (ascending complexity; #13 establishes glob utilities, #12 builds on them, #11 is fully standalone but most algorithmic)
+
+**Key architectural notes:**
+- Single-file design maintained — each feature is command dispatch + private functions reusing existing helpers
+- New test files in separate xUnit project (follow existing SummaryOutputTests.cs, EdgeCaseTests.cs pattern)
+- Shared utilities: glob expansion, turn extraction, format detection, JSON output (already exist or minimal additions)
+- No breaking changes to existing functionality or API surface
+
+---
+
+### 2026-02-20: dotnet-replay Stats Command Test Strategy
+**By:** Amos
+**Status:** Proposed
+
+**What:** Integration test strategy for the stats command (issue #13):
+- **Process-based integration tests**, not unit tests (dotnet-replay is single-file app with no public API surface)
+- **Programmatic JSON fixture generation** in 	estdata/stats/ with unique GUID-based filenames (no shared state, safe for parallel xUnit execution)
+- **25 tests** covering: basic aggregation (5), grouping (3), filtering (3), JSON output (covered in aggregation), edge cases (7), CI thresholds (3)
+- **Exit code testing** via RunStatsWithExitCode() helper for --fail-threshold CI integration
+- **No test cleanup** — GUID-based filenames prevent collisions; CI can clean 	estdata/ between runs
+
+**Why:**
+- Integration testing pattern matches existing dotnet-replay tests (SummaryOutputTests.cs, EdgeCaseTests.cs)
+- Programmatic fixtures are more maintainable than ~25 static JSON files
+- Graceful degradation on malformed input: skip unparseable files with warnings, process valid files
+- Unique GUID filenames safe for parallel test execution in xUnit
+
+**Implementation blockers:**
+The test file (StatsOutputTests.cs) is written but won't compile until Naomi implements:
+1. ExpandGlob() helper for glob pattern expansion (e.g., esults/*.json)
+2. ExtractStats() to parse Waza JSON and extract model/result/duration
+3. OutputStatsReport() to format and display aggregated stats
+4. FileStats class/record to hold per-file statistics
+5. Command-line arg parsing for: stats, --group-by, --filter-model, --filter-task, --fail-threshold
+
+---
+
+### 2026-02-22: Always pass base URI to PcsApiFactory
+**By:** Naomi (Backend Developer)
+**Date:** 2026-02-22
+**Status:** Implemented in v0.8.4
+**Issue:** #8
+
+**Context:** PcsApiFactory.GetAnonymous() (parameterless) crashes with UriFormatException because ProductConstructionServiceApiOptions is constructed without a base URI.
+
+**Decision:** Always use the aseUri overloads of PcsApiFactory:
+- PcsApiFactory.GetAnonymous(DefaultBaseUri) instead of PcsApiFactory.GetAnonymous()
+- PcsApiFactory.GetAuthenticated(DefaultBaseUri, ...) instead of PcsApiFactory.GetAuthenticated(...)
+
+The default base URI is https://maestro.dot.net, defined as a private const in MaestroApiClient.
+
+**Rationale:** The parameterless overloads rely on ProductConstructionServiceApiOptions having a default URI baked in, but it doesn't — it expects the caller to provide one. All three auth paths (BAR token, Entra ID, anonymous) must explicitly pass the URI.
+
+**Impact:**
+- MaestroApiClient.cs: 3 call sites updated
+- No API surface change — IMaestroApiClient is unchanged
+- Fixes the crash that prevented the MCP server from starting without auth credentials
+
+---
+
+### 2025-02-20: Extend commit distance to all GitHub-hosted repos
+**By:** Naomi (Backend Dev)
+**Date:** 2025-02-20
+**Status:** Implemented
+**Issue:** #6
+
+**Context:** The subscription_health tool computed accurate commit distance (via GitHub Compare API) only for VMR subscriptions (github.com/dotnet/dotnet). All other GitHub-hosted source repos fell back to BAR build ID arithmetic, which uses globally sequential IDs across all repos and wildly overstates staleness.
+
+**Decision:** Changed the gate in GetSubscriptionHealthAsync from IsVmrRepository() to a new IsGitHubRepository() helper.
+- IsGitHubRepository delegates to the existing ParseGitHubUrl which already handles any github.com URL
+- Kept IsVmrRepository — it may be useful for VMR-specific logic in the future
+- No changes needed to display logic — both MCP tools and CLI already handle CommitsBehind generically
+
+**Impact:** All GitHub-hosted source repos now get accurate "N commits behind" instead of inflated "~N builds behind". Non-GitHub repos (e.g., Azure DevOps) continue using BAR ID arithmetic as before.
+
+**Files changed:**
+- src/MaestroTool.Core/MaestroService.cs — gate change, new helper, comment update
+- src/MaestroTool/MaestroTool.csproj — version 0.7.0 → 0.7.1
+- src/MaestroTool/Program.cs — version string 0.7.0 → 0.7.1
