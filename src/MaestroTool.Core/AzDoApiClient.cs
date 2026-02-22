@@ -7,7 +7,10 @@ namespace MaestroTool.Core;
 
 public class AzDoApiClient : IAzDoApiClient
 {
-    private static readonly HttpClient _httpClient = CreateHttpClient();
+    // Lazy init defers subprocess auth (az account get-access-token) to first API call,
+    // preventing TypeInitializationException from crashing the server at startup.
+    private static readonly Lazy<HttpClient> _lazyHttpClient = new(CreateHttpClient);
+    private static HttpClient _httpClient => _lazyHttpClient.Value;
     private static readonly Regex _shaPattern = new(@"^[0-9a-fA-F]{7,40}$", RegexOptions.Compiled);
 
     private static HttpClient CreateHttpClient()

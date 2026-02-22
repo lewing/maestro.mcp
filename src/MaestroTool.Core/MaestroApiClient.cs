@@ -32,13 +32,21 @@ public class MaestroApiClient : IMaestroApiClient
         // 1. Explicit BAR token from env var
         if (!string.IsNullOrEmpty(barToken))
         {
-            Console.Error.WriteLine("[maestro-mcp] Auth: using MAESTRO_BAR_TOKEN");
-            return (PcsApiFactory.GetAuthenticated(barToken, managedIdentityId: null, disableInteractiveAuth: true), AuthLevel.Pat);
+            try
+            {
+                Console.Error.WriteLine("[maestro-mcp] Auth: using MAESTRO_BAR_TOKEN");
+                return (PcsApiFactory.GetAuthenticated(barToken, managedIdentityId: null, disableInteractiveAuth: true), AuthLevel.Pat);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[maestro-mcp] BAR token auth failed ({ex.GetType().Name}: {ex.Message}), falling back");
+            }
         }
 
-        // 2. Entra ID via InteractiveBrowserCredential with MSAL cache.
-        //    Only attempt this if darc has previously cached an auth record — otherwise
-        //    the credential would try to open a browser, which blocks an MCP server.
+        // 2. Entra ID with MSAL cache (silent only — no browser popups).
+        //    Only attempt this if darc has previously cached an auth record.
+        //    disableInteractiveAuth: true prevents the credential from trying to open
+        //    a browser, which would block/crash an MCP server process.
         var authRecordPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             ".darc",
@@ -48,12 +56,10 @@ public class MaestroApiClient : IMaestroApiClient
         {
             try
             {
-                // disableInteractiveAuth: false → AppCredentialResolver uses InteractiveBrowserCredential
-                // with the cached auth record + MSAL token cache, so no browser popup is needed.
                 var api = PcsApiFactory.GetAuthenticated(
                     accessToken: null!,
                     managedIdentityId: null,
-                    disableInteractiveAuth: false);
+                    disableInteractiveAuth: true);
 
                 Console.Error.WriteLine("[maestro-mcp] Auth: using Entra ID (cached darc credentials)");
                 return (api, AuthLevel.EntraId);
@@ -68,9 +74,20 @@ public class MaestroApiClient : IMaestroApiClient
             Console.Error.WriteLine("[maestro-mcp] No cached darc auth record found; run 'darc authenticate' for authenticated access");
         }
 
-        // 3. Anonymous fallback
-        Console.Error.WriteLine("[maestro-mcp] Auth: anonymous (read-only access)");
-        return (PcsApiFactory.GetAnonymous(), AuthLevel.Anonymous);
+        // 3. Anonymous fallback — wrap in try/catch so the server always starts
+        try
+        {
+            Console.Error.WriteLine("[maestro-mcp] Auth: anonymous (read-only access)");
+            return (PcsApiFactory.GetAnonymous(), AuthLevel.Anonymous);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[maestro-mcp] ⚠️ Anonymous API creation failed ({ex.GetType().Name}: {ex.Message})");
+            Console.Error.WriteLine("[maestro-mcp] ⚠️ Server starting — tools will return errors until API is available");
+            // Re-throw as last resort — we genuinely can't function without any API client
+            throw new InvalidOperationException(
+                $"Failed to initialize Maestro API client. Ensure .NET SDK is properly installed. Error: {ex.Message}", ex);
+        }
     }
 
     public Task<List<Subscription>> ListSubscriptionsAsync(
