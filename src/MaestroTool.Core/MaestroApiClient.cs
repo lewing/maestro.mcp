@@ -26,6 +26,7 @@ public class MaestroApiClient : IMaestroApiClient
     }
 
     private const string MaestroAppId = "54c17f3d-7325-4eca-9db7-f090bfc765a8";
+    private const string DefaultBaseUri = "https://maestro.dot.net";
 
     private static (IProductConstructionServiceApi Api, AuthLevel Level) CreateApi(string? barToken)
     {
@@ -35,7 +36,7 @@ public class MaestroApiClient : IMaestroApiClient
             try
             {
                 Console.Error.WriteLine("[maestro-mcp] Auth: using MAESTRO_BAR_TOKEN");
-                return (PcsApiFactory.GetAuthenticated(barToken, managedIdentityId: null, disableInteractiveAuth: true), AuthLevel.Pat);
+                return (PcsApiFactory.GetAuthenticated(DefaultBaseUri, barToken, managedIdentityId: null, disableInteractiveAuth: true), AuthLevel.Pat);
             }
             catch (Exception ex)
             {
@@ -57,6 +58,7 @@ public class MaestroApiClient : IMaestroApiClient
             try
             {
                 var api = PcsApiFactory.GetAuthenticated(
+                    DefaultBaseUri,
                     accessToken: null!,
                     managedIdentityId: null,
                     disableInteractiveAuth: true);
@@ -78,7 +80,7 @@ public class MaestroApiClient : IMaestroApiClient
         try
         {
             Console.Error.WriteLine("[maestro-mcp] Auth: anonymous (read-only access)");
-            return (PcsApiFactory.GetAnonymous(), AuthLevel.Anonymous);
+            return (PcsApiFactory.GetAnonymous(DefaultBaseUri), AuthLevel.Anonymous);
         }
         catch (Exception ex)
         {
