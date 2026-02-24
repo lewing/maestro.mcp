@@ -155,17 +155,32 @@ The server registers **14 MCP tools** for querying and triggering Maestro/BAR op
 | `maestro_subscription` | Get a single subscription by ID | `subscriptionId`: UUID; `noCache`: bypass cache |
 | `maestro_latest_build` | Get the latest build from a channel | `channelId`: channel ID; `sourceRepository`: source repo URL; `noCache`: bypass cache |
 | `maestro_build` | Get a build by ID | `buildId`: build ID; `noCache`: bypass cache |
+| `maestro_builds` | List builds, optionally filtered by repository, channel, commit, or build number | `repository`, `channelName`, `commit`, `buildNumber`, `count` (all optional); `noCache`: bypass cache |
 | `maestro_channels` | List all channels | `noCache`: bypass cache |
+| `maestro_channel` | Get a specific channel by ID | `channelId`: channel ID; `noCache`: bypass cache |
 | `maestro_default_channels` | Get default channels for a repository | `repository`: source repository URL; `noCache`: bypass cache |
 | `maestro_subscription_health` | Get health status of a subscription (awaiting build, failed, etc.) | `subscriptionId`: UUID; `noCache`: bypass cache |
 | `maestro_build_freshness` | Check how long since a source repository branch was built | `sourceRepository`: source repo URL; `branch`: branch name; `noCache`: bypass cache |
 | `maestro_trigger_subscription` | Trigger a subscription to process a specific build | `subscriptionId`: UUID; `buildId`: BAR build ID |
 | `maestro_trigger_daily_update` | Trigger all daily-update subscriptions | None |
 | `maestro_codeflow_prs` | List active codeflow (backflow) tracked PRs, optionally filtered by channel | `channelName` (optional); `noCache`: bypass cache |
-| `maestro_tracked_pr` | Get the tracked PR for a specific subscription by ID | `subscriptionId`: UUID; `noCache`: bypass cache |
+| `maestro_codeflow_pr` | Get the tracked PR for a specific subscription by ID | `subscriptionId`: UUID; `noCache`: bypass cache |
 | `maestro_backflow_status` | Get backflow status for a VMR build | `vmrBuildId`: build ID; `noCache`: bypass cache |
 | `maestro_subscription_history` | Get update history for a subscription | `subscriptionId`: UUID; `noCache`: bypass cache |
+| `maestro_build_graph` | Get the full dependency graph for a build | `buildId`: BAR build ID; `noCache`: bypass cache |
+| `maestro_flow_graph` | Get the dependency flow graph for a channel | `channelId`: channel ID; `days`: lookback (default 7); `includeArcade`, `includeBuildTimes`, `includeDisabledSubscriptions` (optional bools); `noCache`: bypass cache |
 | `maestro_clear_cache` | Clear the shared SQLite cache | None |
+
+### Naming Convention
+
+Tools follow a consistent naming pattern:
+
+```
+maestro_{resource}               # get one by ID (e.g. maestro_build)
+maestro_{resources}              # list (e.g. maestro_builds)
+maestro_{resource}_{aspect}      # detail query (e.g. maestro_subscription_health)
+maestro_{verb}_{resource}        # action (e.g. maestro_trigger_subscription)
+```
 
 ### Cache Bypass
 
@@ -175,7 +190,7 @@ The `maestro_clear_cache` tool provides a full cache reset — useful when doing
 
 ### Codeflow Tracking
 
-The `maestro_codeflow_prs`, `maestro_tracked_pr`, `maestro_backflow_status`, and `maestro_subscription_history` tools expose the same PCS PullRequest APIs used by the VMR codeflow tools (see [dotnet/dotnet#4952](https://github.com/dotnet/dotnet/issues/4952)). These tools enable visibility into codeflow PRs, backflow status, and subscription update history without requiring direct VMR access.
+The `maestro_codeflow_prs`, `maestro_codeflow_pr`, `maestro_backflow_status`, and `maestro_subscription_history` tools expose the same PCS PullRequest APIs used by the VMR codeflow tools (see [dotnet/dotnet#4952](https://github.com/dotnet/dotnet/issues/4952)). These tools enable visibility into codeflow PRs, backflow status, and subscription update history without requiring direct VMR access.
 
 ### Response Timestamps
 

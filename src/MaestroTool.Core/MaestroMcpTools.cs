@@ -147,6 +147,57 @@ public class MaestroMcpTools
         return Timestamp(noCache) + FormatBuild(build);
     }
 
+    [McpServerTool(Name = "maestro_builds")]
+    [Description("List builds, optionally filtered by repository, channel, commit, or build number. Returns build ID, repository, commit, date, and channels.")]
+    public async Task<string> ListBuilds(
+        [Description("Filter by repository URL (e.g. https://github.com/dotnet/runtime)")] string? repository = null,
+        [Description("Filter by channel name (e.g. '.NET 11.0.1xx SDK')")] string? channelName = null,
+        [Description("Filter by commit SHA")] string? commit = null,
+        [Description("Filter by build number")] string? buildNumber = null,
+        [Description("Maximum number of builds to return (default: 20)")] int? count = null,
+        [Description("Bypass cache and fetch fresh data")] bool noCache = false,
+        CancellationToken cancellationToken = default)
+    {
+        int? channelId = null;
+        if (!string.IsNullOrEmpty(channelName))
+        {
+            var ch = await _service.GetChannelByNameAsync(channelName, noCache, cancellationToken);
+            if (ch == null)
+                return $"Channel '{channelName}' not found. Use maestro_channels to list available channels.";
+            channelId = ch.Id;
+        }
+
+        var builds = await _service.ListBuildsAsync(repository, channelId, commit, buildNumber, count, noCache, cancellationToken);
+
+        if (builds.Count == 0)
+            return "No builds found matching the specified filters.";
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"Found {builds.Count} build(s):\n");
+
+        foreach (var build in builds)
+        {
+            sb.AppendLine(FormatBuild(build));
+            sb.AppendLine("---");
+        }
+
+        return Timestamp(noCache) + sb.ToString();
+    }
+
+    [McpServerTool(Name = "maestro_channel")]
+    [Description("Get a specific channel by its ID. Returns channel name, classification, and associated repositories.")]
+    public async Task<string> GetChannel(
+        [Description("The channel ID (integer)")] int channelId,
+        [Description("Bypass cache and fetch fresh data")] bool noCache = false,
+        CancellationToken cancellationToken = default)
+    {
+        var channel = await _service.GetChannelAsync(channelId, noCache, cancellationToken);
+        var sb = new StringBuilder();
+        sb.AppendLine($"**{channel.Name}** (ID: {channel.Id})");
+        sb.AppendLine($"Classification: {channel.Classification}");
+        return Timestamp(noCache) + sb.ToString();
+    }
+
     [McpServerTool(Name = "maestro_channels")]
     [Description("List all Maestro channels. Returns channel names and IDs.")]
     public async Task<string> GetChannels(
@@ -396,7 +447,7 @@ public class MaestroMcpTools
         return Timestamp(noCache) + sb.ToString();
     }
 
-    [McpServerTool(Name = "maestro_tracked_pr")]
+    [McpServerTool(Name = "maestro_codeflow_pr")]
     [Description("Get the tracked pull request for a specific Maestro subscription. Returns PR URL, channel, target branch, and update details. Returns a message if no PR is currently tracked.")]
     public async Task<string> GetTrackedPr(
         [Description("The subscription GUID")] string subscriptionId,

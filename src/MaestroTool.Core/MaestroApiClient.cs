@@ -129,6 +129,36 @@ public class MaestroApiClient : IMaestroApiClient
         return _api.Builds.GetBuildAsync(id, cancellationToken);
     }
 
+    public async Task<List<Build>> ListBuildsAsync(
+        string? repository = null,
+        int? channelId = null,
+        string? commit = null,
+        string? buildNumber = null,
+        int? count = null,
+        CancellationToken cancellationToken = default)
+    {
+        var page = await _api.Builds.ListBuildsPageAsync(
+            repository: repository,
+            channelId: channelId,
+            commit: commit,
+            buildNumber: buildNumber,
+            azdoAccount: null,
+            azdoBuildId: null,
+            loadCollections: false,
+            notBefore: null,
+            notAfter: null,
+            page: 1,
+            perPage: count ?? 20,
+            azdoProject: null,
+            cancellationToken: cancellationToken);
+        return page.Values.ToList();
+    }
+
+    public Task<Channel> GetChannelAsync(int id, CancellationToken cancellationToken = default)
+    {
+        return _api.Channels.GetChannelAsync(id, cancellationToken);
+    }
+
     public Task<List<Channel>> ListChannelsAsync(CancellationToken cancellationToken = default)
     {
         return _api.Channels.ListChannelsAsync(cancellationToken: cancellationToken);

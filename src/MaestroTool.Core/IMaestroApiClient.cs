@@ -38,6 +38,16 @@ public interface IMaestroApiClient
 
     Task<Build> GetBuildAsync(int id, CancellationToken cancellationToken = default);
 
+    Task<List<Build>> ListBuildsAsync(
+        string? repository = null,
+        int? channelId = null,
+        string? commit = null,
+        string? buildNumber = null,
+        int? count = null,
+        CancellationToken cancellationToken = default);
+
+    Task<Channel> GetChannelAsync(int id, CancellationToken cancellationToken = default);
+
     Task<List<Channel>> ListChannelsAsync(CancellationToken cancellationToken = default);
 
     Task<List<DefaultChannel>> ListDefaultChannelsAsync(

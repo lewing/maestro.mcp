@@ -2,6 +2,18 @@
 
 ## Learnings
 
+### Naming Convention Review for Issue #9 (2026-02-20)
+
+- **Current naming follows an implicit pattern**: Actions use verb prefixes (`trigger_`, `clear_`), queries use bare nouns. This distinction is actually a GOOD convention — it disambiguates read-only operations from state-changing actions. The proposed `maestro_get_*` prefixes would be redundant.
+
+- **Real asymmetry: missing list/get pairs**: 2 of 4 resource types lack symmetrical tools. `maestro_channels` exists but no `maestro_channel` (get by ID). `maestro_build` exists but no `maestro_builds` (list with filters). This is a genuine gap — agents expect list/get pairs for core resources.
+
+- **"Codeflow" vs "tracked" terminology split**: `maestro_codeflow_prs` (list) and `maestro_tracked_pr` (get) use different nouns for the same concept. Technically both are accurate ("codeflow PR" = the GitHub PR, "tracked PR" = Maestro's subscription record), but the inconsistency adds cognitive load. Low-priority fix via aliasing, not renaming.
+
+- **Breaking changes aren't worth it**: The current 17 tool names are learnable and predictable once the pattern is understood. Renaming for marginal clarity gains would disrupt consuming skills for 6-12 months. Better to fill gaps (`maestro_builds`, `maestro_channel`) and document the pattern.
+
+- **Recommendation**: Add 2 missing symmetrical tools (P1), document the naming convention in code/README (P2), consider aliasing `maestro_codeflow_pr` in future (P3 backlog). Reject breaking renames. Decision recorded in `.ai-team/decisions/inbox/holden-naming-conventions.md`.
+
 ### dotnet-replay Architecture & Feature Scoping (2026-02-20)
 
 - **Single-file .NET 10 app design**: dotnet-replay is intentionally monolithic (~3300 lines in replay.cs) for easy distribution via `dnx`. Code organization relies on function nesting, helper utilities reuse, and pluggable format detection. This design choice constrains how new features are added — they must be thin wrappers around core parsing/rendering functions, not separate modules.

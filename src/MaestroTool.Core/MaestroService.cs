@@ -87,6 +87,31 @@ public class MaestroService
             MediumTtl);
     }
 
+    public Task<Channel> GetChannelAsync(int id, bool noCache = false, CancellationToken cancellationToken = default)
+    {
+        var key = $"channel:{id}";
+        if (noCache) _cache.Invalidate(key);
+        return _cache.GetOrAddAsync(key,
+            () => _client.GetChannelAsync(id, cancellationToken),
+            MediumTtl);
+    }
+
+    public Task<List<Build>> ListBuildsAsync(
+        string? repository = null,
+        int? channelId = null,
+        string? commit = null,
+        string? buildNumber = null,
+        int? count = null,
+        bool noCache = false,
+        CancellationToken cancellationToken = default)
+    {
+        var key = $"builds:{repository}:{channelId}:{commit}:{buildNumber}:{count}";
+        if (noCache) _cache.Invalidate(key);
+        return _cache.GetOrAddAsync(key,
+            () => _client.ListBuildsAsync(repository, channelId, commit, buildNumber, count, cancellationToken),
+            ShortTtl);
+    }
+
     public async Task<Channel?> GetChannelByNameAsync(string name, bool noCache = false, CancellationToken cancellationToken = default)
     {
         var channels = await GetChannelsAsync(noCache, cancellationToken);

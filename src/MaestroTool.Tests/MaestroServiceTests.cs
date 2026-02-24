@@ -2212,4 +2212,77 @@ public class MaestroServiceTests : IDisposable
         Assert.Equal("John", commit.Author);
         Assert.Equal(DateTimeOffset.Parse("2025-02-24T10:00:00Z"), commit.Date);
     }
+
+    // ================================================================
+    // ListBuilds and GetChannel (Issue #9 — naming consistency)
+    // ================================================================
+
+    [Fact]
+    public async Task ListBuilds_ReturnsBuildsFromClient()
+    {
+        var builds = new List<Build>
+        {
+            CreateBuild(id: 1),
+            CreateBuild(id: 2),
+            CreateBuild(id: 3)
+        };
+        _client.ListBuildsAsync("https://github.com/dotnet/runtime", null, null, null, 20, Arg.Any<CancellationToken>())
+            .Returns(builds);
+
+        var result = await _service.ListBuildsAsync(repository: "https://github.com/dotnet/runtime", count: 20);
+
+        Assert.Equal(3, result.Count);
+    }
+
+    [Fact]
+    public async Task ListBuilds_CachesResults()
+    {
+        var builds = new List<Build> { CreateBuild(id: 1) };
+        _client.ListBuildsAsync("https://github.com/dotnet/runtime", null, null, null, 20, Arg.Any<CancellationToken>())
+            .Returns(builds);
+
+        await _service.ListBuildsAsync(repository: "https://github.com/dotnet/runtime", count: 20);
+        await _service.ListBuildsAsync(repository: "https://github.com/dotnet/runtime", count: 20);
+
+        await _client.Received(1).ListBuildsAsync("https://github.com/dotnet/runtime", null, null, null, 20, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ListBuilds_NoCacheBypassesCache()
+    {
+        var builds = new List<Build> { CreateBuild(id: 1) };
+        _client.ListBuildsAsync("https://github.com/dotnet/runtime", null, null, null, 20, Arg.Any<CancellationToken>())
+            .Returns(builds);
+
+        await _service.ListBuildsAsync(repository: "https://github.com/dotnet/runtime", count: 20);
+        await _service.ListBuildsAsync(repository: "https://github.com/dotnet/runtime", count: 20, noCache: true);
+
+        await _client.Received(2).ListBuildsAsync("https://github.com/dotnet/runtime", null, null, null, 20, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetChannel_ReturnsChannelFromClient()
+    {
+        var channel = CreateChannel(42, "Test Channel");
+        _client.GetChannelAsync(42, Arg.Any<CancellationToken>())
+            .Returns(channel);
+
+        var result = await _service.GetChannelAsync(42);
+
+        Assert.Equal(42, result.Id);
+        Assert.Equal("Test Channel", result.Name);
+    }
+
+    [Fact]
+    public async Task GetChannel_CachesResults()
+    {
+        var channel = CreateChannel(42, "Test Channel");
+        _client.GetChannelAsync(42, Arg.Any<CancellationToken>())
+            .Returns(channel);
+
+        await _service.GetChannelAsync(42);
+        await _service.GetChannelAsync(42);
+
+        await _client.Received(1).GetChannelAsync(42, Arg.Any<CancellationToken>());
+    }
 }
