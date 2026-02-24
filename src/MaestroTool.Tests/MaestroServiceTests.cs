@@ -2012,4 +2012,204 @@ public class MaestroServiceTests : IDisposable
         await _client.Received(1).GetFlowGraphAsync(7, 1, true, true, false, null, Arg.Any<CancellationToken>());
         await _client.Received(1).GetFlowGraphAsync(7, 2, true, true, false, null, Arg.Any<CancellationToken>());
     }
+
+    // =============================================================
+    // Commit Details Enrichment Tests
+    // =============================================================
+
+    [Fact]
+    public async Task GetSubscriptionHealth_WithCommitDetails_GitHubReturnsCommits()
+    {
+        var channel = CreateChannel(1, ".NET 10");
+        var lastAppliedBuild = CreateBuild(id: 100, gitHubRepo: "https://github.com/dotnet/dotnet", commit: "abc1234");
+        var latestBuild = CreateBuild(id: 105, gitHubRepo: "https://github.com/dotnet/dotnet", commit: "def5678");
+        
+        var sub = CreateSubscription(
+            source: "https://github.com/dotnet/dotnet",
+            target: "https://github.com/dotnet/aspnetcore",
+            channel: channel,
+            lastApplied: lastAppliedBuild);
+
+        var commits = new List<CommitInfo>
+        {
+            new("abc1234", "Fix JSON source gen", "John", DateTimeOffset.Parse("2025-02-24T10:00:00Z")),
+            new("def5678", "Update deps", "bot", DateTimeOffset.Parse("2025-02-24T09:00:00Z")),
+        };
+
+        var mockGitHub = Substitute.For<IGitHubApiClient>();
+        mockGitHub.CompareCommitsAsync("dotnet", "dotnet", "abc1234", "def5678", Arg.Any<CancellationToken>())
+            .Returns(new GitHubCompareResult(AheadBy: 2, BehindBy: 0, Status: "ahead", TotalCommits: 2, Commits: commits));
+
+        var serviceWithGitHub = new MaestroService(_client, _cache, mockGitHub);
+
+        _client.ListSubscriptionsAsync(null, "https://github.com/dotnet/aspnetcore", null, true, Arg.Any<CancellationToken>())
+            .Returns(new List<Subscription> { sub });
+        _client.GetLatestBuildAsync(sub.SourceRepository, channel.Id, Arg.Any<CancellationToken>())
+            .Returns(latestBuild);
+
+        var results = await serviceWithGitHub.GetSubscriptionHealthAsync("https://github.com/dotnet/aspnetcore", includeCommitDetails: true);
+
+        Assert.Single(results);
+        Assert.Equal(2, results[0].CommitsBehind);
+        Assert.NotNull(results[0].RecentCommits);
+        Assert.Equal(2, results[0].RecentCommits!.Count);
+        Assert.Equal("abc1234", results[0].RecentCommits![0].Sha);
+        Assert.Equal("Fix JSON source gen", results[0].RecentCommits![0].Message);
+    }
+
+    [Fact]
+    public async Task GetSubscriptionHealth_WithoutCommitDetails_RecentCommitsIsNull()
+    {
+        var channel = CreateChannel(1, ".NET 10");
+        var lastAppliedBuild = CreateBuild(id: 100, gitHubRepo: "https://github.com/dotnet/dotnet", commit: "abc1234");
+        var latestBuild = CreateBuild(id: 105, gitHubRepo: "https://github.com/dotnet/dotnet", commit: "def5678");
+        
+        var sub = CreateSubscription(
+            source: "https://github.com/dotnet/dotnet",
+            target: "https://github.com/dotnet/aspnetcore",
+            channel: channel,
+            lastApplied: lastAppliedBuild);
+
+        var commits = new List<CommitInfo>
+        {
+            new("abc1234", "Fix JSON source gen", "John", DateTimeOffset.Parse("2025-02-24T10:00:00Z")),
+        };
+
+        var mockGitHub = Substitute.For<IGitHubApiClient>();
+        mockGitHub.CompareCommitsAsync("dotnet", "dotnet", "abc1234", "def5678", Arg.Any<CancellationToken>())
+            .Returns(new GitHubCompareResult(AheadBy: 1, BehindBy: 0, Status: "ahead", TotalCommits: 1, Commits: commits));
+
+        var serviceWithGitHub = new MaestroService(_client, _cache, mockGitHub);
+
+        _client.ListSubscriptionsAsync(null, "https://github.com/dotnet/aspnetcore", null, true, Arg.Any<CancellationToken>())
+            .Returns(new List<Subscription> { sub });
+        _client.GetLatestBuildAsync(sub.SourceRepository, channel.Id, Arg.Any<CancellationToken>())
+            .Returns(latestBuild);
+
+        // Default: includeCommitDetails = false
+        var results = await serviceWithGitHub.GetSubscriptionHealthAsync("https://github.com/dotnet/aspnetcore");
+
+        Assert.Single(results);
+        Assert.Equal(1, results[0].CommitsBehind);
+        Assert.Null(results[0].RecentCommits); // Not requested
+    }
+
+    [Fact]
+    public async Task GetSubscriptionHealth_WithCommitDetails_AzDoReturnsCommits()
+    {
+        var channel = CreateChannel(1, ".NET 10");
+        var lastAppliedBuild = CreateBuild(id: 100, commit: "abc1234");
+        lastAppliedBuild.GitHubRepository = null;
+        lastAppliedBuild.AzureDevOpsRepository = "https://dev.azure.com/dnceng/internal/_git/dotnet-runtime";
+        var latestBuild = CreateBuild(id: 108, commit: "def5678");
+        latestBuild.GitHubRepository = null;
+        latestBuild.AzureDevOpsRepository = "https://dev.azure.com/dnceng/internal/_git/dotnet-runtime";
+
+        var sub = CreateSubscription(
+            source: "https://dev.azure.com/dnceng/internal/_git/dotnet-runtime",
+            target: "https://github.com/dotnet/dotnet",
+            channel: channel,
+            lastApplied: lastAppliedBuild);
+
+        var azDoCommits = new List<CommitInfo>
+        {
+            new("abc1234", "Fix GC regression", "Alex", DateTimeOffset.Parse("2025-02-24T10:00:00Z")),
+            new("def5678", "Bump TFM", "Bot", DateTimeOffset.Parse("2025-02-24T09:00:00Z")),
+            new("ghi9012", "ARM64 intrinsics", "Jane", DateTimeOffset.Parse("2025-02-23T10:00:00Z")),
+        };
+
+        var mockAzDo = Substitute.For<IAzDoApiClient>();
+        mockAzDo.GetCommitDetailsAsync("dnceng", "internal", "dotnet-runtime", "abc1234", "def5678", Arg.Any<CancellationToken>())
+            .Returns(azDoCommits);
+
+        var serviceWithAzDo = new MaestroService(_client, _cache, azDoClient: mockAzDo);
+
+        _client.ListSubscriptionsAsync(null, "https://github.com/dotnet/dotnet", null, true, Arg.Any<CancellationToken>())
+            .Returns(new List<Subscription> { sub });
+        _client.GetLatestBuildAsync(sub.SourceRepository, channel.Id, Arg.Any<CancellationToken>())
+            .Returns(latestBuild);
+
+        var results = await serviceWithAzDo.GetSubscriptionHealthAsync("https://github.com/dotnet/dotnet", includeCommitDetails: true);
+
+        Assert.Single(results);
+        Assert.Equal(3, results[0].CommitsBehind); // Count derived from details list
+        Assert.NotNull(results[0].RecentCommits);
+        Assert.Equal(3, results[0].RecentCommits!.Count);
+        Assert.Equal("Fix GC regression", results[0].RecentCommits![0].Message);
+    }
+
+    [Fact]
+    public async Task GetSubscriptionHealth_AzDo_WithoutDetails_UsesCountOnly()
+    {
+        var channel = CreateChannel(1, ".NET 10");
+        var lastAppliedBuild = CreateBuild(id: 100, commit: "abc1234");
+        lastAppliedBuild.GitHubRepository = null;
+        lastAppliedBuild.AzureDevOpsRepository = "https://dev.azure.com/dnceng/internal/_git/dotnet-runtime";
+        var latestBuild = CreateBuild(id: 108, commit: "def5678");
+        latestBuild.GitHubRepository = null;
+        latestBuild.AzureDevOpsRepository = "https://dev.azure.com/dnceng/internal/_git/dotnet-runtime";
+
+        var sub = CreateSubscription(
+            source: "https://dev.azure.com/dnceng/internal/_git/dotnet-runtime",
+            target: "https://github.com/dotnet/dotnet",
+            channel: channel,
+            lastApplied: lastAppliedBuild);
+
+        var mockAzDo = Substitute.For<IAzDoApiClient>();
+        mockAzDo.GetCommitCountAsync("dnceng", "internal", "dotnet-runtime", "abc1234", "def5678", Arg.Any<CancellationToken>())
+            .Returns(42);
+
+        var serviceWithAzDo = new MaestroService(_client, _cache, azDoClient: mockAzDo);
+
+        _client.ListSubscriptionsAsync(null, "https://github.com/dotnet/dotnet", null, true, Arg.Any<CancellationToken>())
+            .Returns(new List<Subscription> { sub });
+        _client.GetLatestBuildAsync(sub.SourceRepository, channel.Id, Arg.Any<CancellationToken>())
+            .Returns(latestBuild);
+
+        // Default: no commit details
+        var results = await serviceWithAzDo.GetSubscriptionHealthAsync("https://github.com/dotnet/dotnet");
+
+        Assert.Single(results);
+        Assert.Equal(42, results[0].CommitsBehind);
+        Assert.Null(results[0].RecentCommits); // Not requested, used count-only path
+        await mockAzDo.DidNotReceive().GetCommitDetailsAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public void SubscriptionHealthResult_RecentCommits_DefaultsToNull()
+    {
+        var result = new SubscriptionHealthResult(
+            SubscriptionId: Guid.NewGuid(),
+            SourceRepository: "https://github.com/dotnet/runtime",
+            TargetRepository: "https://github.com/dotnet/dotnet",
+            TargetBranch: "main",
+            ChannelName: ".NET 10",
+            IsStale: true,
+            BuildsBehind: 5,
+            LastAppliedBuildId: 100,
+            LastAppliedDate: DateTimeOffset.UtcNow,
+            LatestBuildId: 105,
+            LatestBuildDate: DateTimeOffset.UtcNow,
+            CommitsBehind: 10
+        );
+
+        Assert.Null(result.RecentCommits); // Defaults to null when not specified
+    }
+
+    [Fact]
+    public void GitHubCompareResult_Commits_DefaultsToNull()
+    {
+        var result = new GitHubCompareResult(AheadBy: 5, BehindBy: 0, Status: "ahead", TotalCommits: 5);
+        Assert.Null(result.Commits); // Backward compatible default
+    }
+
+    [Fact]
+    public void CommitInfo_RecordProperties()
+    {
+        var commit = new CommitInfo("abc1234", "Fix bug", "John", DateTimeOffset.Parse("2025-02-24T10:00:00Z"));
+        Assert.Equal("abc1234", commit.Sha);
+        Assert.Equal("Fix bug", commit.Message);
+        Assert.Equal("John", commit.Author);
+        Assert.Equal(DateTimeOffset.Parse("2025-02-24T10:00:00Z"), commit.Date);
+    }
 }

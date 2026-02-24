@@ -113,6 +113,7 @@ public class MaestroService
     public async Task<List<SubscriptionHealthResult>> GetSubscriptionHealthAsync(
         string targetRepository,
         bool noCache = false,
+        bool includeCommitDetails = false,
         CancellationToken cancellationToken = default)
     {
         var subscriptions = await GetSubscriptionsAsync(targetRepository: targetRepository, noCache: noCache, cancellationToken: cancellationToken);
@@ -131,6 +132,7 @@ public class MaestroService
                 var isStale = latestBuild != null && lastApplied != null && latestBuild.Id != lastApplied.Id;
                 var buildsBehind = 0;
                 int? commitsBehind = null;
+                IReadOnlyList<CommitInfo>? recentCommits = null;
 
                 if (isStale && latestBuild != null && lastApplied != null)
                 {
@@ -170,6 +172,8 @@ public class MaestroService
                                 if (compareResult != null)
                                 {
                                     commitsBehind = compareResult.AheadBy;
+                                    if (includeCommitDetails)
+                                        recentCommits = compareResult.Commits;
                                 }
                             }
                         }
@@ -197,8 +201,17 @@ public class MaestroService
                             if (!string.IsNullOrEmpty(lastAppliedCommit) && !string.IsNullOrEmpty(latestBuildCommit))
                             {
                                 var (org, project, repo) = parsed.Value;
-                                commitsBehind = await _azDoClient.GetCommitCountAsync(
-                                    org, project, repo, lastAppliedCommit, latestBuildCommit, cancellationToken);
+                                if (includeCommitDetails)
+                                {
+                                    recentCommits = await _azDoClient.GetCommitDetailsAsync(
+                                        org, project, repo, lastAppliedCommit, latestBuildCommit, cancellationToken);
+                                    commitsBehind = recentCommits?.Count;
+                                }
+                                else
+                                {
+                                    commitsBehind = await _azDoClient.GetCommitCountAsync(
+                                        org, project, repo, lastAppliedCommit, latestBuildCommit, cancellationToken);
+                                }
                             }
                         }
                     }
@@ -216,7 +229,8 @@ public class MaestroService
                     LastAppliedDate: lastApplied?.DateProduced,
                     LatestBuildId: latestBuild?.Id,
                     LatestBuildDate: latestBuild?.DateProduced,
-                    CommitsBehind: commitsBehind
+                    CommitsBehind: commitsBehind,
+                    RecentCommits: recentCommits
                 ));
             }
             catch (Exception ex)
@@ -477,7 +491,8 @@ public record SubscriptionHealthResult(
     int? LatestBuildId,
     DateTimeOffset? LatestBuildDate,
     string? Error = null,
-    int? CommitsBehind = null
+    int? CommitsBehind = null,
+    IReadOnlyList<CommitInfo>? RecentCommits = null
 );
 
 public record BuildFreshnessResult(

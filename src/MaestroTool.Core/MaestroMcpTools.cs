@@ -194,9 +194,10 @@ public class MaestroMcpTools
     public async Task<string> GetSubscriptionHealth(
         [Description("Target repository URL (e.g. https://github.com/dotnet/dotnet)")] string targetRepository,
         [Description("Bypass cache and fetch fresh data")] bool noCache = false,
+        [Description("Include recent commit details (SHA, message, author, date) for stale subscriptions")] bool includeCommitDetails = false,
         CancellationToken cancellationToken = default)
     {
-        var results = await _service.GetSubscriptionHealthAsync(targetRepository, noCache, cancellationToken);
+        var results = await _service.GetSubscriptionHealthAsync(targetRepository, noCache, includeCommitDetails, cancellationToken);
 
         if (results.Count == 0)
             return $"No active subscriptions found targeting {targetRepository}.";
@@ -228,6 +229,18 @@ public class MaestroMcpTools
                 sb.AppendLine($"  Last Applied: #{r.LastAppliedBuildId} ({r.LastAppliedDate:u})");
             if (r.LatestBuildId != null)
                 sb.AppendLine($"  Latest Available: #{r.LatestBuildId} ({r.LatestBuildDate:u})");
+
+            if (r.RecentCommits is { Count: > 0 })
+            {
+                var totalCommits = r.CommitsBehind ?? r.RecentCommits.Count;
+                var showing = Math.Min(r.RecentCommits.Count, 10);
+                sb.AppendLine($"  Recent commits (showing {showing} of {totalCommits}):");
+                foreach (var c in r.RecentCommits.Take(10))
+                {
+                    sb.AppendLine($"    `{c.Sha}` {c.Message} ({c.Author}, {c.Date:yyyy-MM-dd})");
+                }
+            }
+
             sb.AppendLine();
         }
 

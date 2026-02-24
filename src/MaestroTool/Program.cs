@@ -314,9 +314,10 @@ public class Commands
     public async Task SubscriptionHealth(
         [Argument] string targetRepository,
         bool json = false,
-        bool noCache = false)
+        bool noCache = false,
+        bool includeCommitDetails = false)
     {
-        var results = await _service.GetSubscriptionHealthAsync(targetRepository, noCache);
+        var results = await _service.GetSubscriptionHealthAsync(targetRepository, noCache, includeCommitDetails);
 
         if (json)
         {
@@ -356,6 +357,18 @@ public class Commands
                     Console.WriteLine($"  Last Applied: #{r.LastAppliedBuildId} ({r.LastAppliedDate:u})");
                 if (r.LatestBuildId != null)
                     Console.WriteLine($"  Latest Available: #{r.LatestBuildId} ({r.LatestBuildDate:u})");
+
+                if (r.RecentCommits is { Count: > 0 })
+                {
+                    var totalCommits = r.CommitsBehind ?? r.RecentCommits.Count;
+                    var showing = Math.Min(r.RecentCommits.Count, 10);
+                    Console.WriteLine($"  Recent commits (showing {showing} of {totalCommits}):");
+                    foreach (var c in r.RecentCommits.Take(10))
+                    {
+                        Console.WriteLine($"    {c.Sha} {c.Message} ({c.Author}, {c.Date:yyyy-MM-dd})");
+                    }
+                }
+
                 Console.WriteLine();
             }
         }

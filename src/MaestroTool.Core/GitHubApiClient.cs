@@ -104,7 +104,8 @@ public class GitHubApiClient : IGitHubApiClient
                 AheadBy: root.GetProperty("ahead_by").GetInt32(),
                 BehindBy: root.GetProperty("behind_by").GetInt32(),
                 Status: root.GetProperty("status").GetString() ?? "unknown",
-                TotalCommits: root.GetProperty("total_commits").GetInt32()
+                TotalCommits: root.GetProperty("total_commits").GetInt32(),
+                Commits: ParseCommits(root)
             );
         }
         catch (Exception ex)
@@ -112,5 +113,29 @@ public class GitHubApiClient : IGitHubApiClient
             Console.Error.WriteLine($"[maestro-mcp] GitHub compare API exception: {ex.Message}");
             return null;
         }
+    }
+
+    private static IReadOnlyList<CommitInfo>? ParseCommits(JsonElement root)
+    {
+        if (!root.TryGetProperty("commits", out var commitsArray) || commitsArray.ValueKind != JsonValueKind.Array)
+            return null;
+
+        var commits = new List<CommitInfo>();
+        foreach (var c in commitsArray.EnumerateArray())
+        {
+            if (commits.Count >= 25) break;
+
+            var sha = c.GetProperty("sha").GetString() ?? "";
+            var commit = c.GetProperty("commit");
+            var fullMessage = commit.GetProperty("message").GetString() ?? "";
+            var message = fullMessage.Split('\n', 2)[0]; // first line only
+            var author = commit.GetProperty("author").GetProperty("name").GetString() ?? "unknown";
+            var dateStr = commit.GetProperty("author").GetProperty("date").GetString();
+            var date = DateTimeOffset.TryParse(dateStr, out var d) ? d : DateTimeOffset.MinValue;
+
+            commits.Add(new CommitInfo(sha.Length > 7 ? sha[..7] : sha, message, author, date));
+        }
+
+        return commits;
     }
 }

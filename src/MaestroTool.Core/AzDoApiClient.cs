@@ -99,10 +99,7 @@ public class AzDoApiClient : IAzDoApiClient
         if (!_shaPattern.IsMatch(baseSha) || !_shaPattern.IsMatch(headSha))
             return null;
 
-        var url = $"https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo}/commits?" +
-                  $"searchCriteria.itemVersion.version={headSha}&searchCriteria.itemVersion.versionType=commit&" +
-                  $"searchCriteria.compareVersion.version={baseSha}&searchCriteria.compareVersion.versionType=commit&" +
-                  $"searchCriteria.$top=1000&api-version=7.1";
+        var url = BuildCommitsUrl(org, project, repo, baseSha, headSha);
         
         try
         {
@@ -131,4 +128,60 @@ public class AzDoApiClient : IAzDoApiClient
             return null;
         }
     }
+
+    public async Task<IReadOnlyList<CommitInfo>?> GetCommitDetailsAsync(string org, string project, string repo,
+        string baseSha, string headSha, CancellationToken ct = default)
+    {
+        if (!_shaPattern.IsMatch(baseSha) || !_shaPattern.IsMatch(headSha))
+            return null;
+
+        var url = BuildCommitsUrl(org, project, repo, baseSha, headSha);
+
+        try
+        {
+            var response = await _httpClient.GetAsync(url, ct);
+            if (!response.IsSuccessStatusCode) return null;
+
+            var json = await response.Content.ReadAsStringAsync(ct);
+            var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            if (!root.TryGetProperty("value", out var value) || value.ValueKind != JsonValueKind.Array)
+                return null;
+
+            var commits = new List<CommitInfo>();
+            foreach (var c in value.EnumerateArray())
+            {
+                if (commits.Count >= 25) break;
+
+                var sha = c.GetProperty("commitId").GetString() ?? "";
+                var fullMessage = c.GetProperty("comment").GetString() ?? "";
+                var message = fullMessage.Split('\n', 2)[0];
+                var authorName = "unknown";
+                var date = DateTimeOffset.MinValue;
+
+                if (c.TryGetProperty("author", out var author))
+                {
+                    authorName = author.GetProperty("name").GetString() ?? "unknown";
+                    var dateStr = author.GetProperty("date").GetString();
+                    if (DateTimeOffset.TryParse(dateStr, out var d)) date = d;
+                }
+
+                commits.Add(new CommitInfo(sha.Length > 7 ? sha[..7] : sha, message, authorName, date));
+            }
+
+            return commits;
+        }
+        catch (Exception)
+        {
+            Console.Error.WriteLine($"[maestro-mcp] AzDO commits API failed for {org}/{project}/{repo}");
+            return null;
+        }
+    }
+
+    private static string BuildCommitsUrl(string org, string project, string repo, string baseSha, string headSha) =>
+        $"https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo}/commits?" +
+        $"searchCriteria.itemVersion.version={headSha}&searchCriteria.itemVersion.versionType=commit&" +
+        $"searchCriteria.compareVersion.version={baseSha}&searchCriteria.compareVersion.versionType=commit&" +
+        $"searchCriteria.$top=1000&api-version=7.1";
 }
