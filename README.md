@@ -200,6 +200,22 @@ All read tool responses include a retrieval timestamp header indicating when the
 _Retrieved: 2026-02-18 15:30:45Z (cached)_
 ```
 
+## Data Enrichment
+
+Beyond the raw Maestro/PCS APIs, this MCP server provides several value-added enhancements to improve visibility and decision-making:
+
+**Subscription Health Scoring** — Compares each subscription's last-applied build against the latest available build on its channel, calculating exact `BuildsBehind` count. For GitHub-hosted source repos, the GitHub Compare API computes precise commit distance. For Azure DevOps repos, AzDo commit APIs provide detailed commit histories with author, message, and date.
+
+**Build Freshness via aka.ms** — Resolves aka.ms short links to their final blob storage destination, then inspects the `Last-Modified` HTTP header to determine when a channel was last updated — without downloading artifacts. Includes SSRF protection against internal network redirects.
+
+**Channel Name Resolution** — All tools accepting `channelName` perform automatic case-insensitive lookup to resolve human-friendly names (e.g., ".NET 10.0.1xx SDK") to numeric channel IDs. Callers never need to look up IDs manually.
+
+**Backflow Status Aggregation** — For a given VMR build, aggregates per-branch backflow status including commit distance and subscription details across all target repositories.
+
+**Flow Graph Visualization** — Formats the dependency flow graph with build times, longest-path critical path indicators, and channel routing information for end-to-end dependency analysis.
+
+**Human-Readable Formatting** — All tool responses use emoji status indicators (✅ Current, ⚠️ STALE, ⏳ Pending, 🔒 Auth Required), structured tables, and visual markers for quick scanning. Commit details include SHA, message, author, and date when available.
+
 ## Architecture
 
 The project is split into three layers:
