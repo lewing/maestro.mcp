@@ -50,3 +50,12 @@ The README is production-ready and suitable for both internal developers and ext
   1. Architecture section tree diagram (line 192)
   2. Testing section description (lines 269-272) with note about 73 original + 3 regression tests
 - **Version check**: Confirmed v0.2.2 is already set in MaestroTool.csproj (line 11) — no version update needed in README as no version was mentioned
+
+### Release v0.12.0 (2026-03-01)
+- **Tag**: `v0.12.0` pushed to `origin/master`
+- **Version bumped** from 0.11.0 → 0.12.0 in 3 files: `MaestroTool.csproj`, `MaestroTool/Program.cs`, `MaestroTool.Mcp/Program.cs`
+- **Included changes** (since last released tag v0.10.0):
+  1. MCP SDK 1.0.0 upgrade (from 0.8.0-preview.1)
+  2. CacheService `SetUnixFileMode` crash fix on Linux/WSL (`/tmp` chmod)
+  3. ReadOnly/Destructive tool annotations on all 19 MCP tools
+- **All 135 tests passed** before release
