@@ -85,7 +85,7 @@ public class Commands
         builder.Services
             .AddMcpServer(options =>
             {
-                options.ServerInfo = new() { Name = "maestro", Version = "0.7.1" };
+                options.ServerInfo = new() { Name = "maestro", Version = "0.11.0" };
             })
             .WithStdioServerTransport()
             .WithToolsFromAssembly(typeof(MaestroMcpTools).Assembly);

@@ -8,7 +8,7 @@
     <PackAsTool>true</PackAsTool>
     <PackageType>McpServer</PackageType>
     <ToolCommandName>mstro</ToolCommandName>
-    <Version>0.10.0</Version>
+    <Version>0.11.0</Version>
   </PropertyGroup>
 
   <PropertyGroup Label="Package Metadata">
@@ -30,7 +30,7 @@
     <PackageReference Include="ConsoleAppFramework" Version="5.*" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.3" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.0" />
-    <PackageReference Include="ModelContextProtocol" Version="0.8.0-preview.1" />
+    <PackageReference Include="ModelContextProtocol" Version="1.0.0" />
     <ProjectReference Include="..\MaestroTool.Core\MaestroTool.Core.csproj" />
   </ItemGroup>
 

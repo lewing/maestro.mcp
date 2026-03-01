@@ -257,23 +257,32 @@ public class CacheServiceTests : IDisposable
     [Fact]
     public void Test_DirectoryPermissions_SetOnUnix()
     {
-        var cache = CreateCache();
+        // Use a nested directory so CacheService actually creates it and sets permissions
+        // (pre-existing dirs like /tmp are skipped)
+        var nestedDir = Path.Combine(Path.GetTempPath(), $"mstro-perm-{Guid.NewGuid()}");
+        var permTestPath = Path.Combine(nestedDir, "cache.db");
 
-        // Verify the cache was created successfully
-        // On Unix, the directory should have owner-only permissions (700)
-        // On Windows, this test simply verifies the directory exists
-        var dir = Path.GetDirectoryName(_dbPath);
-        Assert.True(Directory.Exists(dir), "Cache directory should be created");
-
-        if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+        try
         {
-            var mode = File.GetUnixFileMode(dir!);
-            // Should have owner read, write, execute only (no group or other access)
-            Assert.True(mode.HasFlag(UnixFileMode.UserRead), "Owner should have read permission");
-            Assert.True(mode.HasFlag(UnixFileMode.UserWrite), "Owner should have write permission");
-            Assert.True(mode.HasFlag(UnixFileMode.UserExecute), "Owner should have execute permission");
-            Assert.False(mode.HasFlag(UnixFileMode.GroupRead), "Group should not have read permission");
-            Assert.False(mode.HasFlag(UnixFileMode.OtherRead), "Others should not have read permission");
+            var cache = new CacheService(permTestPath);
+
+            // Verify the cache was created successfully
+            Assert.True(Directory.Exists(nestedDir), "Cache directory should be created");
+
+            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+            {
+                var mode = File.GetUnixFileMode(nestedDir);
+                // Should have owner read, write, execute only (no group or other access)
+                Assert.True(mode.HasFlag(UnixFileMode.UserRead), "Owner should have read permission");
+                Assert.True(mode.HasFlag(UnixFileMode.UserWrite), "Owner should have write permission");
+                Assert.True(mode.HasFlag(UnixFileMode.UserExecute), "Owner should have execute permission");
+                Assert.False(mode.HasFlag(UnixFileMode.GroupRead), "Group should not have read permission");
+                Assert.False(mode.HasFlag(UnixFileMode.OtherRead), "Others should not have read permission");
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(nestedDir, recursive: true); } catch { }
         }
     }
 

@@ -2,6 +2,22 @@
 
 ## Learnings
 
+### MCP SDK 1.0 Feature Evaluation (2026-02-20)
+
+- **Project is already on SDK 1.0.0** — the .csproj references `ModelContextProtocol 1.0.0`, so we've already completed the upgrade from the 0.8.0-preview.1 baseline. The upgrade brings stability guarantees (SemVer), bug fixes (base64 deserialization, JSON handling), and improved transport reliability (5 reconnection retries instead of 2).
+
+- **Structured tool output (StructuredContent) is not urgent** — all 20 tools return `Task<string>` with markdown-formatted output. This works well for LLMs and human readers. Switching to typed objects would be a breaking change for consuming skills, require defining 20+ DTOs, and solve no current pain point. Backlogged as P3 for future experimentation if consumers request JSON output for automation.
+
+- **Tool annotations (ReadOnlyHint, DestructiveHint, OpenWorldHint) add no value** — tool names and descriptions already disambiguate read vs. write operations. No tools perform truly destructive actions (triggers are non-destructive). All tools interact with the Maestro API (open world), so setting `OpenWorldHint: true` on everything is redundant metadata. Annotations are advisory-only per SDK docs, not security enforcement.
+
+- **Resource links (ResourceLinkBlock) don't apply** — the server exposes 0 MCP resources (data comes from tools, not `resources/list`). GitHub URLs in tool output are external links, not MCP resource URIs. Adopting resource links would require architectural churn (adding resource endpoints, redesigning caching) with no clear benefit over markdown URLs.
+
+- **New protocol features are automatic** — SDK 1.0 brings 2025-11-25 protocol compliance, OAuth backward compatibility, and improved JSON handling without code changes. Features like elicitation (dynamic prompting) and SSE resumability don't apply to our tool set or stdio transport.
+
+- **Security posture unchanged** — tool annotations don't provide security (advisory-only). Auth enforcement remains at the PCS API layer (correct design per STRIDE analysis). Structured output vs. strings doesn't change trust boundaries — the data source (PCS API) and caching layer (SQLite) are unchanged.
+
+- **Markdown-first design is a strength** — the current string-based approach is universal, portable, works across all MCP clients, and is human-readable. LLMs parse our semi-structured markdown (headers, lists, tables) without issues. No bugs or limitations have surfaced from this design choice.
+
 ### Naming Convention Review for Issue #9 (2026-02-20)
 
 - **Current naming follows an implicit pattern**: Actions use verb prefixes (`trigger_`, `clear_`), queries use bare nouns. This distinction is actually a GOOD convention — it disambiguates read-only operations from state-changing actions. The proposed `maestro_get_*` prefixes would be redundant.

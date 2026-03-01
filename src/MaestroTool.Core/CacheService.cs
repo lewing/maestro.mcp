@@ -23,10 +23,12 @@ public class CacheService
         var dir = Path.GetDirectoryName(dbPath);
         if (!string.IsNullOrEmpty(dir))
         {
+            var dirExisted = Directory.Exists(dir);
             Directory.CreateDirectory(dir);
             
             // Set owner-only permissions on Linux/macOS to prevent info disclosure
-            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+            // Only chmod directories we created — skip pre-existing system dirs like /tmp
+            if (!dirExisted && (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS()))
             {
                 File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
             }
@@ -40,10 +42,12 @@ public class CacheService
     {
         var homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var cacheDir = Path.Combine(homeDir, ".mstro");
+        var dirExisted = Directory.Exists(cacheDir);
         Directory.CreateDirectory(cacheDir);
         
         // Set owner-only permissions on Linux/macOS to prevent info disclosure on shared machines
-        if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+        // Only chmod directories we created — skip if already existed
+        if (!dirExisted && (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS()))
         {
             File.SetUnixFileMode(cacheDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         }

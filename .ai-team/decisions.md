@@ -2281,3 +2281,234 @@ The default base URI is https://maestro.dot.net, defined as a private const in M
 - src/MaestroTool.Core/MaestroService.cs — gate change, new helper, comment update
 - src/MaestroTool/MaestroTool.csproj — version 0.7.0 → 0.7.1
 - src/MaestroTool/Program.cs — version string 0.7.0 → 0.7.1
+
+
+---
+
+### 2025-02-22: ModelContextProtocol SDK Upgrade to 1.0.0 Stable
+
+**By:** Naomi
+
+**What:** Upgraded ModelContextProtocol packages from 0.8.0-preview.1 to 1.0.0 stable across all projects (MaestroTool, MaestroTool.Mcp, MaestroTool.Core). Bumped project version from 0.10.0 to 0.11.0.
+
+**Why:** The MCP SDK reached 1.0.0 stable release, providing production-ready API stability guarantees. While 1.0.0 introduced several breaking changes (filter configuration split, collection interface changes, sealed McpClientHandlers, required Tool.Name), none affected this project's usage pattern. Our implementation only uses server-side APIs with `[McpServerToolType]` attribute on classes and `[McpServerTool(Name = "...")]` on methods, which remained stable. Upgrading now ensures we're on the supported release track with no deprecated preview dependencies.
+
+**Impact:**
+- All package references updated to `ModelContextProtocol 1.0.0` and `ModelContextProtocol.AspNetCore 1.0.0`
+- Build succeeds with 0 warnings, 0 errors
+- No code changes required — our MCP usage pattern is fully compatible
+- Server version strings updated to 0.11.0 in both MaestroTool/Program.cs and MaestroTool.Mcp/Program.cs
+- Test failures (124/135) are due to unrelated `/tmp` file permission issue with SetUnixFileMode, not MCP upgrade
+
+**Files Changed:**
+- src/MaestroTool/MaestroTool.csproj
+- src/MaestroTool.Mcp/MaestroTool.Mcp.csproj
+- src/MaestroTool.Core/MaestroTool.Core.csproj
+- src/MaestroTool/Program.cs (server version string)
+- src/MaestroTool.Mcp/Program.cs (server version string)
+
+
+---
+
+# MCP SDK 1.0 Feature Evaluation
+
+**Author:** Holden  
+**Date:** 2026-02-20  
+**Status:** Analysis  
+**SDK Version:** Currently on 1.0.0 (already upgraded from 0.8.0-preview.1)
+
+## Executive Summary
+
+The project is **already on SDK 1.0.0**. This analysis evaluates new features from the 0.8 → 1.0 upgrade path for practical benefit to maestro.mcp's architecture and use case (MCP server for Maestro/BAR dependency flow data).
+
+**Verdict:** Most new features don't apply or aren't worth adopting at this time. The SDK upgrade we've already done brings stability and bug fixes. The only feature worth future consideration is **structured tool output**, but not urgently.
+
+---
+
+## Feature Assessment
+
+### 1. Structured Tool Output (StructuredContent)
+
+**What it is:**  
+Tools can return strongly-typed objects instead of strings. The SDK auto-generates JSON schemas, enabling LLMs and clients to consume data programmatically with validation.
+
+**Current state:**  
+All 20 tools return `Task<string>` with formatted markdown text.
+
+**Should we adopt?**
+
+**PROBABLY NOT, at least not yet.** Here's why:
+
+**Cons:**
+- **Markdown is working well.** LLMs parse our current output without issues. The data is semi-structured (headers, lists, tables) and human-readable.
+- **Breaking change for consumers.** Skills and clients that consume our tools expect markdown-formatted strings. Switching to structured output would disrupt existing workflows.
+- **Not a pain point.** We haven't seen bugs or limitations caused by string returns. The data is cacheable, parseable, and readable.
+- **Additional modeling work.** We'd need to define 20+ DTOs matching our current output structures. The PCS client models don't map cleanly to our tool outputs (e.g., `GetSubscriptionHealth` returns a synthetic view combining subscription + build + commit data).
+
+**Pros:**
+- **Machine-readable output.** If clients need to parse results programmatically (e.g., pipe to jq, process in scripts), structured JSON is better.
+- **Schema validation.** Type safety at the protocol boundary could catch bugs, but our tools already validate inputs/outputs internally.
+- **Future-proofing.** If MCP clients evolve to expect structured data, we'd be ready.
+
+**Recommendation:**  
+**Backlog (P3).** Not urgent. Revisit if:
+1. Consumers request JSON output for automation
+2. We add tools where tabular data is hard to format as text (e.g., large graphs, matrices)
+3. MCP ecosystem shifts toward structured-first tools
+
+If we do adopt, start with **1-2 high-value tools** (e.g., `maestro_subscriptions`, `maestro_builds`) as an experiment. Offer both formats via a tool parameter (`format: "text" | "json"`).
+
+---
+
+### 2. Tool Annotations (ReadOnlyHint, DestructiveHint, OpenWorldHint)
+
+**What it is:**  
+Metadata hints on tools to help LLMs/clients understand behavior:
+- `ReadOnlyHint`: Tool only reads, doesn't modify state
+- `DestructiveHint`: Tool performs irreversible operations
+- `OpenWorldHint`: Tool interacts with external/unpredictable systems
+
+**Current state:**  
+No annotations. LLM infers behavior from tool names and descriptions.
+
+**Should we adopt?**
+
+**NO.** Not useful for this project.
+
+**Why:**
+- **Read/write distinction is obvious.** Our tool naming already disambiguates: `maestro_subscriptions` (read), `maestro_trigger_subscription` (write). Descriptions clarify further.
+- **No destructive operations.** Both action tools (`maestro_trigger_subscription`, `maestro_trigger_daily_update`) are **non-destructive** — they initiate subscription processing, not deletions. No irreversible harm.
+- **All tools interact with external systems.** Every tool calls the Maestro API (open world). Setting `OpenWorldHint: true` on all 20 tools adds no information.
+- **Annotations don't enforce behavior.** The SDK docs say these are "advisory only" — no security or access control. Our threat model already addresses auth at the PCS API layer, not MCP layer.
+
+**Edge case:**  
+`maestro_clear_cache` is the only tool with side effects (clears in-memory + SQLite cache). But it's not destructive (data is re-fetchable) and unlikely to be mis-invoked. Adding `ReadOnlyHint: false` wouldn't change anything.
+
+**Recommendation:**  
+**REJECT.** Annotations would be redundant metadata with no practical benefit. Keep tool names and descriptions as the source of truth.
+
+---
+
+### 3. Resource Links from Tools (ResourceLinkBlock)
+
+**What it is:**  
+Tools can return `ResourceLinkBlock` objects in their result content, providing MCP-native links to related resources (e.g., "here's a PR, and here's a link to its commits").
+
+**Current state:**  
+Tools return markdown with inline URLs. Example from `maestro_codeflow_prs`:
+```markdown
+**https://github.com/dotnet/dotnet/pull/12345**
+  Channel: .NET 10.0.1xx SDK | Target Branch: release/10.0.1xx
+```
+
+**Should we adopt?**
+
+**NO.** Not a good fit.
+
+**Why:**
+- **We don't expose MCP resources.** Our server has 0 resources (`resources/list` returns empty). All data comes from tools, not resources. Resource links are meant to bridge tools → resources within the same MCP server.
+- **GitHub URLs aren't MCP resources.** When we return PR URLs (e.g., `https://github.com/dotnet/dotnet/pull/12345`), those are external links, not MCP resource URIs. LLMs already know how to parse markdown links.
+- **No follow-up workflows.** Resource links enable patterns like: "Tool X returns link to resource Y, client fetches Y via `resources/read`." We don't have resource endpoints to link to.
+- **Adding resources would be architectural churn.** We'd need to redesign the caching/service layer to support resource URIs, with unclear benefit over the current tool-only model.
+
+**Possible future use case:**  
+If we ever expose **large, paginated, or streaming data** as MCP resources (e.g., `resource://maestro/builds?channel=10.0.1xx&offset=100`), tools could return `ResourceLinkBlock` to point at those. But that's not on the roadmap.
+
+**Recommendation:**  
+**REJECT.** Stick with markdown-formatted URLs. They're universal, portable, and work across all MCP clients.
+
+---
+
+### 4. Extensions / New Server Capabilities
+
+**What it is:**  
+SDK supports declaring extended server capabilities via `McpServerOptions.Capabilities`. New protocol features like:
+- `2025-11-25` protocol version support
+- Elicitation (dynamic prompting for missing info)
+- User-defined `JsonSerializerOptions`
+
+**Current state:**  
+Server uses default SDK capabilities registration (tools only, no prompts/resources/logging).
+
+**Should we adopt?**
+
+**PARTIALLY — already done.** The SDK upgrade brings protocol compliance automatically.
+
+**What we get for free:**
+- ✅ **Stable API with SemVer guarantees** — no more breaking changes
+- ✅ **Improved transport reliability** — better reconnection handling (5 retries instead of 2)
+- ✅ **OAuth backward compatibility** — future-proofing for auth changes
+- ✅ **Bug fixes** — base64 deserialization, JSON handling
+
+**What we don't need:**
+- ❌ **Elicitation** — our tools have all required parameters, no dynamic info gathering needed
+- ❌ **Custom JsonSerializerOptions** — default serialization works fine for PCS models
+- ❌ **SSE event stream storage** — we use stdio transport, not HTTP streaming
+- ❌ **MCP task support** — no long-running async operations in our tool set
+
+**Recommendation:**  
+**ACCEPT what we have.** The default capabilities are sufficient. No changes needed to `Program.cs` or `McpServerOptions`.
+
+---
+
+## Additional SDK Features Not Evaluated
+
+These were mentioned in changelogs but aren't relevant to tool design:
+
+### 0.8 Features
+- **Message-level filters** — internal SDK plumbing, no API surface for servers
+- **Distributed cache-backed event stream store** — we use SQLite, not distributed cache
+- **Trace-level logging** — useful for debugging, but we already have stderr diagnostics
+
+### 0.9 Features
+- **Streamable HTTP resumability** — HTTP server mode isn't primary use case
+- **Missing ResourceLinkBlock properties (Title, Icons)** — we don't use resources
+
+### 1.0 RC/Stable
+- **Increased MaxReconnectionAttempts** — automatic, no action needed
+
+---
+
+## Threat Model Implications
+
+No new security concerns from SDK upgrade. Key observations:
+
+1. **Tool annotations don't provide security.** The SDK docs explicitly state they're advisory. Auth enforcement remains at the PCS API layer (correct design).
+2. **Structured output doesn't change trust boundaries.** Whether tools return strings or objects, the data source (PCS API) and caching layer (SQLite) are unchanged.
+3. **Resource links would require new auth logic.** If we ever add resources, we'd need to gate `resources/read` by the same auth cascade (PAT → Entra → anonymous). Current threat model (STRIDE analysis in history.md) already covers this pattern for tools.
+
+---
+
+## Action Items
+
+### Immediate (P1)
+- ✅ **None.** SDK 1.0 upgrade is complete. No code changes needed.
+
+### Future Consideration (P2-P3)
+- **P3: Experiment with structured output** — Pick 1-2 high-value tools, add a `format` parameter to return JSON instead of markdown. Solicit feedback from consuming skills.
+- **P3: Document SDK features in README** — Mention we're on 1.0, note string-based tool outputs as a design choice.
+
+### Rejected
+- ❌ Tool annotations (ReadOnlyHint, DestructiveHint, OpenWorldHint)
+- ❌ Resource links (ResourceLinkBlock)
+- ❌ Elicitation support
+- ❌ Custom JsonSerializerOptions
+
+---
+
+## Conclusion
+
+The MCP SDK 1.0 upgrade brings **stability and bug fixes** without requiring architecture changes. New features like structured output, tool annotations, and resource links are either:
+1. Not applicable to our tool design (annotations, resources)
+2. Not worth the migration cost vs. current markdown-based approach (structured output)
+
+**Recommendation: No immediate action.** The SDK upgrade is a success. Focus future work on functional features (Issue #1 backlog) rather than protocol-level enhancements.
+
+---
+
+## References
+
+- [MCP C# SDK Documentation](https://modelcontextprotocol.github.io/csharp-sdk/)
+- [MCP C# SDK GitHub](https://github.com/modelcontextprotocol/csharp-sdk)
+- [SDK 1.0 Release Notes](https://github.com/modelcontextprotocol/csharp-sdk/releases/tag/v1.0.0)
+- [Tool Annotations API Docs](https://modelcontextprotocol.github.io/csharp-sdk/api/ModelContextProtocol.Protocol.ToolAnnotations.html)

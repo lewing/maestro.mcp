@@ -268,3 +268,17 @@
 
 📌 Team update (2026-02-22): Always pass DefaultBaseUri to PcsApiFactory — decided by Naomi
 
+
+### ModelContextProtocol SDK Upgrade to 1.0.0 (2025-02-22)
+- **Upgraded from 0.8.0-preview.1 to 1.0.0 stable** across all four projects: MaestroTool, MaestroTool.Mcp, MaestroTool.Core, and MaestroTool.Tests.
+- **No breaking changes detected** in this project's usage pattern. The MCP 1.0.0 release introduced several breaking changes between 0.8.0 and 1.0.0, but none affected our implementation:
+  - Configuration filter methods (replaced Add*Filter with WithMessageFilters/WithRequestFilters) — we don't use filters
+  - Collection type changes (List<T>/T[] → IList<T>) — not applicable to our code
+  - McpClientHandlers sealed — we use server-side, not client
+  - Tool.Name now required — already specified via [McpServerTool(Name = "...")] attribute
+  - Removed AddXxxFilter extension methods — not used
+  - RunSessionHandler marked experimental — not used
+- **Build verification**: `dotnet restore` and `dotnet build` succeeded with 0 warnings, 0 errors.
+- **Version bump**: 0.10.0 → 0.11.0 in MaestroTool.csproj and both Program.cs server version strings.
+- **Test status**: 11 tests passed. 124 tests failed due to unrelated file permission issue on `/tmp` (SetUnixFileMode fails on shared /tmp directory), not MCP-related.
+- **Usage pattern confirmed stable**: `[McpServerToolType]` attribute on class, `[McpServerTool(Name = "...")]` on methods, `AddMcpServer()` → `WithStdioServerTransport()`/`WithHttpTransport()` → `WithToolsFromAssembly()` pattern all work unchanged in MCP 1.0.0.
