@@ -282,3 +282,6 @@
 - **Version bump**: 0.10.0 → 0.11.0 in MaestroTool.csproj and both Program.cs server version strings.
 - **Test status**: 11 tests passed. 124 tests failed due to unrelated file permission issue on `/tmp` (SetUnixFileMode fails on shared /tmp directory), not MCP-related.
 - **Usage pattern confirmed stable**: `[McpServerToolType]` attribute on class, `[McpServerTool(Name = "...")]` on methods, `AddMcpServer()` → `WithStdioServerTransport()`/`WithHttpTransport()` → `WithToolsFromAssembly()` pattern all work unchanged in MCP 1.0.0.
+
+### Interactive detection pattern (2025-07-15)
+- `Console.IsInputRedirected` reliably distinguishes MCP host launches (stdin piped) from interactive terminal usage (stdin is TTY). Used in Program.cs to default no-arg invocation to `["mcp"]` when piped or `["--help"]` when interactive. This is a standard .NET pattern requiring no platform-specific code.
