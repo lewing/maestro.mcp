@@ -38,8 +38,8 @@ ConsoleApp.ServiceProvider = services.BuildServiceProvider();
 var app = ConsoleApp.Create();
 app.Add<Commands>();
 
-// Default to MCP if no args
-app.Run(args.Length == 0 ? ["mcp"] : args);
+// Default to MCP if launched by an MCP host (stdin redirected), otherwise show help
+app.Run(args.Length == 0 ? (Console.IsInputRedirected ? ["mcp"] : ["--help"]) : args);
 
 public class Commands
 {
@@ -85,7 +85,7 @@ public class Commands
         builder.Services
             .AddMcpServer(options =>
             {
-                options.ServerInfo = new() { Name = "maestro", Version = "0.12.0" };
+                options.ServerInfo = new() { Name = "maestro", Version = "0.12.1" };
             })
             .WithStdioServerTransport()
             .WithToolsFromAssembly(typeof(MaestroMcpTools).Assembly);

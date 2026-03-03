@@ -2,11 +2,22 @@
 [![Platform](https://img.shields.io/badge/platform-GitHub%20Copilot-blue)](#how-it-works)
 [![NuGet](https://img.shields.io/nuget/vpre/lewing.maestro.mcp)](https://www.nuget.org/packages/lewing.maestro.mcp)
 
-# maestro.mcp — MCP server for Maestro/BAR dependency flow data
+# maestro.mcp — MCP server & CLI for Maestro/BAR dependency flow data
 
-An MCP server that provides cached access to [Maestro/BAR](https://maestro.dot.net) (Build Asset Registry) data for the .NET build infrastructure. Exposes 14 tools for querying subscriptions, builds, channels, and health status, plus triggering subscription updates and managing cache via the Model Context Protocol.
+An MCP server **and standalone CLI tool** that provides cached access to [Maestro/BAR](https://maestro.dot.net) (Build Asset Registry) data for the .NET build infrastructure. Exposes 19 tools for querying subscriptions, builds, channels, and health status, plus triggering subscription updates and managing cache via the Model Context Protocol. Also works as a standalone CLI (`mstro`) for humans — same cached data, same authentication, no AI required.
 
 Built with [Squad](https://github.com/bradygaster/squad) — [meet the squad](.ai-team/SQUAD.md).
+
+## Why mstro?
+
+The Maestro/BAR API powers .NET's dependency flow infrastructure, but working with it directly is painful:
+
+- **Subscription IDs are GUIDs** — you need to query by repo/channel, not memorize UUIDs
+- **Build staleness requires multi-step lookup** — compare last-applied build vs latest available, then compute commit distance via GitHub
+- **No cross-process caching** — every `darc` invocation hits the API fresh, even for data that changes every 5–15 minutes
+- **Codeflow status is opaque** — backflow PRs, tracked PRs, and subscription history are scattered across multiple API endpoints
+
+`mstro` wraps all of this in a single tool with **smart caching** (SQLite, shared across all MCP clients), **automatic authentication** (reuses `darc` Entra ID credentials), and **enriched output** (commit distance, health scoring, freshness checks). Whether you're an AI agent investigating a stale subscription or a human triaging build flow, you get the same fast, accurate answers.
 
 ## Installation
 
@@ -54,6 +65,78 @@ dotnet build
 > **NuGet feed requirement:** The `Microsoft.DotNet.ProductConstructionService.Client` package is published to the
 > [dotnet-eng](https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-eng/nuget/v3/index.json)
 > Azure Artifacts feed. The included `nuget.config` references this feed.
+
+## Quick Start — CLI
+
+`mstro` is a full CLI for humans. Every query uses the same cached API layer as the MCP server.
+
+```bash
+# List subscriptions for a repo
+mstro subscriptions --source-repository https://github.com/dotnet/runtime
+
+# Get a specific subscription by ID
+mstro subscription <guid>
+
+# Check subscription health for a target repo (includes commit distance)
+mstro subscription-health https://github.com/dotnet/sdk --include-commit-details
+
+# Get the latest build for a repo on a channel
+mstro latest-build https://github.com/dotnet/runtime --channel-name ".NET 10.0.1xx SDK"
+
+# Get a specific build by ID
+mstro build 302353
+
+# List all channels
+mstro channels
+
+# List default channel mappings
+mstro default-channels --repository https://github.com/dotnet/runtime
+
+# Check build freshness via aka.ms
+mstro build-freshness ".NET 10.0.1xx SDK"
+
+# List active codeflow (backflow) PRs
+mstro codeflow-prs --channel-name ".NET 10 Engineering"
+
+# Get tracked PR for a subscription
+mstro tracked-pr <guid>
+
+# Get backflow status for a VMR build
+mstro backflow-status 302627
+
+# View subscription update history
+mstro subscription-history <guid>
+
+# Get build dependency graph
+mstro build-graph 302353
+
+# Get dependency flow graph for a channel
+mstro flow-graph 1234 --days 14
+
+# Trigger a subscription update (requires auth)
+mstro trigger-subscription <guid> 302353
+
+# Trigger all daily subscriptions (requires auth)
+mstro trigger-daily-update
+
+# Cache management
+mstro cache status
+mstro cache clear
+```
+
+All commands support `--json` for structured output and `--no-cache` to bypass the cache.
+
+### Interactive Detection
+
+`mstro` automatically detects how it's launched:
+
+| Context | Behavior |
+|---------|----------|
+| **Terminal (no args)** | Shows `--help` with available commands |
+| **MCP host (stdin piped)** | Starts MCP server mode automatically |
+| **With subcommand** | Runs the specified CLI command |
+
+This means existing MCP configurations (`"command": "mstro"` with no args) continue to work unchanged — `mstro` detects the piped stdin and enters MCP server mode.
 
 ## MCP Configuration
 
@@ -147,7 +230,7 @@ Future versions may include destructive actions (delete subscription, remove def
 
 ## Available Tools
 
-The server registers **14 MCP tools** for querying and triggering Maestro/BAR operations:
+The server registers **19 MCP tools** for querying and triggering Maestro/BAR operations:
 
 | Tool Name | Description | Key Parameters |
 |-----------|-------------|-----------------|
@@ -232,10 +315,10 @@ src/
 │   └── MaestroApiClient.cs   # PCS client wrapper with auth cascade
 ├── MaestroTool.Mcp/          # MCP HTTP server (ASP.NET Core)
 │   └── Program.cs
-└── MaestroTool.Tests/        # Unit tests (88 tests)
+└── MaestroTool.Tests/        # Unit tests (135 tests)
 ```
 
-- **MaestroTool** — stdio MCP server packaged as a [dotnet tool](https://learn.microsoft.com/dotnet/core/tools/global-tools). Default entry point for `dnx` / `dotnet tool` usage.
+- **MaestroTool** — Dual-mode entry point: standalone CLI for humans and stdio MCP server for AI agents. Packaged as a [dotnet tool](https://learn.microsoft.com/dotnet/core/tools/global-tools). Default entry point for `dnx` / `dotnet tool` usage.
 - **MaestroTool.Mcp** — HTTP MCP server for remote/shared deployments.
 - **MaestroTool.Core** — All business logic, caching, API client, and MCP tool definitions. Shared by both hosts.
 
@@ -310,9 +393,9 @@ dotnet test
 ```
 
 The test suite includes:
-- **88 unit tests** (73 original + 3 regression tests + 4 targetBranch filter tests + 8 codeflow tests) covering `CacheService` and `MaestroService` behavior.
+- **135 unit tests** covering `CacheService`, `MaestroService`, security hardening, and tool behavior.
 - **Framework**: xUnit + NSubstitute for mocking.
-- **Coverage**: cache hit/miss, TTL expiration, null handling, error scenarios.
+- **Coverage**: cache hit/miss, TTL expiration, null handling, error scenarios, commit distance, SSRF validation, corruption recovery.
 
 Tests are located in `src/MaestroTool.Tests/`.
 

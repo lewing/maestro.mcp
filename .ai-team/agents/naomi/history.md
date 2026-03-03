@@ -285,3 +285,31 @@
 
 ### Interactive detection pattern (2025-07-15)
 - `Console.IsInputRedirected` reliably distinguishes MCP host launches (stdin piped) from interactive terminal usage (stdin is TTY). Used in Program.cs to default no-arg invocation to `["mcp"]` when piped or `["--help"]` when interactive. This is a standard .NET pattern requiring no platform-specific code.
+
+### README documentation patterns from helix.mcp (2025-07-16)
+- **helix.mcp structure to emulate:** Top description mentions both MCP + CLI, "Why" section explaining value over raw API, "Quick Start → CLI" section with practical examples, interactive detection table, accurate tool/test counts.
+- **README should reflect dual-mode nature:** `mstro` is both an MCP server AND a standalone CLI. The README should lead with this, not treat CLI as an afterthought.
+- **Tool count source of truth:** Count `[McpServerTool]` annotations in `MaestroMcpTools.cs`. Currently 19 tools. Update ALL references when tools are added/removed.
+- **Test count:** Update when tests are added. Currently 135 tests. The old "73 + 3 + 4 + 8" breakdown was getting stale — just state the total.
+
+### CLI commands available in mstro (2025-07-16)
+- **18 CLI commands** defined in `Commands` class in `src/MaestroTool/Program.cs`:
+  - `mcp` — Start MCP server mode
+  - `subscriptions` — List subscriptions (--source-repository, --target-repository, --channel-name, --target-branch)
+  - `subscription <id>` — Get subscription by GUID
+  - `latest-build <repository>` — Get latest build (--channel-name)
+  - `build <buildId>` — Get build by ID
+  - `channels` — List all channels
+  - `default-channels` — List default channel mappings (--repository, --branch)
+  - `subscription-health <targetRepo>` — Check health (--include-commit-details)
+  - `build-freshness <channel>` — Check freshness via aka.ms
+  - `trigger-subscription <id> <buildId>` — Trigger subscription (--force)
+  - `trigger-daily-update` — Trigger all daily subscriptions
+  - `codeflow-prs` — List tracked PRs (--channel-name)
+  - `tracked-pr <id>` — Get tracked PR for subscription
+  - `backflow-status <vmrBuildId>` — Get backflow status
+  - `subscription-history <id>` — Get update history
+  - `build-graph <buildId>` — Get dependency graph
+  - `flow-graph <channelId>` — Get flow graph (--days, --include-arcade, etc.)
+  - `cache <action>` — Cache management (clear, status)
+- **Common flags:** All read commands support `--json` (structured output) and `--no-cache` (bypass cache). ConsoleAppFramework auto-maps camelCase params to `--kebab-case` CLI flags.

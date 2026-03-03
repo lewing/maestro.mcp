@@ -2755,3 +2755,25 @@ Cut release v0.12.0 (skipping a v0.11.0 tag) to bundle all three changes into a 
 - v0.12.0 tag and commit pushed to `origin/master`
 - Version string updated in `.csproj`, both `Program.cs` entry points
 - 135 tests verified passing before release
+
+---
+
+# Decision: Interactive Terminal Detection for Default Command
+
+**Date:** 2025-07-15
+**Author:** Naomi (Backend Developer)
+**Status:** Implemented
+
+## Context
+When `mstro` is run with no arguments, it previously always defaulted to starting the MCP server (`["mcp"]`). This was problematic for users who typed `mstro` in a terminal — the MCP server would start on stdio and hang, with no visible output or help.
+
+## Decision
+Use `Console.IsInputRedirected` to detect whether the process was launched by an MCP host (stdin piped) or interactively by a user (stdin is a TTY):
+
+- **Stdin redirected** (MCP host) → default to `["mcp"]` (start MCP server)
+- **Stdin NOT redirected** (terminal) → default to `["--help"]` (show usage)
+
+## Rationale
+- MCP hosts (VS Code, Copilot CLI) always pipe stdin to the subprocess, so `Console.IsInputRedirected` reliably detects this case.
+- Interactive users expect help text, not a silent stdio server.
+- This is a standard .NET pattern — no platform-specific code needed.
