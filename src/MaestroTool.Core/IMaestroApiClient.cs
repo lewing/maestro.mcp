@@ -71,4 +71,9 @@ public interface IMaestroApiClient
     Task<BuildGraph> GetBuildGraphAsync(int buildId, CancellationToken cancellationToken = default);
 
     Task<FlowGraph> GetFlowGraphAsync(int days, int channelId, bool includeArcade = true, bool includeBuildTimes = true, bool includeDisabledSubscriptions = false, List<string>? includedFrequencies = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Get codeflow statuses for a repository and branch.
+    /// </summary>
+    Task<List<CodeflowStatus>> GetCodeflowStatusesAsync(string repositoryUrl, string branch, CancellationToken cancellationToken = default);
 }

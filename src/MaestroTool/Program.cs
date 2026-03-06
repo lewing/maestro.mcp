@@ -85,7 +85,7 @@ public class Commands
         builder.Services
             .AddMcpServer(options =>
             {
-                options.ServerInfo = new() { Name = "maestro", Version = "0.12.1" };
+                options.ServerInfo = new() { Name = "maestro", Version = "0.13.0" };
             })
             .WithStdioServerTransport()
             .WithToolsFromAssembly(typeof(MaestroMcpTools).Assembly);
@@ -643,6 +643,43 @@ public class Commands
         }
     }
 
+    [Command("codeflow-statuses")]
+    [Description("Get codeflow status for a repository and branch (forward flow and backflow)")]
+    public async Task CodeflowStatuses(
+        [Argument] string repositoryUrl = "https://github.com/dotnet/dotnet",
+        string branch = "main",
+        bool json = false,
+        bool noCache = false)
+    {
+        var statuses = await _service.GetCodeflowStatusesAsync(repositoryUrl, branch, noCache);
+
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(statuses, s_jsonOptions));
+        }
+        else
+        {
+            if (statuses.Count == 0)
+            {
+                Console.WriteLine($"No codeflow statuses found for {repositoryUrl} ({branch}).");
+                return;
+            }
+
+            Console.WriteLine($"Codeflow statuses for {repositoryUrl} (branch: {branch})\n");
+            Console.WriteLine($"Found {statuses.Count} mapping(s):\n");
+
+            foreach (var status in statuses)
+            {
+                Console.WriteLine($"=== {status.MappingName ?? "Unknown Mapping"} ===");
+                Console.WriteLine($"Repository: {status.RepositoryUrl} ({status.RepositoryBranch})");
+
+                PrintFlowStatus("Forward Flow", status.ForwardFlow);
+                PrintFlowStatus("Backflow", status.Backflow);
+                Console.WriteLine();
+            }
+        }
+    }
+
     [Command("cache")]
     [Description("Cache management commands")]
     public async Task Cache([Argument] string action)
@@ -679,5 +716,36 @@ public class Commands
         {
             Console.WriteLine($"Channels: {string.Join(", ", build.Channels.Select(c => c.Name))}");
         }
+    }
+
+    private static void PrintFlowStatus(string label, CodeflowSubscriptionStatus? flow)
+    {
+        if (flow == null)
+        {
+            Console.WriteLine($"  {label}: not configured");
+            return;
+        }
+
+        Console.WriteLine($"  {label}:");
+        if (flow.Subscription != null)
+        {
+            var sub = flow.Subscription;
+            Console.WriteLine($"    Subscription: {sub.Id}");
+            Console.WriteLine($"    {sub.SourceRepository} → {sub.TargetRepository} ({sub.TargetBranch})");
+            Console.WriteLine($"    Channel: {sub.Channel?.Name ?? "N/A"} | Enabled: {sub.Enabled}");
+            if (sub.LastAppliedBuild != null)
+                Console.WriteLine($"    Last Applied Build: #{sub.LastAppliedBuild.Id} ({sub.LastAppliedBuild.DateProduced:u})");
+        }
+
+        if (flow.ActivePullRequest != null)
+        {
+            Console.WriteLine($"    🔄 Active PR: {flow.ActivePullRequest.Url}");
+            Console.WriteLine($"      Last Update: {flow.ActivePullRequest.LastUpdate:u}");
+        }
+
+        if (flow.NewerBuildsAvailable.HasValue && flow.NewerBuildsAvailable.Value > 0)
+            Console.WriteLine($"    ⚠️ {flow.NewerBuildsAvailable.Value} newer build(s) available");
+        else if (flow.NewerBuildsAvailable.HasValue)
+            Console.WriteLine($"    ✅ Up to date");
     }
 }

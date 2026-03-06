@@ -169,3 +169,16 @@
 
 📌 Team update (2026-02-22): Always pass DefaultBaseUri to PcsApiFactory — decided by Naomi
 
+
+### 2025-07-16 — Codeflow status tests for v0.5.0
+
+- **5 new tests written** (140 total: 139 passing, 1 pre-existing flaky) for `GetCodeflowStatusesAsync` feature.
+- **CodeflowStatus model** uses parameterless constructor with settable properties: `MappingName`, `RepositoryUrl`, `RepositoryBranch`, `ForwardFlow`, `Backflow`. Much simpler than `Subscription`/`Build` which need 10+ constructor params.
+- **CodeflowSubscriptionStatus model** also has parameterless constructor. `NewerBuildsAvailable` is `int?` (not `bool?` as originally specified) — represents the count of newer builds, not just a flag.
+- **Test helpers**: `CreateCodeflowStatus()` and `CreateCodeflowSubscriptionStatus()` factory methods follow existing pattern (static, default parameters).
+- **Cache key pattern**: `codeflow-statuses:{repositoryUrl}:{branch}` — tested that different repo/branch combos create separate cache entries.
+- **Edge cases tested**: empty list, noCache bypass, forward+backflow presence, cache isolation by repo+branch.
+- **Naomi's implementation wasn't landed when tests were first written** — interface method `GetCodeflowStatusesAsync` was already present in the PCS NuGet package. Tests verified NSubstitute auto-generates mock for the interface method.
+- **Pre-existing flaky test**: `GetRecentAction_ReturnsNull_AfterCooldownExpires` fails intermittently due to timing (50ms TTL + 100ms delay not always sufficient). Not related to codeflow changes.
+
+📌 Team update (2025-07-16): 5 codeflow status tests passing. NewerBuildsAvailable is int? not bool? — discovered via reflection on PCS NuGet package.

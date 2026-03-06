@@ -217,4 +217,10 @@ public class MaestroApiClient : IMaestroApiClient
     {
         return _api.Channels.GetFlowGraphAsync(days, channelId, includeArcade, includeBuildTimes, includeDisabledSubscriptions, includedFrequencies ?? new List<string>(), cancellationToken);
     }
+
+    public async Task<List<CodeflowStatus>> GetCodeflowStatusesAsync(string repositoryUrl, string branch, CancellationToken cancellationToken = default)
+    {
+        var result = await _api.Codeflow.GetCodeflowStatusesAsync(branch, repositoryUrl, cancellationToken);
+        return result.ToList();
+    }
 }

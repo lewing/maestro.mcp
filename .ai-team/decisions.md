@@ -2777,3 +2777,41 @@ Use `Console.IsInputRedirected` to detect whether the process was launched by an
 - MCP hosts (VS Code, Copilot CLI) always pipe stdin to the subprocess, so `Console.IsInputRedirected` reliably detects this case.
 - Interactive users expect help text, not a silent stdio server.
 - This is a standard .NET pattern — no platform-specific code needed.
+# Decision: Direct HTTP call for /api/codeflows endpoint
+
+**Date:** 2026-07
+**Author:** Naomi (Backend Developer)
+**Status:** Implemented
+
+## Context
+
+The Maestro team added a `/api/codeflows` endpoint returning `List<CodeflowStatus>` with forward flow and backflow subscription statuses. The PCS client NuGet (v1.1.0-beta.26155.1) has the models (`CodeflowStatus`, `CodeflowSubscriptionStatus`) but the `Codeflow` property is NOT wired up on `IProductConstructionServiceApi`. PR dotnet/arcade-services#6057 is filed to fix this.
+
+## Decision
+
+Implement a direct HTTP call via `System.Net.Http.HttpClient` in `MaestroApiClient`, bypassing the PCS client's generated API surface. Auth is replicated by:
+- **BAR token:** stored from constructor, used as Bearer header
+- **Entra ID:** `InteractiveBrowserCredential` created from the darc auth record (`~/.darc/.auth-record-{appId}`) with MSAL cache "maestro" and `DisableAutomaticAuthentication = true`
+- **Anonymous:** no auth header (API may return 401)
+
+Deserialization uses `Newtonsoft.Json` since PCS models use Newtonsoft serialization attributes.
+
+## Alternatives Considered
+
+1. **Wait for upstream PR** — Not viable; users need the endpoint now.
+2. **Extract HttpPipeline from PCS client** — `IProductConstructionServiceApi` doesn't expose the internal pipeline.
+3. **Use `DefaultAzureCredential`** — Won't find the maestro-specific MSAL cache by name.
+
+## Migration Path
+
+When dotnet/arcade-services#6057 merges and a new PCS client version is published:
+1. Replace `GetCodeflowStatusesAsync` body in `MaestroApiClient` with `_api.Codeflow.GetCodeflowStatusesAsync()`
+2. Remove `_barToken`, `_entraCredential`, `GetAccessTokenAsync()`, `CreateEntraCredential()`
+3. Remove `Newtonsoft.Json` and `Azure.Identity` using directives from `MaestroApiClient.cs`
+4. Service, MCP tool, and CLI layers remain unchanged
+
+## Impact
+
+- New MCP tool: `maestro_codeflow_statuses` (tool #20)
+- New CLI command: `codeflow-statuses`
+- 140 tests pass, 0 errors

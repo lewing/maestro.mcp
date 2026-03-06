@@ -311,5 +311,15 @@
   - `subscription-history <id>` — Get update history
   - `build-graph <buildId>` — Get dependency graph
   - `flow-graph <channelId>` — Get flow graph (--days, --include-arcade, etc.)
+  - `codeflow-statuses <repositoryUrl>` — Get codeflow status (forward/backflow) for a repo (--branch, --json, --no-cache)
   - `cache <action>` — Cache management (clear, status)
 - **Common flags:** All read commands support `--json` (structured output) and `--no-cache` (bypass cache). ConsoleAppFramework auto-maps camelCase params to `--kebab-case` CLI flags.
+
+### Codeflow statuses endpoint (2026-07)
+- **API endpoint:** `GET /api/codeflows?repositoryUrl={url}&branch={branch}&api-version=2020-02-20` at `maestro.dot.net`. Returns `List<CodeflowStatus>` with forward flow and backflow `CodeflowSubscriptionStatus` per mapping.
+- **Workaround for missing `ICodeflow`:** PCS client NuGet v1.1.0-beta.26155.1 has the models (`CodeflowStatus`, `CodeflowSubscriptionStatus`) but doesn't wire `ICodeflow` onto `IProductConstructionServiceApi`. PR dotnet/arcade-services#6057 filed to fix. Workaround: direct HTTP call via `HttpClient` with the same auth mechanism.
+- **Auth for HTTP calls:** Added `_barToken` field and `_entraCredential` (`TokenCredential?`) to `MaestroApiClient`. BAR token → Bearer header. Entra ID → `InteractiveBrowserCredential` with the darc auth record and MSAL cache "maestro", `DisableAutomaticAuthentication = true` to avoid browser popups. Anonymous → no auth header.
+- **Deserialization:** Uses `Newtonsoft.Json.JsonConvert.DeserializeObject<List<CodeflowStatus>>` since the PCS client models use Newtonsoft.Json serialization attributes.
+- **Cache key:** `codeflow-statuses:{repositoryUrl}:{branch}`, ShortTtl (5 min).
+- **Default values:** `repositoryUrl = "https://github.com/dotnet/dotnet"`, `branch = "main"` — the VMR is the primary use case.
+- **When upstream PR merges:** Replace the `GetCodeflowStatusesAsync` HTTP call in `MaestroApiClient` with `_api.Codeflow.GetCodeflowStatusesAsync()`. Remove `_barToken`, `_entraCredential`, and helper methods. The rest of the stack (service, tools, CLI) stays unchanged.

@@ -4,7 +4,7 @@
 
 # maestro.mcp — MCP server & CLI for Maestro/BAR dependency flow data
 
-An MCP server **and standalone CLI tool** that provides cached access to [Maestro/BAR](https://maestro.dot.net) (Build Asset Registry) data for the .NET build infrastructure. Exposes 19 tools for querying subscriptions, builds, channels, and health status, plus triggering subscription updates and managing cache via the Model Context Protocol. Also works as a standalone CLI (`mstro`) for humans — same cached data, same authentication, no AI required.
+An MCP server **and standalone CLI tool** that provides cached access to [Maestro/BAR](https://maestro.dot.net) (Build Asset Registry) data for the .NET build infrastructure. Exposes 20 tools for querying subscriptions, builds, channels, and health status, plus triggering subscription updates and managing cache via the Model Context Protocol. Also works as a standalone CLI (`mstro`) for humans — same cached data, same authentication, no AI required.
 
 Built with [Squad](https://github.com/bradygaster/squad) — [meet the squad](.ai-team/SQUAD.md).
 
@@ -112,6 +112,9 @@ mstro build-graph 302353
 
 # Get dependency flow graph for a channel
 mstro flow-graph 1234 --days 14
+
+# Get codeflow status (forward/backflow) for a repository
+mstro codeflow-statuses https://github.com/dotnet/dotnet --branch main
 
 # Trigger a subscription update (requires auth)
 mstro trigger-subscription <guid> 302353
@@ -230,7 +233,7 @@ Future versions may include destructive actions (delete subscription, remove def
 
 ## Available Tools
 
-The server registers **19 MCP tools** for querying and triggering Maestro/BAR operations:
+The server registers **20 MCP tools** for querying and triggering Maestro/BAR operations:
 
 | Tool Name | Description | Key Parameters |
 |-----------|-------------|-----------------|
@@ -252,6 +255,7 @@ The server registers **19 MCP tools** for querying and triggering Maestro/BAR op
 | `maestro_subscription_history` | Get update history for a subscription | `subscriptionId`: UUID; `noCache`: bypass cache |
 | `maestro_build_graph` | Get the full dependency graph for a build | `buildId`: BAR build ID; `noCache`: bypass cache |
 | `maestro_flow_graph` | Get the dependency flow graph for a channel | `channelId`: channel ID; `days`: lookback (default 7); `includeArcade`, `includeBuildTimes`, `includeDisabledSubscriptions` (optional bools); `noCache`: bypass cache |
+| `maestro_codeflow_statuses` | Get codeflow status (forward flow and backflow) for a repository and branch | `repositoryUrl`: repo URL (default: VMR); `branch`: branch name (default: main); `noCache`: bypass cache |
 | `maestro_clear_cache` | Clear the shared SQLite cache | None |
 
 ### Naming Convention

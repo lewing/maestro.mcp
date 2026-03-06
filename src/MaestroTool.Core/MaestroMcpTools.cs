@@ -686,6 +686,79 @@ public class MaestroMcpTools
         return Timestamp(noCache) + sb.ToString();
     }
 
+    [McpServerTool(Name = "maestro_codeflow_statuses", ReadOnly = true)]
+    [Description("Get codeflow status for a repository and branch. Shows forward flow and backflow subscription statuses, active PRs, and build staleness for each mapping. Defaults to the VMR (dotnet/dotnet, main).")]
+    public async Task<string> GetCodeflowStatuses(
+        [Description("Repository URL (default: https://github.com/dotnet/dotnet)")] string repositoryUrl = "https://github.com/dotnet/dotnet",
+        [Description("Branch name (default: main)")] string branch = "main",
+        [Description("Bypass cache and fetch fresh data")] bool noCache = false,
+        CancellationToken cancellationToken = default)
+    {
+        var statuses = await _service.GetCodeflowStatusesAsync(repositoryUrl, branch, noCache, cancellationToken);
+
+        if (statuses.Count == 0)
+            return $"No codeflow statuses found for {repositoryUrl} ({branch}).";
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"**Codeflow Statuses for {repositoryUrl}** (branch: `{branch}`)\n");
+        sb.AppendLine($"Found {statuses.Count} mapping(s):\n");
+
+        foreach (var status in statuses)
+        {
+            sb.AppendLine($"### {status.MappingName ?? "Unknown Mapping"}");
+            sb.AppendLine($"Repository: {status.RepositoryUrl} (`{status.RepositoryBranch}`)");
+            sb.AppendLine();
+
+            FormatFlowStatus(sb, "Forward Flow", status.ForwardFlow);
+            FormatFlowStatus(sb, "Backflow", status.Backflow);
+            sb.AppendLine("---");
+        }
+
+        return Timestamp(noCache) + sb.ToString();
+    }
+
+    private static void FormatFlowStatus(StringBuilder sb, string label, CodeflowSubscriptionStatus? flow)
+    {
+        if (flow == null)
+        {
+            sb.AppendLine($"**{label}:** _not configured_");
+            sb.AppendLine();
+            return;
+        }
+
+        sb.AppendLine($"**{label}:**");
+
+        if (flow.Subscription != null)
+        {
+            var sub = flow.Subscription;
+            sb.AppendLine($"  Subscription: `{sub.Id}`");
+            sb.AppendLine($"  {sub.SourceRepository} → {sub.TargetRepository} (`{sub.TargetBranch}`)");
+            sb.AppendLine($"  Channel: {sub.Channel?.Name ?? "N/A"} | Enabled: {sub.Enabled}");
+            if (sub.LastAppliedBuild != null)
+                sb.AppendLine($"  Last Applied Build: #{sub.LastAppliedBuild.Id} ({sub.LastAppliedBuild.DateProduced:u})");
+        }
+        else
+        {
+            sb.AppendLine($"  Subscription: _none_");
+        }
+
+        if (flow.ActivePullRequest != null)
+        {
+            var pr = flow.ActivePullRequest;
+            sb.AppendLine($"  🔄 Active PR: {pr.Url}");
+            sb.AppendLine($"    Last Update: {pr.LastUpdate:u}");
+            if (pr.HeadBranch != null)
+                sb.AppendLine($"    Head Branch: {pr.HeadBranch}");
+        }
+
+        if (flow.NewerBuildsAvailable.HasValue && flow.NewerBuildsAvailable.Value > 0)
+            sb.AppendLine($"  ⚠️ {flow.NewerBuildsAvailable.Value} newer build(s) available");
+        else if (flow.NewerBuildsAvailable.HasValue)
+            sb.AppendLine($"  ✅ Up to date");
+
+        sb.AppendLine();
+    }
+
     private static string FormatBuild(Build build)
     {
         var sb = new StringBuilder();

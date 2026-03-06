@@ -439,6 +439,15 @@ public class MaestroService
             ShortTtl);
     }
 
+    public Task<List<CodeflowStatus>> GetCodeflowStatusesAsync(string repositoryUrl, string branch, bool noCache = false, CancellationToken cancellationToken = default)
+    {
+        var key = $"codeflow-statuses:{repositoryUrl}:{branch}";
+        if (noCache) _cache.Invalidate(key);
+        return _cache.GetOrAddAsync(key,
+            () => _client.GetCodeflowStatusesAsync(repositoryUrl, branch, cancellationToken),
+            ShortTtl);
+    }
+
     private static bool IsVmrRepository(string? repoUrl) =>
         repoUrl != null && repoUrl.Contains("github.com/dotnet/dotnet", StringComparison.OrdinalIgnoreCase);
 

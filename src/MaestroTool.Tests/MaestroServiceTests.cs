@@ -2285,4 +2285,123 @@ public class MaestroServiceTests : IDisposable
 
         await _client.Received(1).GetChannelAsync(42, Arg.Any<CancellationToken>());
     }
+
+    // ================================================================
+    // Codeflow Statuses (v0.5.0)
+    // ================================================================
+
+    private static CodeflowStatus CreateCodeflowStatus(
+        string mappingName = "runtime",
+        string repoUrl = "https://github.com/dotnet/runtime",
+        string branch = "main",
+        CodeflowSubscriptionStatus? forwardFlow = null,
+        CodeflowSubscriptionStatus? backflow = null) =>
+        new()
+        {
+            MappingName = mappingName,
+            RepositoryUrl = repoUrl,
+            RepositoryBranch = branch,
+            ForwardFlow = forwardFlow,
+            Backflow = backflow
+        };
+
+    private static CodeflowSubscriptionStatus CreateCodeflowSubscriptionStatus(
+        Subscription? subscription = null,
+        TrackedPullRequest? activePr = null,
+        int? newerBuildsAvailable = null) =>
+        new()
+        {
+            Subscription = subscription,
+            ActivePullRequest = activePr,
+            NewerBuildsAvailable = newerBuildsAvailable
+        };
+
+    [Fact]
+    public async Task GetCodeflowStatuses_ReturnsCachedResult()
+    {
+        var expected = new List<CodeflowStatus> { CreateCodeflowStatus() };
+        _client.GetCodeflowStatusesAsync("https://github.com/dotnet/runtime", "main", Arg.Any<CancellationToken>())
+            .Returns(expected);
+
+        var first = await _service.GetCodeflowStatusesAsync("https://github.com/dotnet/runtime", "main");
+        var second = await _service.GetCodeflowStatusesAsync("https://github.com/dotnet/runtime", "main");
+
+        Assert.Equal(first[0].MappingName, second[0].MappingName);
+        await _client.Received(1).GetCodeflowStatusesAsync("https://github.com/dotnet/runtime", "main", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetCodeflowStatuses_NoCacheBypassesCache()
+    {
+        var first = new List<CodeflowStatus> { CreateCodeflowStatus(mappingName: "runtime-v1") };
+        var second = new List<CodeflowStatus> { CreateCodeflowStatus(mappingName: "runtime-v2") };
+
+        _client.GetCodeflowStatusesAsync("https://github.com/dotnet/runtime", "main", Arg.Any<CancellationToken>())
+            .Returns(first, second);
+
+        var result1 = await _service.GetCodeflowStatusesAsync("https://github.com/dotnet/runtime", "main");
+        var result2 = await _service.GetCodeflowStatusesAsync("https://github.com/dotnet/runtime", "main", noCache: true);
+
+        Assert.Equal("runtime-v1", result1[0].MappingName);
+        Assert.Equal("runtime-v2", result2[0].MappingName);
+        await _client.Received(2).GetCodeflowStatusesAsync("https://github.com/dotnet/runtime", "main", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetCodeflowStatuses_EmptyResult()
+    {
+        _client.GetCodeflowStatusesAsync("https://github.com/dotnet/runtime", "main", Arg.Any<CancellationToken>())
+            .Returns(new List<CodeflowStatus>());
+
+        var result = await _service.GetCodeflowStatusesAsync("https://github.com/dotnet/runtime", "main");
+
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public async Task GetCodeflowStatuses_WithForwardAndBackflow()
+    {
+        var sub = CreateSubscription();
+        var pr = CreateTrackedPullRequest("https://github.com/dotnet/dotnet/pull/9999");
+        var forwardFlow = CreateCodeflowSubscriptionStatus(subscription: sub, activePr: pr, newerBuildsAvailable: 3);
+        var backflow = CreateCodeflowSubscriptionStatus(subscription: sub, newerBuildsAvailable: 0);
+        var status = CreateCodeflowStatus(
+            mappingName: "runtime",
+            forwardFlow: forwardFlow,
+            backflow: backflow);
+
+        _client.GetCodeflowStatusesAsync("https://github.com/dotnet/runtime", "main", Arg.Any<CancellationToken>())
+            .Returns(new List<CodeflowStatus> { status });
+
+        var result = await _service.GetCodeflowStatusesAsync("https://github.com/dotnet/runtime", "main");
+
+        Assert.Single(result);
+        Assert.NotNull(result[0].ForwardFlow);
+        Assert.NotNull(result[0].Backflow);
+        Assert.True(result[0].ForwardFlow!.NewerBuildsAvailable > 0);
+        Assert.Equal(0, result[0].Backflow!.NewerBuildsAvailable);
+        Assert.Equal("https://github.com/dotnet/dotnet/pull/9999", result[0].ForwardFlow!.ActivePullRequest?.Url);
+        Assert.Null(result[0].Backflow!.ActivePullRequest);
+    }
+
+    [Fact]
+    public async Task GetCodeflowStatuses_CacheKeyIncludesRepoAndBranch()
+    {
+        var runtimeStatuses = new List<CodeflowStatus> { CreateCodeflowStatus(mappingName: "runtime") };
+        var aspnetStatuses = new List<CodeflowStatus> { CreateCodeflowStatus(mappingName: "aspnetcore") };
+
+        _client.GetCodeflowStatusesAsync("https://github.com/dotnet/runtime", "main", Arg.Any<CancellationToken>())
+            .Returns(runtimeStatuses);
+        _client.GetCodeflowStatusesAsync("https://github.com/dotnet/aspnetcore", "release/9.0", Arg.Any<CancellationToken>())
+            .Returns(aspnetStatuses);
+
+        var result1 = await _service.GetCodeflowStatusesAsync("https://github.com/dotnet/runtime", "main");
+        var result2 = await _service.GetCodeflowStatusesAsync("https://github.com/dotnet/aspnetcore", "release/9.0");
+
+        Assert.Equal("runtime", result1[0].MappingName);
+        Assert.Equal("aspnetcore", result2[0].MappingName);
+        // Both calls should hit the API since different repo/branch = different cache keys
+        await _client.Received(1).GetCodeflowStatusesAsync("https://github.com/dotnet/runtime", "main", Arg.Any<CancellationToken>());
+        await _client.Received(1).GetCodeflowStatusesAsync("https://github.com/dotnet/aspnetcore", "release/9.0", Arg.Any<CancellationToken>());
+    }
 }
