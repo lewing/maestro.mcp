@@ -115,6 +115,71 @@ public class GitHubApiClient : IGitHubApiClient
         }
     }
 
+    public async Task<List<GitHubPullRequest>?> SearchMergedPullRequestsAsync(
+        string owner, string repo, string branchPattern,
+        DateTimeOffset? since = null, CancellationToken cancellationToken = default)
+    {
+        // GitHub search query: repo:{owner}/{repo} is:pr is:merged head:{branchPattern} merged:>={since}
+        var query = $"repo:{owner}/{repo}+is:pr+is:merged+head:{Uri.EscapeDataString(branchPattern)}";
+        if (since.HasValue)
+            query += $"+merged:>={since.Value:yyyy-MM-ddTHH:mm:ssZ}";
+
+        var url = $"https://api.github.com/search/issues?q={query}&sort=updated&order=desc&per_page=10";
+
+        try
+        {
+            var response = await _httpClient.GetAsync(url, cancellationToken);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                Console.Error.WriteLine($"[maestro-mcp] GitHub search API error: {response.StatusCode} for {owner}/{repo}");
+                return null;
+            }
+
+            var json = await response.Content.ReadAsStringAsync(cancellationToken);
+            var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            if (!root.TryGetProperty("items", out var items) || items.ValueKind != JsonValueKind.Array)
+                return new List<GitHubPullRequest>();
+
+            var results = new List<GitHubPullRequest>();
+            foreach (var item in items.EnumerateArray())
+            {
+                var number = item.GetProperty("number").GetInt32();
+                var title = item.GetProperty("title").GetString() ?? "";
+                // pull_request.merged_at is available in search results
+                string? mergedAtStr = null;
+                string? headBranch = null;
+                string? mergeCommitSha = null;
+
+                if (item.TryGetProperty("pull_request", out var prNode))
+                {
+                    if (prNode.TryGetProperty("merged_at", out var mergedAtProp) && mergedAtProp.ValueKind == JsonValueKind.String)
+                        mergedAtStr = mergedAtProp.GetString();
+                    if (prNode.TryGetProperty("merge_commit_sha", out var shaProp) && shaProp.ValueKind == JsonValueKind.String)
+                        mergeCommitSha = shaProp.GetString();
+                }
+
+                // head branch isn't directly in search results; extract from title/branchPattern context
+                // We use the branchPattern as context since the search already filtered by head
+                headBranch = branchPattern;
+
+                var mergedAt = DateTimeOffset.TryParse(mergedAtStr, out var parsed) ? parsed : DateTimeOffset.MinValue;
+                if (mergedAt == DateTimeOffset.MinValue) continue; // skip if no merged_at
+
+                results.Add(new GitHubPullRequest(number, title, headBranch, mergeCommitSha, mergedAt));
+            }
+
+            return results;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[maestro-mcp] GitHub search API exception: {ex.Message}");
+            return null;
+        }
+    }
+
     private static IReadOnlyList<CommitInfo>? ParseCommits(JsonElement root)
     {
         if (!root.TryGetProperty("commits", out var commitsArray) || commitsArray.ValueKind != JsonValueKind.Array)

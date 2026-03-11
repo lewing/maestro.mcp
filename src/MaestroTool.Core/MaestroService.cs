@@ -139,6 +139,7 @@ public class MaestroService
         string targetRepository,
         bool noCache = false,
         bool includeCommitDetails = false,
+        bool validate = false,
         CancellationToken cancellationToken = default)
     {
         var subscriptions = await GetSubscriptionsAsync(targetRepository: targetRepository, noCache: noCache, cancellationToken: cancellationToken);
@@ -242,6 +243,20 @@ public class MaestroService
                     }
                 }
 
+                // Cross-validation: only for stale GitHub-hosted target repos when validate=true
+                ValidationResult? validation = null;
+                if (isStale && validate && _gitHubClient != null && IsGitHubRepository(sub.TargetRepository))
+                {
+                    validation = await CrossValidateSubscriptionAsync(sub, lastApplied, noCache, cancellationToken);
+                }
+
+                // Canary check: cheap heuristic for stuck bookkeeping (runs even without validate=true)
+                string? canaryWarning = null;
+                if (isStale)
+                {
+                    canaryWarning = await CheckCanaryWarningAsync(sub.Id, noCache, cancellationToken);
+                }
+
                 results.Add(new SubscriptionHealthResult(
                     SubscriptionId: sub.Id,
                     SourceRepository: sub.SourceRepository,
@@ -255,7 +270,9 @@ public class MaestroService
                     LatestBuildId: latestBuild?.Id,
                     LatestBuildDate: latestBuild?.DateProduced,
                     CommitsBehind: commitsBehind,
-                    RecentCommits: recentCommits
+                    RecentCommits: recentCommits,
+                    Validation: validation,
+                    CanaryWarning: canaryWarning
                 ));
             }
             catch (Exception ex)
@@ -448,6 +465,109 @@ public class MaestroService
             ShortTtl);
     }
 
+    /// <summary>
+    /// Cross-validate a stale subscription against GitHub ground truth.
+    /// Checks commit reachability and searches for merged codeflow PRs.
+    /// </summary>
+    private async Task<ValidationResult?> CrossValidateSubscriptionAsync(
+        Subscription sub, Build? lastApplied,
+        bool noCache, CancellationToken cancellationToken)
+    {
+        if (_gitHubClient == null) return null;
+
+        var targetParsed = ParseGitHubUrl(sub.TargetRepository);
+        if (!targetParsed.HasValue) return null;
+        var (targetOwner, targetRepo) = targetParsed.Value;
+
+        var cacheKey = $"validation:{sub.Id}:{lastApplied?.Id}";
+        if (noCache) _cache.Invalidate(cacheKey);
+
+        return await _cache.GetOrAddAsync(cacheKey, async () =>
+        {
+            var commitReachable = true;
+            var mergedPrCount = 0;
+            List<string>? mergedPrUrls = null;
+            var anomalyDetected = false;
+            string? anomalyReason = null;
+
+            // 1. Commit reachability check on the SOURCE repo
+            if (lastApplied != null && !string.IsNullOrEmpty(lastApplied.Commit) && IsGitHubRepository(sub.SourceRepository))
+            {
+                var sourceParsed = ParseGitHubUrl(sub.SourceRepository);
+                if (sourceParsed.HasValue)
+                {
+                    var (srcOwner, srcRepo) = sourceParsed.Value;
+                    // Compare lastApplied.Commit against HEAD of target branch
+                    // If 404 → commit not reachable (corrupted bookkeeping)
+                    var compareResult = await _gitHubClient.CompareCommitsAsync(
+                        srcOwner, srcRepo, lastApplied.Commit, "HEAD", cancellationToken);
+                    commitReachable = compareResult != null;
+                    if (!commitReachable)
+                    {
+                        anomalyDetected = true;
+                        anomalyReason = $"LastAppliedBuild commit {lastApplied.Commit[..Math.Min(7, lastApplied.Commit.Length)]} not reachable in {sub.SourceRepository}";
+                    }
+                }
+            }
+
+            // 2. PR ground truth check: search for merged PRs in target repo
+            //    that match codeflow branch patterns from the source repo
+            if (lastApplied?.DateProduced != null)
+            {
+                // Extract source repo short name for branch pattern matching
+                // e.g. "https://github.com/dotnet/emsdk" → "emsdk"
+                var sourceParsed = ParseGitHubUrl(sub.SourceRepository);
+                var branchPattern = sourceParsed.HasValue ? sourceParsed.Value.repo : null;
+
+                if (branchPattern != null)
+                {
+                    Console.Error.WriteLine($"[maestro-mcp] Cross-validation: searching merged PRs in {targetOwner}/{targetRepo} with head:{branchPattern} since {lastApplied.DateProduced:u}");
+                    var mergedPrs = await _gitHubClient.SearchMergedPullRequestsAsync(
+                        targetOwner, targetRepo, branchPattern,
+                        lastApplied.DateProduced, cancellationToken);
+
+                    if (mergedPrs is { Count: > 0 })
+                    {
+                        mergedPrCount = mergedPrs.Count;
+                        mergedPrUrls = mergedPrs
+                            .Select(pr => $"https://github.com/{targetOwner}/{targetRepo}/pull/{pr.Number}")
+                            .ToList();
+                        anomalyDetected = true;
+                        anomalyReason = (anomalyReason != null ? anomalyReason + "; " : "")
+                            + $"{mergedPrCount} PR(s) merged in target repo since LastAppliedDate ({lastApplied.DateProduced:u}) — bookkeeping likely stuck";
+                    }
+                }
+            }
+
+            return new ValidationResult(commitReachable, mergedPrCount, mergedPrUrls, anomalyDetected, anomalyReason);
+        }, MediumTtl);
+    }
+
+    /// <summary>
+    /// Canary warning: cheaply check if a subscription has suspicious history
+    /// (many consecutive failures with zero successes → possible stuck bookkeeping).
+    /// </summary>
+    private async Task<string?> CheckCanaryWarningAsync(Guid subscriptionId, bool noCache, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var history = await GetSubscriptionHistoryAsync(subscriptionId, noCache, cancellationToken);
+            if (history.Count < 10) return null;
+
+            var hasAnySuccess = history.Any(h => h.Success);
+            if (!hasAnySuccess)
+            {
+                return $"⚠️ Possible bookkeeping anomaly: {history.Count} consecutive failures with no recorded successes";
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[maestro-mcp] Canary check failed for {subscriptionId}: {ex.Message}");
+        }
+
+        return null;
+    }
+
     private static bool IsVmrRepository(string? repoUrl) =>
         repoUrl != null && repoUrl.Contains("github.com/dotnet/dotnet", StringComparison.OrdinalIgnoreCase);
 
@@ -526,7 +646,17 @@ public record SubscriptionHealthResult(
     DateTimeOffset? LatestBuildDate,
     string? Error = null,
     int? CommitsBehind = null,
-    IReadOnlyList<CommitInfo>? RecentCommits = null
+    IReadOnlyList<CommitInfo>? RecentCommits = null,
+    ValidationResult? Validation = null,
+    string? CanaryWarning = null
+);
+
+public record ValidationResult(
+    bool CommitReachable,
+    int MergedPrsSinceLastApplied,
+    List<string>? MergedPrUrls,
+    bool BookkeepingAnomalyDetected,
+    string? AnomalyReason
 );
 
 public record BuildFreshnessResult(

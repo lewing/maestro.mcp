@@ -48,6 +48,17 @@
 - **Windows-only caveat**: The Unix file permission test is conditional on OS. Since we're running tests on Windows, the permission assertions are wrapped in `if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())`. On Windows, the test just verifies directory creation. This is acceptable because the production code also has this OS guard — Windows user profile directories are already secure.
 - **Directory creation edge case**: The custom path test intentionally uses a deeply nested path that doesn't exist (`Path.Combine(tempPath, guid, "subdir", "cache.db")`). This exercises `Directory.CreateDirectory(dir)` which recursively creates parent directories. Cleanup uses `Directory.Delete(rootDir, recursive: true)` to remove the entire tree.
 
+### 2025-07-18 — Cross-validation (Phase 1) tests
+
+- **8 new tests written** (148 total, all passing) covering Naomi's Phase 1 cross-validation for `maestro_subscription_health`.
+- **Cross-validation guard logic**: `CrossValidateSubscriptionAsync` is gated on `isStale && validate && _gitHubClient != null && IsGitHubRepository(sub.TargetRepository)` — note it checks the **target** repo, not the source. Tests for AzDO target repos correctly verify validation is skipped.
+- **Commit reachability check**: The validation compares `lastApplied.Commit` against `"HEAD"` (not the latest build commit). This is important for mock setup — `CompareCommitsAsync` must be mocked with `"HEAD"` as the headSha for the validation path, and with the actual latest commit for the commitsBehind path.
+- **PR ground truth**: `SearchMergedPullRequestsAsync` searches the **target** repo (not source) for merged PRs matching the source repo name as a branch pattern, since `lastApplied.DateProduced`. Any merged PRs found = anomaly detected.
+- **Canary warning**: `CheckCanaryWarningAsync` runs on **all stale subscriptions** regardless of `validate` flag. Threshold is `history.Count >= 10` with `!history.Any(h => h.Success)`. Result goes to separate `CanaryWarning` string field, not `Validation`.
+- **Helper pattern**: Created `SetupStaleGitHubSubscription` tuple-returning helper to reduce boilerplate across all 8 tests. Also added `CreateHistoryItem` factory for `SubscriptionHistoryItem` instances.
+- **`ValidationResult` record**: Has `CommitReachable`, `MergedPrsSinceLastApplied`, `MergedPrUrls`, `BookkeepingAnomalyDetected`, `AnomalyReason`. `SubscriptionHealthResult` has both `Validation` and `CanaryWarning` as optional fields.
+- **`GitHubPullRequest` record**: `MergeCommitSha` is nullable (`string?`), unlike the task spec which had it as non-nullable.
+
 ### 2025-07-15 — Security tests written for threat model fixes
 
 - **15 new security-focused tests written** (67 total: 65 passing, 2 expected failures).

@@ -2404,4 +2404,296 @@ public class MaestroServiceTests : IDisposable
         await _client.Received(1).GetCodeflowStatusesAsync("https://github.com/dotnet/runtime", "main", Arg.Any<CancellationToken>());
         await _client.Received(1).GetCodeflowStatusesAsync("https://github.com/dotnet/aspnetcore", "release/9.0", Arg.Any<CancellationToken>());
     }
+
+    // ================================================================
+    // Cross-Validation (Phase 1)
+    // ================================================================
+
+    private MaestroService CreateServiceWithGitHub(IGitHubApiClient gitHubClient) =>
+        new MaestroService(_client, _cache, gitHubClient);
+
+    private static SubscriptionHistoryItem CreateHistoryItem(Guid subId, bool success, int minutesAgo = 0) =>
+        new(DateTimeOffset.UtcNow.AddMinutes(-minutesAgo), success: success, subscriptionId: subId,
+            errorMessage: success ? "" : "error", action: "UpdateAssets", retryUrl: "");
+
+    /// <summary>
+    /// Helper: set up a stale GitHub subscription scenario and return (service, sub, channel) for validation tests.
+    /// </summary>
+    private (MaestroService service, Subscription sub, Channel channel, Build lastApplied, Build latestBuild) SetupStaleGitHubSubscription(
+        IGitHubApiClient mockGitHub,
+        string source = "https://github.com/dotnet/runtime",
+        string target = "https://github.com/dotnet/dotnet")
+    {
+        var channel = CreateChannel(1, ".NET 10");
+        var lastApplied = CreateBuild(id: 100, gitHubRepo: source, commit: "aaa111",
+            date: DateTimeOffset.UtcNow.AddDays(-3));
+        var latestBuild = CreateBuild(id: 105, gitHubRepo: source, commit: "bbb222");
+        var sub = CreateSubscription(source: source, target: target, channel: channel, lastApplied: lastApplied);
+
+        var service = CreateServiceWithGitHub(mockGitHub);
+
+        _client.ListSubscriptionsAsync(null, target, null, true, Arg.Any<CancellationToken>())
+            .Returns(new List<Subscription> { sub });
+        _client.GetLatestBuildAsync(sub.SourceRepository, channel.Id, Arg.Any<CancellationToken>())
+            .Returns(latestBuild);
+
+        return (service, sub, channel, lastApplied, latestBuild);
+    }
+
+    [Fact]
+    public async Task SubscriptionHealth_WithValidate_DetectsStuckBookkeeping()
+    {
+        // Arrange: stale subscription with GitHub target, GitHub shows 3 merged PRs since last applied date
+        var mockGitHub = Substitute.For<IGitHubApiClient>();
+        var (service, sub, channel, lastApplied, latestBuild) = SetupStaleGitHubSubscription(mockGitHub);
+
+        // Commit reachability check: compare lastApplied commit against HEAD in source repo
+        mockGitHub.CompareCommitsAsync("dotnet", "runtime", "aaa111", "HEAD", Arg.Any<CancellationToken>())
+            .Returns(new GitHubCompareResult(AheadBy: 10, BehindBy: 0, Status: "ahead", TotalCommits: 10));
+
+        // Also mock the commitsBehind compare (source repo, lastApplied..latest)
+        mockGitHub.CompareCommitsAsync("dotnet", "runtime", "aaa111", "bbb222", Arg.Any<CancellationToken>())
+            .Returns(new GitHubCompareResult(AheadBy: 10, BehindBy: 0, Status: "ahead", TotalCommits: 10));
+
+        // 3 merged PRs found in TARGET repo since last applied date
+        var mergedPrs = new List<GitHubPullRequest>
+        {
+            new(Number: 101, Title: "Update deps", HeadBranch: "darc-main-abc", MergeCommitSha: "c1", MergedAt: DateTimeOffset.UtcNow.AddDays(-2)),
+            new(Number: 102, Title: "Update deps 2", HeadBranch: "darc-main-def", MergeCommitSha: "c2", MergedAt: DateTimeOffset.UtcNow.AddDays(-1)),
+            new(Number: 103, Title: "Update deps 3", HeadBranch: "darc-main-ghi", MergeCommitSha: "c3", MergedAt: DateTimeOffset.UtcNow),
+        };
+        mockGitHub.SearchMergedPullRequestsAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
+            Arg.Any<DateTimeOffset?>(), Arg.Any<CancellationToken>())
+            .Returns(mergedPrs);
+
+        // Act
+        var results = await service.GetSubscriptionHealthAsync(sub.TargetRepository, validate: true);
+
+        // Assert
+        Assert.Single(results);
+        var result = results[0];
+        Assert.True(result.IsStale);
+        Assert.NotNull(result.Validation);
+        Assert.True(result.Validation!.CommitReachable);
+        Assert.True(result.Validation.BookkeepingAnomalyDetected);
+        Assert.Equal(3, result.Validation.MergedPrsSinceLastApplied);
+    }
+
+    [Fact]
+    public async Task SubscriptionHealth_WithValidate_NoAnomalyWhenNoPRsMerged()
+    {
+        // Arrange: stale subscription, but no PRs merged since last applied date
+        var mockGitHub = Substitute.For<IGitHubApiClient>();
+        var (service, sub, channel, lastApplied, latestBuild) = SetupStaleGitHubSubscription(mockGitHub);
+
+        // Commit reachability: compare against HEAD in source repo
+        mockGitHub.CompareCommitsAsync("dotnet", "runtime", "aaa111", "HEAD", Arg.Any<CancellationToken>())
+            .Returns(new GitHubCompareResult(AheadBy: 5, BehindBy: 0, Status: "ahead", TotalCommits: 5));
+
+        // CommitsBehind compare (source repo, lastApplied..latest)
+        mockGitHub.CompareCommitsAsync("dotnet", "runtime", "aaa111", "bbb222", Arg.Any<CancellationToken>())
+            .Returns(new GitHubCompareResult(AheadBy: 10, BehindBy: 0, Status: "ahead", TotalCommits: 10));
+
+        // No merged PRs
+        mockGitHub.SearchMergedPullRequestsAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
+            Arg.Any<DateTimeOffset?>(), Arg.Any<CancellationToken>())
+            .Returns(new List<GitHubPullRequest>());
+
+        // Act
+        var results = await service.GetSubscriptionHealthAsync(sub.TargetRepository, validate: true);
+
+        // Assert
+        Assert.Single(results);
+        var result = results[0];
+        Assert.NotNull(result.Validation);
+        Assert.False(result.Validation!.BookkeepingAnomalyDetected);
+        Assert.Equal(0, result.Validation.MergedPrsSinceLastApplied);
+        Assert.True(result.Validation.CommitReachable);
+    }
+
+    [Fact]
+    public async Task SubscriptionHealth_WithValidate_DetectsUnreachableCommit()
+    {
+        // Arrange: stale subscription, GitHub compare returns null (404 — commit not found)
+        var mockGitHub = Substitute.For<IGitHubApiClient>();
+        var (service, sub, channel, lastApplied, latestBuild) = SetupStaleGitHubSubscription(mockGitHub);
+
+        // All compare calls return null — simulating 404 / unreachable commit
+        mockGitHub.CompareCommitsAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns((GitHubCompareResult?)null);
+
+        // Act
+        var results = await service.GetSubscriptionHealthAsync(sub.TargetRepository, validate: true);
+
+        // Assert
+        Assert.Single(results);
+        var result = results[0];
+        Assert.NotNull(result.Validation);
+        Assert.False(result.Validation!.CommitReachable);
+        Assert.True(result.Validation.BookkeepingAnomalyDetected);
+    }
+
+    [Fact]
+    public async Task SubscriptionHealth_WithoutValidate_NoValidation()
+    {
+        // Arrange: stale subscription, but validate=false (default)
+        var mockGitHub = Substitute.For<IGitHubApiClient>();
+        var (service, sub, channel, lastApplied, latestBuild) = SetupStaleGitHubSubscription(mockGitHub);
+
+        // CommitsBehind compare still runs (it's separate from validation)
+        mockGitHub.CompareCommitsAsync("dotnet", "runtime", "aaa111", "bbb222", Arg.Any<CancellationToken>())
+            .Returns(new GitHubCompareResult(AheadBy: 10, BehindBy: 0, Status: "ahead", TotalCommits: 10));
+
+        // Act — default validate=false
+        var results = await service.GetSubscriptionHealthAsync(sub.TargetRepository);
+
+        // Assert
+        Assert.Single(results);
+        Assert.Null(results[0].Validation);
+
+        // SearchMergedPullRequestsAsync should NOT be called when validate=false
+        await mockGitHub.DidNotReceive().SearchMergedPullRequestsAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
+            Arg.Any<DateTimeOffset?>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task SubscriptionHealth_ValidateSkipsNonGitHubRepos()
+    {
+        // Arrange: stale subscription with non-GitHub TARGET repo, validate=true
+        // Validation checks IsGitHubRepository(sub.TargetRepository) — so AzDO target = skipped
+        var channel = CreateChannel(1, ".NET 10");
+        var lastApplied = CreateBuild(id: 100, commit: "aaa111", date: DateTimeOffset.UtcNow.AddDays(-3));
+        var latestBuild = CreateBuild(id: 105, commit: "bbb222");
+
+        var azDoTarget = "https://dev.azure.com/dnceng/internal/_git/dotnet-dotnet";
+        var sub = CreateSubscription(
+            source: "https://github.com/dotnet/runtime",
+            target: azDoTarget,
+            channel: channel,
+            lastApplied: lastApplied);
+
+        var mockGitHub = Substitute.For<IGitHubApiClient>();
+        var service = CreateServiceWithGitHub(mockGitHub);
+
+        _client.ListSubscriptionsAsync(null, azDoTarget, null, true, Arg.Any<CancellationToken>())
+            .Returns(new List<Subscription> { sub });
+        _client.GetLatestBuildAsync(sub.SourceRepository, channel.Id, Arg.Any<CancellationToken>())
+            .Returns(latestBuild);
+
+        // Act
+        var results = await service.GetSubscriptionHealthAsync(azDoTarget, validate: true);
+
+        // Assert: validation should be skipped for non-GitHub target repos
+        Assert.Single(results);
+        Assert.True(results[0].IsStale);
+        Assert.Null(results[0].Validation);
+
+        // SearchMergedPullRequestsAsync should NOT be called
+        await mockGitHub.DidNotReceive().SearchMergedPullRequestsAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
+            Arg.Any<DateTimeOffset?>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task SubscriptionHealth_ValidateSkipsCurrentSubscriptions()
+    {
+        // Arrange: subscription is current (not stale), validate=true
+        var channel = CreateChannel(1, ".NET 10");
+        var build = CreateBuild(id: 100, gitHubRepo: "https://github.com/dotnet/runtime", commit: "aaa111");
+        var sub = CreateSubscription(
+            source: "https://github.com/dotnet/runtime",
+            target: "https://github.com/dotnet/dotnet",
+            channel: channel,
+            lastApplied: build);
+
+        var mockGitHub = Substitute.For<IGitHubApiClient>();
+        var service = CreateServiceWithGitHub(mockGitHub);
+
+        _client.ListSubscriptionsAsync(null, "https://github.com/dotnet/dotnet", null, true, Arg.Any<CancellationToken>())
+            .Returns(new List<Subscription> { sub });
+        // Same build = current subscription
+        _client.GetLatestBuildAsync(sub.SourceRepository, channel.Id, Arg.Any<CancellationToken>())
+            .Returns(build);
+
+        // Act
+        var results = await service.GetSubscriptionHealthAsync("https://github.com/dotnet/dotnet", validate: true);
+
+        // Assert: validation should be skipped for current (non-stale) subscriptions
+        Assert.Single(results);
+        Assert.False(results[0].IsStale);
+        Assert.Null(results[0].Validation);
+
+        // No validation API calls should have been made
+        await mockGitHub.DidNotReceive().SearchMergedPullRequestsAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
+            Arg.Any<DateTimeOffset?>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task SubscriptionHealth_CanaryWarning_DetectsSuspiciousHistory()
+    {
+        // Arrange: stale subscription with 15 consecutive failures (0 successes)
+        var mockGitHub = Substitute.For<IGitHubApiClient>();
+        var (service, sub, channel, lastApplied, latestBuild) = SetupStaleGitHubSubscription(mockGitHub);
+
+        // Mock both compare calls (commitsBehind + validation reachability)
+        mockGitHub.CompareCommitsAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new GitHubCompareResult(AheadBy: 10, BehindBy: 0, Status: "ahead", TotalCommits: 10));
+
+        mockGitHub.SearchMergedPullRequestsAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
+            Arg.Any<DateTimeOffset?>(), Arg.Any<CancellationToken>())
+            .Returns(new List<GitHubPullRequest>());
+
+        // 15 consecutive failure history items (> 10 threshold, 0 successes)
+        var historyItems = Enumerable.Range(0, 15)
+            .Select(i => CreateHistoryItem(sub.Id, success: false, minutesAgo: i * 5))
+            .ToList();
+
+        _client.GetSubscriptionHistoryAsync(sub.Id, null, null, Arg.Any<CancellationToken>())
+            .Returns(historyItems);
+
+        // Act — canary runs even without validate=true on stale subs
+        var results = await service.GetSubscriptionHealthAsync(sub.TargetRepository);
+
+        // Assert: CanaryWarning field should be populated
+        Assert.Single(results);
+        var result = results[0];
+        Assert.True(result.IsStale);
+        Assert.NotNull(result.CanaryWarning);
+        Assert.Contains("15", result.CanaryWarning);
+        Assert.Contains("failure", result.CanaryWarning, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task SubscriptionHealth_CanaryWarning_NotTriggeredWithFewFailures()
+    {
+        // Arrange: stale subscription with only 3 failures (below 10 threshold)
+        var mockGitHub = Substitute.For<IGitHubApiClient>();
+        var (service, sub, channel, lastApplied, latestBuild) = SetupStaleGitHubSubscription(mockGitHub);
+
+        // Mock compare calls
+        mockGitHub.CompareCommitsAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new GitHubCompareResult(AheadBy: 10, BehindBy: 0, Status: "ahead", TotalCommits: 10));
+
+        // Only 3 failures — below the 10+ threshold
+        var historyItems = Enumerable.Range(0, 3)
+            .Select(i => CreateHistoryItem(sub.Id, success: false, minutesAgo: i * 5))
+            .ToList();
+
+        _client.GetSubscriptionHistoryAsync(sub.Id, null, null, Arg.Any<CancellationToken>())
+            .Returns(historyItems);
+
+        // Act — canary runs on all stale subs
+        var results = await service.GetSubscriptionHealthAsync(sub.TargetRepository);
+
+        // Assert: no canary warning for only 3 failures (below 10 threshold)
+        Assert.Single(results);
+        var result = results[0];
+        Assert.True(result.IsStale);
+        Assert.Null(result.CanaryWarning);
+    }
 }

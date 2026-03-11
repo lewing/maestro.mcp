@@ -325,3 +325,19 @@
 - **When upstream PR merges:** Replace the `GetCodeflowStatusesAsync` HTTP call in `MaestroApiClient` with `_api.Codeflow.GetCodeflowStatusesAsync()`. Remove `_barToken`, `_entraCredential`, and helper methods. The rest of the stack (service, tools, CLI) stays unchanged.
 
 📌 Team update (2026-03-11): Cross-validation strategies for subscription health proposed by Holden — Phase 1 targets PR ground truth and commit reachability validation
+
+### Cross-validation for subscription health (Phase 1) (2026-03-11)
+- **Added `SearchMergedPullRequestsAsync`** to `IGitHubApiClient`/`GitHubApiClient` — uses GitHub search API (`/search/issues`) to find merged PRs in a target repo matching codeflow head branch patterns. Returns `List<GitHubPullRequest>` with number, title, merge commit SHA, and merged date.
+- **Added `GitHubPullRequest` record** to `IGitHubApiClient.cs` alongside existing `CommitInfo`/`GitHubCompareResult`.
+- **Added `ValidationResult` record** to `MaestroService.cs` — captures commit reachability, merged PR count/URLs, and whether bookkeeping anomaly was detected.
+- **Extended `SubscriptionHealthResult`** with two new optional fields: `Validation` (cross-validation results) and `CanaryWarning` (cheap anomaly heuristic).
+- **Cross-validation logic** in `CrossValidateSubscriptionAsync`: (a) checks commit reachability via existing `CompareCommitsAsync` on the source repo; (b) searches for merged PRs in the target repo matching the source repo name as branch pattern, merged after `LastAppliedDate`.
+- **Canary warning** via `CheckCanaryWarningAsync`: when stale, fetches subscription history and emits a warning if 10+ entries with zero recorded successes. Runs even without `validate=true` since it uses already-cached data.
+- **Key design decisions**:
+  - `validate=false` default — no performance impact on normal usage
+  - Validation results cached at `MediumTtl` (15 min) — ground truth changes slowly
+  - Only GitHub-hosted target repos validated in Phase 1 (AzDO skipped)
+  - Branch pattern matching uses source repo short name (e.g., "emsdk" from `dotnet/emsdk`) — simple but effective for codeflow PRs
+  - Rate limiting: only stale subscriptions are validated, not all
+  - Search API returns max 10 results per query, sufficient for anomaly detection
+- **MCP tool output format** includes emoji-coded cross-validation section and canary warning when applicable.

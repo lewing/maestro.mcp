@@ -246,9 +246,10 @@ public class MaestroMcpTools
         [Description("Target repository URL (e.g. https://github.com/dotnet/dotnet)")] string targetRepository,
         [Description("Bypass cache and fetch fresh data")] bool noCache = false,
         [Description("Include recent commit details (SHA, message, author, date) for stale subscriptions")] bool includeCommitDetails = false,
+        [Description("Cross-validate stale subscriptions against GitHub ground truth (PR activity, commit reachability). Slower but detects stuck bookkeeping.")] bool validate = false,
         CancellationToken cancellationToken = default)
     {
-        var results = await _service.GetSubscriptionHealthAsync(targetRepository, noCache, includeCommitDetails, cancellationToken);
+        var results = await _service.GetSubscriptionHealthAsync(targetRepository, noCache, includeCommitDetails, validate, cancellationToken);
 
         if (results.Count == 0)
             return $"No active subscriptions found targeting {targetRepository}.";
@@ -290,6 +291,32 @@ public class MaestroMcpTools
                 {
                     sb.AppendLine($"    `{c.Sha}` {c.Message} ({c.Author}, {c.Date:yyyy-MM-dd})");
                 }
+            }
+
+            if (r.Validation != null)
+            {
+                sb.AppendLine("  🔍 Cross-validation:");
+                sb.AppendLine($"    {(r.Validation.CommitReachable ? "✅" : "❌")} Commit reachable: {(r.Validation.CommitReachable ? "Yes" : "No")}");
+                if (r.Validation.MergedPrsSinceLastApplied > 0)
+                {
+                    var prRefs = r.Validation.MergedPrUrls != null
+                        ? string.Join(", ", r.Validation.MergedPrUrls.Select(u => $"#{u.Split('/').Last()}"))
+                        : "";
+                    sb.AppendLine($"    ⚠️ PR activity: {r.Validation.MergedPrsSinceLastApplied} PR(s) merged since last applied ({prRefs})");
+                }
+                else
+                {
+                    sb.AppendLine("    ✅ PR activity: No merged PRs found since last applied");
+                }
+                if (r.Validation.BookkeepingAnomalyDetected)
+                {
+                    sb.AppendLine($"    → Bookkeeping appears STUCK — {r.Validation.AnomalyReason}");
+                }
+            }
+
+            if (r.CanaryWarning != null)
+            {
+                sb.AppendLine($"  {r.CanaryWarning}");
             }
 
             sb.AppendLine();
