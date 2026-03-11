@@ -341,3 +341,18 @@
   - Rate limiting: only stale subscriptions are validated, not all
   - Search API returns max 10 results per query, sufficient for anomaly detection
 - **MCP tool output format** includes emoji-coded cross-validation section and canary warning when applicable.
+
+---
+
+## 2026-03-11 - Phase 1 Cross-Validation Implementation
+
+**Decision Merged:** Phase 1 Cross-Validation Implementation Choices (2026-03-11)
+
+Phase 1 cross-validation for subscription health completed. Decisions now in decisions.md:
+- Branch pattern matching uses source repo short name
+- Commit reachability checks the SOURCE repo
+- Canary warning runs unconditionally for stale subscriptions  
+- Validation results cached at MediumTtl (15 min)
+- GitHub search API capped at 10 results
+
+Affected work: `maestro_subscription_health` tool now supports `validate=true` parameter.
