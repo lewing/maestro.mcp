@@ -5,11 +5,12 @@ public interface IGitHubApiClient
     Task<GitHubCompareResult?> CompareCommitsAsync(string owner, string repo, string baseSha, string headSha, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Search for merged PRs in a target repo matching a head branch pattern.
+    /// Search for merged PRs in a target repo matching a source repo name in the title.
     /// Uses the GitHub search API to find codeflow PRs merged after a given date.
+    /// Codeflow PR titles follow the pattern "[branch] Source code updates from org/repo".
     /// </summary>
     Task<List<GitHubPullRequest>?> SearchMergedPullRequestsAsync(
-        string owner, string repo, string branchPattern,
+        string owner, string repo, string sourceRepoFullName,
         DateTimeOffset? since = null, CancellationToken cancellationToken = default);
 }
 

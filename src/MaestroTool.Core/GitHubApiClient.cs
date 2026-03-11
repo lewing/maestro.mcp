@@ -116,11 +116,13 @@ public class GitHubApiClient : IGitHubApiClient
     }
 
     public async Task<List<GitHubPullRequest>?> SearchMergedPullRequestsAsync(
-        string owner, string repo, string branchPattern,
+        string owner, string repo, string sourceRepoFullName,
         DateTimeOffset? since = null, CancellationToken cancellationToken = default)
     {
-        // GitHub search query: repo:{owner}/{repo} is:pr is:merged head:{branchPattern} merged:>={since}
-        var query = $"repo:{owner}/{repo}+is:pr+is:merged+head:{Uri.EscapeDataString(branchPattern)}";
+        // GitHub search: find codeflow PRs by title pattern
+        // Codeflow PRs are titled "[branch] Source code updates from org/repo"
+        var titleSearch = Uri.EscapeDataString($"Source code updates from {sourceRepoFullName}");
+        var query = $"repo:{owner}/{repo}+is:pr+is:merged+{titleSearch}+in:title";
         if (since.HasValue)
             query += $"+merged:>={since.Value:yyyy-MM-ddTHH:mm:ssZ}";
 
@@ -161,9 +163,8 @@ public class GitHubApiClient : IGitHubApiClient
                         mergeCommitSha = shaProp.GetString();
                 }
 
-                // head branch isn't directly in search results; extract from title/branchPattern context
-                // We use the branchPattern as context since the search already filtered by head
-                headBranch = branchPattern;
+                // head branch isn't directly in search results; we searched by title
+                headBranch = "";
 
                 var mergedAt = DateTimeOffset.TryParse(mergedAtStr, out var parsed) ? parsed : DateTimeOffset.MinValue;
                 if (mergedAt == DateTimeOffset.MinValue) continue; // skip if no merged_at

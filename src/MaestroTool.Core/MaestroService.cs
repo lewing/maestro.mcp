@@ -511,19 +511,19 @@ public class MaestroService
             }
 
             // 2. PR ground truth check: search for merged PRs in target repo
-            //    that match codeflow branch patterns from the source repo
+            //    matching codeflow title pattern "Source code updates from org/repo"
             if (lastApplied?.DateProduced != null)
             {
-                // Extract source repo short name for branch pattern matching
-                // e.g. "https://github.com/dotnet/emsdk" → "emsdk"
+                // Extract source repo full name for title matching
+                // e.g. "https://github.com/dotnet/emsdk" → "dotnet/emsdk"
                 var sourceParsed = ParseGitHubUrl(sub.SourceRepository);
-                var branchPattern = sourceParsed.HasValue ? sourceParsed.Value.repo : null;
+                var sourceFullName = sourceParsed.HasValue ? $"{sourceParsed.Value.owner}/{sourceParsed.Value.repo}" : null;
 
-                if (branchPattern != null)
+                if (sourceFullName != null)
                 {
-                    Console.Error.WriteLine($"[maestro-mcp] Cross-validation: searching merged PRs in {targetOwner}/{targetRepo} with head:{branchPattern} since {lastApplied.DateProduced:u}");
+                    Console.Error.WriteLine($"[maestro-mcp] Cross-validation: searching merged PRs in {targetOwner}/{targetRepo} with title matching \"{sourceFullName}\" since {lastApplied.DateProduced:u}");
                     var mergedPrs = await _gitHubClient.SearchMergedPullRequestsAsync(
-                        targetOwner, targetRepo, branchPattern,
+                        targetOwner, targetRepo, sourceFullName,
                         lastApplied.DateProduced, cancellationToken);
 
                     if (mergedPrs is { Count: > 0 })
