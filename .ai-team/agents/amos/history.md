@@ -182,3 +182,5 @@
 - **Pre-existing flaky test**: `GetRecentAction_ReturnsNull_AfterCooldownExpires` fails intermittently due to timing (50ms TTL + 100ms delay not always sufficient). Not related to codeflow changes.
 
 📌 Team update (2025-07-16): 5 codeflow status tests passing. NewerBuildsAvailable is int? not bool? — discovered via reflection on PCS NuGet package.
+
+📌 Team update (2026-03-11): Cross-validation strategies for subscription health proposed by Holden — Phase 1 targets PR ground truth and commit reachability validation

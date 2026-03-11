@@ -2815,3 +2815,501 @@ When dotnet/arcade-services#6057 merges and a new PCS client version is publishe
 - New MCP tool: `maestro_codeflow_statuses` (tool #20)
 - New CLI command: `codeflow-statuses`
 - 140 tests pass, 0 errors
+# Cross-Validation Strategies for Subscription Health
+
+### 2026-03-11: Cross-validation strategies for subscription health
+**By:** Holden  
+**What:** Architecture analysis of cross-validation approaches to detect when Maestro's subscription bookkeeping diverges from ground truth  
+**Why:** Session 55857d51 exposed that Maestro's `LastAppliedBuildId` can get stuck when exceptions bypass state clearing in `PullRequestUpdater.cs`, and the `Success` field is never set to `true`. Both `maestro_subscription_health` and `maestro_codeflow_statuses` are vulnerable to reporting stale data.
+
+---
+
+## Problem Statement
+
+**Current vulnerability:** Maestro's subscription bookkeeping can be wrong in two ways:
+1. **`LastAppliedBuildId` gets stuck** — When `GetLastCodeflownBuild()` throws on null `BarId` after merge, `ClearAllStateAsync()` never runs, so the subscription record stays frozen at an old build.
+2. **`Success` field is never true** — Subscription history shows all attempts as failures even when PRs actually merged.
+
+**Impact:** Our tools report subscriptions as "behind" when they're actually current, or as "failing" when they're succeeding.
+
+---
+
+## Cross-Validation Strategies
+
+### Strategy 1: PR Ground Truth Cross-Check
+
+**What it validates:**  
+Detects when Maestro reports subscription failures but PRs are actually merging successfully on the target repo.
+
+**Data sources:**
+- **Maestro API:** `GetSubscriptionHistoryAsync()` — recent failure records
+- **GitHub API:** `SearchPullRequests()` or `ListPullRequests()` with filters:
+  - `head:refs/heads/darc-{source-branch}-to-{target-branch}`
+  - `is:merged`
+  - `repo:dotnet/dotnet`
+  - Date range: last 7–30 days
+
+**Where it fits:**  
+Enhance `maestro_subscription_health` (Tool #3) with new field: `prMergeActivity` showing recent merged PRs vs. recorded failures.
+
+**Cost:**
+- 1 GitHub search API call per subscription
+- Rate limit: 30 requests/min (authenticated), 10/min (anonymous)
+- For 50 subscriptions: ~2 minutes worst-case
+
+**Reliability:**
+- High: GitHub merged status is authoritative
+- False negatives possible if PR naming convention changes
+- Mitigate: also search by commit SHAs from builds
+
+**Implementation sketch:**
+```
+In GetSubscriptionHealthAsync():
+1. For each subscription showing "stale" or with recent failures in history
+2. Call GitHub search: `is:pr is:merged repo:{target} head:{darc-branch-pattern}`
+3. Compare merged PRs' commit SHAs against LastAppliedBuild.Commit and LatestBuild.Commit
+4. If merged PR commit > LastAppliedBuild commit → bookkeeping is wrong
+5. Add to result: MergedPrsSinceLastApplied (count + URLs)
+```
+
+**Example output enhancement:**
+```
+Subscription: emsdk → dotnet/dotnet
+  Maestro says: 29 commits behind (last applied: build #123456 from Jan 21)
+  ⚠️ Ground truth: 3 PRs merged since Jan 21 (#4343, #3864, #3528)
+  → Bookkeeping appears STUCK
+```
+
+---
+
+### Strategy 2: Commit Reachability Validation
+
+**What it validates:**  
+Detects when `LastAppliedBuildId`'s commit SHA is not actually reachable from target repo HEAD.
+
+**Data sources:**
+- **Maestro API:** `GetSubscriptionAsync()` → `LastAppliedBuild.Commit`
+- **GitHub API:** `CompareCommitsAsync(base: LastAppliedBuild.Commit, head: targetBranch)`
+  - Status = "behind" → commit is reachable (normal)
+  - Status = "diverged" or "identical" → expected states
+  - HTTP 404 → commit doesn't exist in target repo (bookkeeping wrong)
+
+**Where it fits:**  
+New validation in `GetSubscriptionHealthAsync()` — add `commitReachability` field.
+
+**Cost:**
+- 1 GitHub compare API call per subscription
+- Same rate limits as Strategy 1
+- Lightweight — no diff data needed, just status
+
+**Reliability:**
+- Very high: commit graph is authoritative
+- Edge case: force-pushes can invalidate old SHAs (rare on main branches)
+- False positive: if LastAppliedBuild is legitimately ahead (impossible in normal flow)
+
+**Implementation sketch:**
+```
+For each subscription:
+1. Get LastAppliedBuild.Commit from subscription
+2. Call GitHub compare: base=LastAppliedCommit, head=targetBranch
+3. If 404 or status="diverged" when LastApplied should be ancestor → flag as suspect
+4. Add result field: CommitReachable (true/false/unknown)
+```
+
+**Example detection:**
+```
+Subscription: foo → dotnet/dotnet (main)
+  LastAppliedBuild: #999 (commit abc123)
+  GitHub compare: abc123...main → 404 Not Found
+  → Commit abc123 does not exist in dotnet/dotnet
+  → BOOKKEEPING CORRUPTED
+```
+
+---
+
+### Strategy 3: Subscription History vs. PR Lifecycle Alignment
+
+**What it validates:**  
+Cross-references Maestro's subscription history events with actual PR state transitions on GitHub.
+
+**Data sources:**
+- **Maestro API:** `GetSubscriptionHistoryAsync()` → timestamped actions, success/failure
+- **Maestro API:** `GetTrackedPullRequestBySubscriptionIdAsync()` → current/recent tracked PR
+- **GitHub API:** `GetPullRequest()` → merged_at, closed_at, state
+- **GitHub API:** `ListPullRequestCommits()` → commits in the PR
+
+**Where it fits:**  
+New tool: `maestro_validate_subscription` — deep diagnostic combining history + PR state.
+
+**Cost:**
+- 3–5 API calls per subscription:
+  - 1 × subscription history (Maestro)
+  - 1 × tracked PR (Maestro)
+  - 1 × PR details (GitHub)
+  - 1 × PR commits (GitHub, if needed)
+- Expensive — only use on-demand for debugging
+
+**Reliability:**
+- High for merged PRs (merged_at is definitive)
+- Medium for failed PRs — GitHub doesn't record why a PR was closed
+- Can't distinguish "Maestro bug" from "legitimate validation failure"
+
+**Implementation sketch:**
+```
+1. Get subscription history, find last "UpdatePR" action
+2. Get tracked PR for this subscription (if exists)
+3. Fetch PR from GitHub
+4. Align:
+   - If history says "failed" but GitHub says "merged" → bookkeeping bug
+   - If history says "succeeded" but GitHub says "closed" → unexpected
+   - If no tracked PR but history shows recent activity → orphaned record
+5. Return diagnostic report with timeline alignment
+```
+
+**Use case:** Debugging specific subscriptions when health check flags anomalies.
+
+---
+
+### Strategy 4: Build Freshness vs. Actual Source Activity
+
+**What it validates:**  
+Detects when Maestro reports subscription as "current" but source repo has unreported builds.
+
+**Data sources:**
+- **Maestro API:** `GetLatestBuildAsync(sourceRepo, channelId)` → "latest" build
+- **GitHub API:** `ListCommits(sourceRepo, since: latestBuild.DateProduced)` → newer commits
+- **Default Channel Config:** Confirm sourceRepo has default channel mapping for this branch
+
+**Where it fits:**  
+Enhance `maestro_subscription_health` with field: `unreportedCommits` (count since latest build).
+
+**Cost:**
+- 1 GitHub API call per subscription (list commits with date filter)
+- 1 Maestro API call (already in current flow)
+
+**Reliability:**
+- Medium: Can't tell if commits are actually built yet
+- False positives: Commits that don't trigger builds (docs-only, CI skips)
+- Better indicator: compare build timestamps vs. commit timestamps
+
+**Implementation sketch:**
+```
+For each subscription:
+1. Get latestBuild.DateProduced
+2. Query GitHub: commits on source branch since latestBuild.DateProduced
+3. If commits exist but no newer builds → potential build pipeline issue
+4. Add field: SourceActivitySinceLatestBuild { commitCount, oldestCommitDate }
+```
+
+**Example detection:**
+```
+Subscription: runtime → dotnet/dotnet
+  Latest build: #789 (Feb 15)
+  Source commits since Feb 15: 47 commits (newest: Mar 10)
+  → Either builds aren't happening OR channel mapping is wrong
+```
+
+---
+
+### Strategy 5: Codeflow Status Cross-Validation with Tracked PRs
+
+**What it validates:**  
+The `/api/codeflows` endpoint (`maestro_codeflow_statuses`) returns `LastAppliedBuildId` — validate this against tracked PR state.
+
+**Data sources:**
+- **Maestro API:** `GetCodeflowStatusesAsync()` → subscription statuses with LastAppliedBuildId
+- **Maestro API:** `GetTrackedPullRequestsAsync()` → all active PRs
+- **GitHub API:** For each tracked PR URL → merged status, commit SHAs
+
+**Where it fits:**  
+New composite tool or enhancement to `maestro_codeflow_statuses` (Tool #20).
+
+**Cost:**
+- Already calls codeflow endpoint
+- Additional: 1 GitHub API call per active tracked PR (~5–20 PRs typically)
+- Low incremental cost
+
+**Reliability:**
+- High: Tracked PRs are Maestro's own records
+- Limitation: Only validates active PRs, not completed ones
+
+**Implementation sketch:**
+```
+1. Get codeflow statuses for repo+branch
+2. Get all tracked PRs
+3. For each subscription in codeflow response:
+   a. Find corresponding tracked PR
+   b. If PR is merged on GitHub but LastAppliedBuildId is old → stuck record
+   c. If no PR but subscription shows "updating" → orphaned state
+4. Annotate each subscription status with prValidation: { merged, commitSha, matchesBookkeeping }
+```
+
+**Example output:**
+```
+Codeflow Status: dotnet/dotnet (main)
+  Subscription: emsdk (channel: .NET 11)
+    Maestro says: LastAppliedBuildId=123, updating=false
+    Tracked PR: #4567 (merged 2 days ago, commit def456)
+    ⚠️ PR merged but LastAppliedBuildId not updated → STUCK
+```
+
+---
+
+### Strategy 6: Subscription History "Success" Field Audit
+
+**What it validates:**  
+The `Success` field in subscription history — confirm it's actually being set to true when PRs merge.
+
+**Data sources:**
+- **Maestro API:** `GetSubscriptionHistoryAsync()` → all history items
+- Analysis: Count true vs. false, compare with actual PR merge rate
+
+**Where it fits:**  
+New diagnostic tool: `maestro_audit_subscription_history` or inline in subscription health.
+
+**Cost:**
+- Maestro API calls only (no external validation)
+- Cheap: history is paginated, typically <100 items per subscription
+
+**Reliability:**
+- This is introspection, not cross-validation with ground truth
+- Can detect "Success is always false" bug
+- Cannot confirm if "Success=true" is actually correct
+
+**Implementation sketch:**
+```
+For a given subscription or set of subscriptions:
+1. Fetch full history
+2. Count Success=true vs. false
+3. If Success=true count is 0 → flag as "Success field never set"
+4. Cross-reference with PR merge data (Strategy 1) to confirm
+```
+
+**Example detection:**
+```
+Subscription: emsdk → dotnet/dotnet
+  History: 150 events, Success=true: 0, Success=false: 150
+  GitHub: 43 PRs merged in same timeframe
+  → SUCCESS FIELD BUG CONFIRMED
+```
+
+---
+
+## Recommended Implementation Roadmap
+
+### Phase 1: Low-Cost, High-Value (P1)
+**Target:** v0.7.0 (2 weeks)
+
+1. **Strategy 1: PR Ground Truth** — Add to `maestro_subscription_health`
+   - Effort: 2–3 days
+   - Most directly addresses the emsdk bug scenario
+   - GitHub search API is already used in codebase
+
+2. **Strategy 2: Commit Reachability** — Add to `maestro_subscription_health`
+   - Effort: 1–2 days
+   - Lightweight validation using existing GitHub compare API
+   - Catches corrupted bookkeeping states
+
+**Output enhancement:**
+```markdown
+### Subscription Health for dotnet/dotnet
+
+Subscription: emsdk → dotnet/dotnet (main)
+  Channel: .NET 11.0.1xx SDK
+  Maestro Status: 29 commits behind (last applied: #123456, Jan 21)
+  Latest Build: #125000 (Mar 10)
+  
+  🔍 Cross-validation:
+    ✅ Commit reachable: Yes (commit abc123 exists in target)
+    ⚠️ PR activity: 3 PRs merged since Jan 21 (#4343 Mar 8, #3864 Feb 20, #3528 Feb 1)
+    → Bookkeeping appears STUCK — investigate subscription history
+```
+
+### Phase 2: Deep Diagnostics (P2)
+**Target:** v0.8.0 (backlog)
+
+3. **Strategy 3: History-PR Alignment** — New tool `maestro_validate_subscription`
+   - Effort: 3–4 days
+   - On-demand debugging tool, not in hot path
+   - Provides timeline correlation for root cause analysis
+
+4. **Strategy 6: Success Field Audit** — Inline in subscription health or new tool
+   - Effort: 1 day
+   - Confirms the "Success never true" bug at scale
+   - No external API dependencies
+
+### Phase 3: Proactive Monitoring (P3)
+**Target:** Future consideration
+
+5. **Strategy 4: Build Freshness** — Optional enhancement
+   - Effort: 2 days
+   - More useful for detecting build pipeline issues than bookkeeping bugs
+   - Lower priority since it doesn't directly address the identified failure mode
+
+6. **Strategy 5: Codeflow + Tracked PR** — Enhance `maestro_codeflow_statuses`
+   - Effort: 2–3 days
+   - Provides real-time validation for Tool #20
+   - Useful but overlaps with Strategy 1+2
+
+---
+
+## Key Architectural Decisions
+
+### Decision 1: Keep Validation Optional
+**Rationale:** Cross-validation adds API call overhead. Make it opt-in via tool parameter.
+
+**Proposal:** Add `validate: bool = false` parameter to `maestro_subscription_health`.
+- `validate=false` (default): Current behavior, fast, cached
+- `validate=true`: Runs PR ground truth + commit reachability checks
+
+### Decision 2: Return Structured Anomalies
+**Rationale:** LLMs need clear signals, humans need actionable data.
+
+**Proposal:** Add new fields to `SubscriptionHealthResult`:
+```csharp
+record SubscriptionHealthResult(
+    // ... existing fields ...
+    ValidationResult? Validation = null
+);
+
+record ValidationResult(
+    bool CommitReachable,
+    int MergedPrsSinceLastApplied,
+    List<string> MergedPrUrls,
+    bool BookkeepingAnomalyDetected,
+    string? AnomalyReason
+);
+```
+
+### Decision 3: Rate Limit Awareness
+**Rationale:** Validating 50+ subscriptions can exhaust GitHub rate limits.
+
+**Proposal:**
+- Batch validation: validate top N stale subscriptions first
+- Return partial results if rate limit hit
+- Log rate limit status to stderr for visibility
+
+### Decision 4: Cache Validation Results
+**Rationale:** Ground truth doesn't change rapidly.
+
+**Proposal:**
+- Cache PR search results for 15 minutes (vs. 5 min for subscription data)
+- Cache commit reachability for 30 minutes
+- Allows repeated health checks without re-validating
+
+---
+
+## Alternative Approaches Considered
+
+### Alternative 1: Maestro Self-Healing
+**Idea:** Have Maestro detect and auto-fix stuck bookkeeping internally.
+
+**Rejected because:**
+- Requires upstream changes to Maestro codebase (out of scope for maestro.mcp)
+- maestro.mcp is a read-only observability tool by design
+- Our tools surface the data for humans/skills to act on
+
+**Long-term:** File issues with Maestro team for self-healing logic in `PullRequestUpdater.cs`.
+
+### Alternative 2: VMR Commit Analysis
+**Idea:** Parse VMR commit messages for "Merge pull request #X" to reconstruct true flow history.
+
+**Rejected because:**
+- Brittle: Depends on commit message format
+- Incomplete: Squash merges don't preserve PR numbers
+- Expensive: Requires walking commit history
+- Strategy 1 (PR search) is simpler and more reliable
+
+### Alternative 3: Azure DevOps API for VMR PRs
+**Idea:** Since dotnet/dotnet is mirrored to AzDO, query AzDO for PR state.
+
+**Rejected because:**
+- GitHub is the source of truth for dotnet/dotnet
+- AzDO mirror is read-only and may lag
+- Adds unnecessary API surface (AzDoApiClient already exists but for source repos)
+
+---
+
+## Security & Privacy Considerations
+
+### Threat: Information Disclosure
+**Risk:** Validation queries might expose repo structure or PR activity to unauthorized clients.
+
+**Mitigation:**
+- Validation only queries public repos (dotnet/dotnet)
+- Uses same auth cascade as existing tools (PAT → Entra → Anonymous)
+- GitHub search respects client's access level
+
+### Threat: Rate Limit Exhaustion
+**Risk:** Aggressive validation could exhaust GitHub rate limits, impacting other tools.
+
+**Mitigation:**
+- Make validation opt-in (not default)
+- Implement rate limit tracking and back-off
+- Cache validation results longer than normal data
+
+### Threat: SSRF via Repo URLs
+**Risk:** Subscription data contains arbitrary repo URLs — validation could be tricked into querying internal hosts.
+
+**Mitigation:**
+- Existing URL parsing (`ParseGitHubUrl`, `IsVmrRepository`) validates host
+- Validation only runs for GitHub and AzDO URLs (known domains)
+- HttpClient follows redirects from aka.ms but targets are GitHub (already noted in STRIDE threat model as accepted risk)
+
+---
+
+## Testing Strategy
+
+### Unit Tests
+- Mock Maestro API responses with stuck `LastAppliedBuildId`
+- Mock GitHub API responses showing merged PRs
+- Verify anomaly detection logic
+
+### Integration Tests
+- Use real Maestro staging environment (if available)
+- Create test subscription with known state
+- Trigger validation and confirm detection
+
+### Regression Tests
+- Ensure validation doesn't break existing `maestro_subscription_health` output
+- Verify `validate=false` matches current behavior exactly
+
+---
+
+## Open Questions for Team
+
+1. **Priority:** Is Phase 1 (PR ground truth + commit reachability) the right focus, or is there a more urgent validation need?
+
+2. **Tool Design:** Should validation be:
+   - A. Optional parameter on existing `maestro_subscription_health` tool?
+   - B. Separate new tool `maestro_validate_subscription_health`?
+   - C. Always-on enhancement with no opt-in?
+
+3. **Upstream Fix:** Should we file issues with the Maestro team about:
+   - The `GetLastCodeflownBuild()` exception-handling bug?
+   - The `Success` field never being set to true?
+
+4. **Consuming Skills:** Will flow-analysis skill (or others) want structured validation data (JSON) or is markdown sufficient?
+
+5. **Rate Limits:** What's our acceptable GitHub API budget? Currently ~30 req/min authenticated. Validation could add 50–100 calls for full health check.
+
+---
+
+## Success Metrics
+
+How do we know cross-validation is working?
+
+1. **Detection Rate:** Tool correctly flags the emsdk subscription (from session 55857d51) as stuck
+2. **False Positive Rate:** <5% of subscriptions flagged as anomalies when they're actually correct
+3. **Performance:** Validation adds <10 seconds to health check for 10 subscriptions
+4. **Usability:** Consuming skills can act on validation results without re-querying
+
+---
+
+## References
+
+- Session 55857d51: emsdk subscription stuck investigation
+- Maestro `PullRequestUpdater.cs`: Exception handling in `GetLastCodeflownBuild()`
+- Current implementation: `MaestroService.GetSubscriptionHealthAsync()` (line 138)
+- GitHub API: [Compare commits](https://docs.github.com/en/rest/commits/commits#compare-two-commits)
+- GitHub API: [Search PRs](https://docs.github.com/en/rest/search/search#search-issues-and-pull-requests)

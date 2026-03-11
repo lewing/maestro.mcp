@@ -100,3 +100,26 @@
 
 📌 Team update (2026-02-22): Always pass DefaultBaseUri to PcsApiFactory — decided by Naomi
 
+### Cross-Validation Strategies for Subscription Health (2026-03-11)
+
+- Analyzed vulnerability exposed in session 55857d51: Maestro's subscription bookkeeping can be wrong when `PullRequestUpdater.cs` throws exceptions that bypass `ClearAllStateAsync()`, leaving `LastAppliedBuildId` stuck at old values. Additionally, the `Success` field in subscription history is never set to `true` anywhere in the codebase.
+- Both `maestro_subscription_health` (Tool #3) and `maestro_codeflow_statuses` (Tool #20) are vulnerable to reporting stale data since they trust Maestro's internal state without cross-validation against ground truth.
+- Proposed 6 cross-validation strategies with architectural analysis of data sources, API costs, reliability, and implementation approaches. Key strategies:
+  1. **PR Ground Truth Cross-Check** (P1) — Detect when Maestro reports failures but PRs are actually merging. Uses GitHub search API to find merged PRs and compare against `LastAppliedBuild` commit SHAs. Directly addresses the emsdk scenario.
+  2. **Commit Reachability Validation** (P1) — Verify `LastAppliedBuild.Commit` is actually reachable from target repo HEAD using GitHub compare API. Catches corrupted bookkeeping states with lightweight API calls.
+  3. **Subscription History vs. PR Lifecycle Alignment** (P2) — Deep diagnostic tool correlating Maestro's history events with actual GitHub PR state transitions. For debugging specific anomalies.
+  4. **Build Freshness vs. Source Activity** (P3) — Detect when source repo has unreported commits since latest build. More useful for build pipeline monitoring than bookkeeping bug detection.
+  5. **Codeflow Status + Tracked PR Validation** (P3) — Cross-validate `/api/codeflows` endpoint data against tracked PR states and GitHub merge status.
+  6. **Success Field Audit** (P2) — Confirm the "Success never true" bug at scale by analyzing subscription history patterns.
+- **Key architectural decisions:**
+  - Make validation opt-in via `validate: bool` parameter to avoid rate limit impact on default usage
+  - Return structured anomaly data in new `ValidationResult` record for programmatic consumption
+  - Cache validation results longer than normal data (15–30 min) since ground truth changes slowly
+  - Batch validation to manage GitHub rate limits (30 req/min authenticated)
+- **Recommended roadmap:** Phase 1 (P1) implements Strategy 1+2 in v0.7.0 (~1 week effort). Phase 2 (P2) adds deep diagnostics in v0.8.0. Phase 3 (P3) is backlog.
+- **Security considerations:** Validation only queries public repos with existing auth cascade, implements rate limit back-off, and leverages existing URL validation to prevent SSRF.
+- **Success metric:** Tool correctly flags the emsdk subscription (from session 55857d51) as stuck with <5% false positive rate and <10s overhead for 10 subscriptions.
+- **Open questions:** Tool design preference (opt-in parameter vs. separate tool vs. always-on), whether to file upstream Maestro issues for the root cause bugs, and acceptable GitHub API budget for consuming skills.
+
+📌 Analysis document written to `.ai-team/decisions/inbox/holden-cross-validation-strategies.md`. 6 strategies analyzed, Phase 1 roadmap proposed (PR ground truth + commit reachability validation).
+

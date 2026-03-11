@@ -323,3 +323,5 @@
 - **Cache key:** `codeflow-statuses:{repositoryUrl}:{branch}`, ShortTtl (5 min).
 - **Default values:** `repositoryUrl = "https://github.com/dotnet/dotnet"`, `branch = "main"` — the VMR is the primary use case.
 - **When upstream PR merges:** Replace the `GetCodeflowStatusesAsync` HTTP call in `MaestroApiClient` with `_api.Codeflow.GetCodeflowStatusesAsync()`. Remove `_barToken`, `_entraCredential`, and helper methods. The rest of the stack (service, tools, CLI) stays unchanged.
+
+📌 Team update (2026-03-11): Cross-validation strategies for subscription health proposed by Holden — Phase 1 targets PR ground truth and commit reachability validation
