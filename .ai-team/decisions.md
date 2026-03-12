@@ -3345,3 +3345,213 @@ We cap at `per_page=10` since we only need to detect whether PRs exist, not enum
 - `src/MaestroTool.Core/GitHubApiClient.cs` — Implemented search method
 - `src/MaestroTool.Core/MaestroService.cs` — `ValidationResult` record, `SubscriptionHealthResult` extension, validation + canary logic
 - `src/MaestroTool.Core/MaestroMcpTools.cs` — `validate` param, formatted output
+# Decision: Maestro MCP Tool Audit Findings
+
+**Author:** Holden (Lead)  
+**Date:** 2026-02-20  
+**Status:** Audit Complete — Implementation TBD
+
+## Context
+
+Larry requested a thorough audit of `src/MaestroTool.Core/MaestroMcpTools.cs` to ensure the tool surface is agent-optimized, not API-mirrored. The audit cross-referenced all 19 tools against flow-analysis and flow-tracing skill files (449 lines combined) to validate against actual agent workflows.
+
+## Audit Scope
+
+1. **Tool descriptions** — Are they tight? Do they list return schemas agents already see? Are they vague or confusable? Do they cross-reference related tools?
+2. **API abstraction** — Are we exposing raw API internals (IDs without context)? Could we provide higher-level abstractions? Do parameters need descriptions?
+3. **Agent workflows** — What do agents actually want? Are there gaps where 3+ calls could be 1?
+
+## Key Findings
+
+### 🔴 HIGH — Description Bloat (8 tools)
+
+8 of 19 tools list return fields in descriptions ("Returns subscription ID, source/target repo..."). Agents see the actual response — schema docs are waste. **Fix: Remove "Returns X, Y, Z" from all descriptions.**
+
+Affected tools: `maestro_subscriptions`, `maestro_latest_build`, `maestro_build`, `maestro_builds`, `maestro_channel`, `maestro_channels`, `maestro_codeflow_prs`, `maestro_tracked_pr`.
+
+### 🟡 MEDIUM — Multi-Step Friction (2 gaps)
+
+1. **Triggering requires 3 steps**: Agents call `maestro_latest_build` → parse markdown → extract build ID → call `maestro_trigger_subscription`. **Fix: Add optional `sourceRepository`/`channelName` parameters to trigger tool to resolve latest build internally.**
+
+2. **Subscription discovery is awkward**: Agents call `maestro_subscriptions` to list all, then grep for the one they want. **Fix: Add `maestro_find_subscription(source, target, channel, branch)` tool for direct lookup.**
+
+### 🟡 MEDIUM — Channel ID Asymmetry
+
+`maestro_channel` requires an integer ID, but agents only have names. This forces a "list all → grep → extract ID" workflow. **Fix: Change parameter to `string channelNameOrId` and resolve internally** (pattern already used in other tools).
+
+### 🟡 MEDIUM — Missing Cross-References
+
+Three subscription tools don't guide agents on when to use which: `maestro_subscriptions` (discovery), `maestro_subscription` (single detail), `maestro_subscription_health` (batch check). **Fix: Add "Use X for..." cross-references to descriptions.**
+
+### 🟢 LOW — Parameter Description Gaps
+
+`maestro_flow_graph` has 5 parameters (4 booleans) with unclear impact. **Fix: Explain what "flow graph" means and when to toggle flags** (e.g., "includeArcade=false hides tooling noise").
+
+### ✅ POSITIVE — What's Working
+
+- **Composite tools are excellent**: `maestro_subscription_health` and `maestro_codeflow_statuses` match agent mental models perfectly. Flow-analysis skill shows these are first-step tools for "why is X stuck?" questions. DO NOT break into smaller primitives.
+- **Parameter examples are effective**: Almost every parameter includes examples (e.g., "e.g. https://github.com/dotnet/runtime"). Agents use these directly.
+- **noCache is consistent**: All 17 read-only tools accept it; agents understand when to use it.
+- **Naming conventions work**: Verbs for actions, nouns for queries. Agents learn the pattern without docs.
+
+## Agent Workflow Validation
+
+Validated against flow-analysis (302 lines) and flow-tracing (147 lines) skills:
+
+✅ **Codeflow overview** — covered by `maestro_subscription_health`, `maestro_codeflow_prs`, `maestro_build_freshness`  
+✅ **PR analysis** — skill uses PowerShell for GitHub data, Maestro tools for enrichment  
+✅ **Flow health** — covered by composite tools + batch checks  
+⚠️ **Remediation** — covered but friction (3-step trigger workflow)  
+⚠️ **Subscription discovery** — gap (no direct "find subscription for A→B" tool)
+
+## Recommendations
+
+### P0 (Must Do)
+1. Remove "Returns X, Y, Z" from 8 tool descriptions
+
+### P1 (Should Do)
+2. Add optional `sourceRepository`/`channelName` to `maestro_trigger_subscription`
+3. Add `maestro_find_subscription` tool OR document workaround in cross-references
+4. Add cross-references to overlapping subscription tools
+
+### P2 (Nice to Have)
+5. Improve `maestro_flow_graph` parameter descriptions
+6. Add auth requirement note to write operations
+7. Clarify cache scope in `maestro_clear_cache`
+
+### Do NOT Change
+8. Keep composite tools (`maestro_subscription_health`, `maestro_codeflow_statuses`)
+9. Keep `noCache` parameter consistent
+10. Keep parameter descriptions with examples
+
+## Decision
+
+**Audit complete.** Findings documented for Larry to prioritize. The tool surface is fundamentally well-designed — most issues are polish (description bloat, missing cross-refs) or optional improvements (composite trigger, subscription finder). The core abstraction level is correct.
+
+**Next steps**: Larry to decide:
+- P0 (description cleanup) — 1 hour, high ROI
+- P1 (composite trigger + finder) — 4-6 hours, medium ROI
+- P2 (parameter docs) — 2 hours, low ROI
+# MCP Server Design Skill Review — Decisions & Implications
+
+**Date:** 2026-03-11  
+**Reviewer:** Holden (Lead / Architect)  
+**Requestor:** Larry Ewing  
+**Context:** Review of `/home/lewing/src/blazor-playground/copilot-skills/plugins/skill-trainer/skills/mcp-server-design/` against real-world maestro.mcp implementation
+
+## Decision
+
+The mcp-server-design skill has **solid foundational patterns but critical gaps in operational depth**. It should be enhanced with patterns learned from building maestro.mcp before being promoted as comprehensive guidance.
+
+## Rationale
+
+### What Works
+- **Knowledge tool architecture** is genuinely valuable — the two-tier pattern (compact descriptions + on-demand knowledge endpoints) matches our best design decision and is well-articulated with `helix_ci_guide` as a concrete exemplar.
+- **Tool descriptions as routing signals** is the right mental model and directly informed our description tightening work.
+- **Purpose-first structure** ("lead with a verb," "don't describe return schemas") matches what we actually do across 20 tools.
+
+### What's Missing
+Critical operational patterns absent from the skill:
+
+1. **Caching architecture** — 15-min TTLs, SQLite persistence, cache invalidation, action deduplication (2-minute cooldowns to prevent LLM retry storms)
+2. **Auth patterns** — PAT → Entra ID → Anonymous cascade, when tools enforce auth vs. rely on API rejection, error message design
+3. **Error handling** — Structured messages, parameter validation (`Guid.TryParse`), recovery guidance
+4. **Parameter design** — Standard params (`noCache`), format examples in descriptions, cross-parameter relationships
+5. **Real anti-patterns** — PCS factory crashes (null baseUri), process execution on Windows, GitHub rate limits, SQLite corruption
+6. **Health check patterns** — When to create composite diagnostic tools vs. expose primitives
+
+### Slop Detected
+- agent-integration-patterns.md repeats the same point 3 times
+- industry-alignment.md doesn't extract actionable implications from research
+- validation-methodology.md reveals most patterns haven't been formally validated
+
+## Implications for maestro.mcp
+
+**Positive:** The skill validates our core design choices:
+- Two-tier architecture (compact descriptions + knowledge tools)
+- Purpose-first tool descriptions
+- Tool family naming consistency (`maestro_*`)
+- Cross-referencing related tools in descriptions
+
+**Negative:** The skill wouldn't have prepared us for real challenges:
+- Caching strategy design
+- Auth cascade error handling
+- Action deduplication patterns
+- Composite vs. atomic tool tradeoffs
+
+**Recommendation:** If we write MCP server guidance in the future, prioritize operational patterns over theoretical design principles. The skill has good bones but lacks the depth needed for production servers.
+
+## Actions for Larry
+
+If this skill is intended for external consumption:
+
+**P0 (Critical Gaps):**
+1. Add caching strategy section with TTL guidance, persistence patterns, invalidation
+2. Add error handling section with structured messages, validation patterns, recovery
+3. Add auth patterns section with cascade design, error message design
+4. Add parameter design section with standard params, format examples, validation
+5. Add real anti-patterns section derived from maestro.mcp / helix.mcp experience
+
+**P1 (Depth):**
+6. Expand tool annotations — clarify security vs. documentation distinction
+7. Expand parameter descriptions — dedicated section with examples
+8. Add composite tool patterns — when to create diagnostic tools vs. primitives
+
+**P2 (Polish):**
+9. Cut repetition in agent-integration-patterns.md
+10. Extract actionable takeaways from industry-alignment.md research findings
+11. Add before/after examples and case studies (use maestro.mcp as exemplar)
+
+## Follow-up Questions
+
+- Is this skill intended as comprehensive guidance or directional patterns?
+- Should we contribute maestro.mcp-specific patterns back to the skill?
+- Does the skill need formal validation (A/B testing) before external promotion?
+
+## Status
+
+Decision recorded for team awareness. No immediate action required in maestro.mcp codebase — this is guidance for the skill itself.
+
+
+# Decision: MCP Tool Description Tightening and Usability Improvements
+
+**Author:** Naomi (Backend Dev)
+**Date:** 2025-07-19
+**Status:** Implemented
+
+## Context
+
+Holden's MCP tool audit identified several improvements to reduce token waste and improve agent routing accuracy. This implements P0 and P1 items.
+
+## Decisions
+
+### 1. Remove "Returns..." from tool descriptions (P0)
+
+Removed "Returns X, Y, Z" sentences from 8 tool descriptions. Agents see the actual response — listing return fields wastes tokens and clutters routing. Affected tools: `maestro_subscriptions`, `maestro_latest_build`, `maestro_build`, `maestro_builds`, `maestro_channel`, `maestro_channels`, `maestro_codeflow_prs`, `maestro_codeflow_pr`.
+
+### 2. Cross-reference overlapping tools (P1-M4)
+
+Added cross-references to help agents pick the right tool:
+- `maestro_subscriptions` → points to `maestro_subscription_health` and `maestro_subscription`
+- `maestro_subscription` → points to `maestro_subscription_health`
+- `maestro_subscription_health` → points to `maestro_subscriptions`
+- `maestro_build` → points to `maestro_builds`
+- `maestro_channel` → points to `maestro_channels`
+
+### 3. Channel ID vs name asymmetry fix (P1-M3)
+
+Changed `maestro_channel` parameter from `int channelId` to `string channelNameOrId`. If it parses as int, routes to `GetChannelAsync(int)`; otherwise uses `GetChannelByNameAsync(string)`. This eliminates a common failure mode where agents pass a channel name to a tool that only accepted IDs.
+
+### 4. Smart trigger_subscription auto-resolve (P1-M1)
+
+Made `buildId` optional on `maestro_trigger_subscription`. When null, agents can provide `sourceRepository` + `channelName` to auto-resolve the latest build. This eliminates a 3-step agent dance (latest_build → parse → trigger) that was error-prone.
+
+## Files Changed
+
+- `src/MaestroTool.Core/MaestroMcpTools.cs` — All description and parameter changes
+- `src/MaestroTool.Tests/MaestroMcpToolsTests.cs` — Constructor fix for test compatibility
+
+## Rationale
+
+Token efficiency in MCP tool descriptions directly impacts agent performance. Every unnecessary word in a description is repeated across every `tools/list` call. Cross-references reduce trial-and-error routing. Parameter flexibility (string channel, optional buildId) reduces multi-tool orchestration failures.
+

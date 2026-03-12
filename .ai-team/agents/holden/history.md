@@ -1,184 +1,35 @@
 # Holden — History
 
-## Learnings
+## Core Context
 
-### MCP SDK 1.0 Feature Evaluation (2026-02-20)
+**Role:** Lead/Architect on maestro.mcp. Conducts system design reviews, audits, and architectural guidance for MCP tooling.
 
-- **Project is already on SDK 1.0.0** — the .csproj references `ModelContextProtocol 1.0.0`, so we've already completed the upgrade from the 0.8.0-preview.1 baseline. The upgrade brings stability guarantees (SemVer), bug fixes (base64 deserialization, JSON handling), and improved transport reliability (5 reconnection retries instead of 2).
+**Recent deliverables (2026-03-12):**
+- Completed comprehensive audit of 19 MCP tools for description bloat, missing cross-refs, multi-step friction
+- Audit findings: 8 tools had "Returns X,Y,Z" bloat (P0), 2 gaps in multi-step workflows (P1-M1, P1-M3), channel ID asymmetry (P1-M3), missing cross-refs (P1-M4)
+- Reviewed MCP Server Design skill against maestro.mcp implementation; identified critical gaps (caching patterns, auth cascade, error handling, real anti-patterns)
+- Validated tool surface against flow-analysis (302 lines) and flow-tracing (147 lines) agent skills
+- Confirmed core design is solid: composite tools excellent, parameter examples effective, naming conventions work
 
-- **Structured tool output (StructuredContent) is not urgent** — all 20 tools return `Task<string>` with markdown-formatted output. This works well for LLMs and human readers. Switching to typed objects would be a breaking change for consuming skills, require defining 20+ DTOs, and solve no current pain point. Backlogged as P3 for future experimentation if consumers request JSON output for automation.
+**Key architectural insights:**
+- **Two-tier tool design**: Compact descriptions (routing signals) + on-demand knowledge tools (helix_ci_guide pattern)
+- **Composite tools preferred**: maestro_subscription_health and maestro_codeflow_statuses match agent mental models; don't break into primitives
+- **Parameter design matters**: Standard params (noCache), format examples in descriptions, cross-parameter relationships
+- **MCP skill gaps**: Needs operational patterns (caching TTLs, auth cascade, error handling, real anti-patterns from production experience)
 
-- **Tool annotations (ReadOnlyHint, DestructiveHint, OpenWorldHint) add no value** — tool names and descriptions already disambiguate read vs. write operations. No tools perform truly destructive actions (triggers are non-destructive). All tools interact with the Maestro API (open world), so setting `OpenWorldHint: true` on everything is redundant metadata. Annotations are advisory-only per SDK docs, not security enforcement.
+**Known issues identified but deferred:**
+- P0 (description cleanup) — implemented by Naomi
+- P1-M1 (smart trigger) — implemented by Naomi
+- P1-M3 (channel resolution) — implemented by Naomi
+- P1-M4 (cross-refs) — implemented by Naomi
+- P2 items (flow_graph docs, auth notes) — not yet implemented
 
-- **Resource links (ResourceLinkBlock) don't apply** — the server exposes 0 MCP resources (data comes from tools, not `resources/list`). GitHub URLs in tool output are external links, not MCP resource URIs. Adopting resource links would require architectural churn (adding resource endpoints, redesigning caching) with no clear benefit over markdown URLs.
+**Files audited:**
+- src/MaestroTool.Core/MaestroMcpTools.cs — 19 tools, descriptions, parameter design
 
-- **New protocol features are automatic** — SDK 1.0 brings 2025-11-25 protocol compliance, OAuth backward compatibility, and improved JSON handling without code changes. Features like elicitation (dynamic prompting) and SSE resumability don't apply to our tool set or stdio transport.
+---
 
-- **Security posture unchanged** — tool annotations don't provide security (advisory-only). Auth enforcement remains at the PCS API layer (correct design per STRIDE analysis). Structured output vs. strings doesn't change trust boundaries — the data source (PCS API) and caching layer (SQLite) are unchanged.
+## Archive: Earlier Sessions
 
-- **Markdown-first design is a strength** — the current string-based approach is universal, portable, works across all MCP clients, and is human-readable. LLMs parse our semi-structured markdown (headers, lists, tables) without issues. No bugs or limitations have surfaced from this design choice.
-
-### Naming Convention Review for Issue #9 (2026-02-20)
-
-- **Current naming follows an implicit pattern**: Actions use verb prefixes (`trigger_`, `clear_`), queries use bare nouns. This distinction is actually a GOOD convention — it disambiguates read-only operations from state-changing actions. The proposed `maestro_get_*` prefixes would be redundant.
-
-- **Real asymmetry: missing list/get pairs**: 2 of 4 resource types lack symmetrical tools. `maestro_channels` exists but no `maestro_channel` (get by ID). `maestro_build` exists but no `maestro_builds` (list with filters). This is a genuine gap — agents expect list/get pairs for core resources.
-
-- **"Codeflow" vs "tracked" terminology split**: `maestro_codeflow_prs` (list) and `maestro_tracked_pr` (get) use different nouns for the same concept. Technically both are accurate ("codeflow PR" = the GitHub PR, "tracked PR" = Maestro's subscription record), but the inconsistency adds cognitive load. Low-priority fix via aliasing, not renaming.
-
-- **Breaking changes aren't worth it**: The current 17 tool names are learnable and predictable once the pattern is understood. Renaming for marginal clarity gains would disrupt consuming skills for 6-12 months. Better to fill gaps (`maestro_builds`, `maestro_channel`) and document the pattern.
-
-- **Recommendation**: Add 2 missing symmetrical tools (P1), document the naming convention in code/README (P2), consider aliasing `maestro_codeflow_pr` in future (P3 backlog). Reject breaking renames. Decision recorded in `.ai-team/decisions/inbox/holden-naming-conventions.md`.
-
-### dotnet-replay Architecture & Feature Scoping (2026-02-20)
-
-- **Single-file .NET 10 app design**: dotnet-replay is intentionally monolithic (~3300 lines in replay.cs) for easy distribution via `dnx`. Code organization relies on function nesting, helper utilities reuse, and pluggable format detection. This design choice constrains how new features are added — they must be thin wrappers around core parsing/rendering functions, not separate modules.
-
-- **Pluggable format detection and parsing**: The tool detects and parses three transcript formats independently: (1) Copilot CLI JSONL events, (2) Claude Code JSONL, (3) Waza evaluation JSON. Each format has a dedicated parser (`ParseJsonlData`, `ParseWazaData`, `ParseClaudeData`) that normalizes to common data structures (`JsonlData`, `WazaData` records). This architecture is **ideal for adding new features** — diff, grep, and stats all leverage the same parsers and can reuse turn extraction utilities.
-
-- **Rich turn-level metadata**: All transcript formats expose full turn data with timestamps, roles, content, and tool calls encoded in `JsonElement` structures. The existing code already navigates JSON structure introspection well (witness the summary mode extracting validation data from Waza transcripts, tool call counts from Copilot events). This makes feature implementation straightforward — no need to extend the data model.
-
-- **Existing mode infrastructure is extensible**: The codebase already has multiple "modes" (interactive pager, stream, JSON, summary). New features (diff, grep, stats) should follow the same pattern: a command dispatcher at the top level checks for the mode flag (e.g., `if (cliArgs[0] == "diff")`), then routes to a feature-specific function. Each feature can inherit the existing `--json` and color/formatting utilities.
-
-- **Test structure is mature**: Three test files (SummaryOutputTests, JsonOutputTests, EdgeCaseTests) cover existing modes comprehensively with xUnit. The pattern is to load sample transcripts (Copilot, Waza, malformed edge cases), invoke the parser, and validate output. Adding diff/grep/stats tests should follow the same structure: use existing sample data, add new test cases for alignment accuracy or search correctness.
-
-- **Turn alignment for diff is feasible but algorithmic**: Issue #11's turn alignment algorithm is the core complexity. Strategy: for evaluation transcripts where both models solve the same task, exact timestamp matching works most of the time. Fuzzy matching (Levenshtein distance > 80%) handles cases where prompts differ slightly. Turn count will be similar for models on same task, so O(n²) or O(n log n) alignment is acceptable for transcript sizes <1000 turns.
-
-- **Glob expansion and cross-platform file discovery**: Issues #12 and #13 require handling shell globs (e.g., `results/*.json`). Best approach: use `Directory.GetFiles` with pattern matching rather than relying on shell expansion — ensures consistent behavior across platforms. This utility should be shared between grep and stats.
-
-- **Output format consistency**: All features should support `--json` for pipeline consumption and human-readable table/tree format for interactive use. The existing Spectre.Console markup system is excellent for this — it already powers colored output, tables (witness SummaryOutputTests validating table layout), and aligned text.
-
-- **Recommended implementation order**: #13 (stats, 2–3 days) → #12 (grep, 3–4 days) → #11 (diff, 5–7 days). This order maximizes value delivery (stats immediately useful for Arena), reuses glob/extraction utilities across features, and delays the most complex algorithm (turn alignment) until last.
-
-### Issue #1 Triage: Codeflow Feature Requests (2026-02-19)
-
-- Triaged 9 feature requests from Issue #1 covering codeflow analysis workflows. **All 9 are architecturally feasible** with current PCS client surface. No fundamental blockers.
-- Decomposed scope: P1 (high-impact) = 3 features (codeflow PRs, force-trigger, branch filtering); P2 (medium) = 3 features (history, flow graph, health); P3 (nice-to-have) = 3 features (VMR manifest, channel shorthand, build assets).
-- **Proposed roadmap**: v0.2.1 (2 features + enhancements: force-trigger + branch filter + channel shorthand, ~10 hrs); v0.3 (3 composite features requiring GitHub API: codeflow-prs, flow-graph, health endpoint, ~2 weeks); v0.4+ (backlog niche features).
-- **PCS API investigation needed** for features #4 (subscription history) and #9 (build assets) — Naomi to check if these endpoints exist in current PCS client NuGet. If not, file backlog items with Maestro team.
-- **Key decision**: Force-trigger (feature #2) — current code already passes `isCoherencyUpdate: true` to PCS. Clarify with Larry whether this is correct behavior, then either document or expose as separate tool.
-- **GitHub API strategy needed** — features #1, #5, #6 require GitHub integration (search PRs, get PR status). Team should decide: Octokit (REST), GraphQL client, or `gh` CLI wrapper. Recommending Octokit for simplicity.
-- **Documented questions for Larry** on force-trigger semantics, GitHub client preference, and VMR scope.
-
-📌 Triage document written to `.ai-team/decisions/inbox/holden-issue1-triage.md`. Covers feasibility, complexity, PCS dependencies, effort estimates, and actionable roadmap for team.
-
-### STRIDE Threat Model (2025-07-15)
-
-- Conducted full STRIDE analysis of maestro.mcp. The auth cascade (PAT → Entra ID → Anonymous) is the highest-risk surface — the anonymous fallback is by design for read-only, but the server currently doesn't enforce read-only at the MCP tool layer for anonymous sessions. The `TriggerSubscription` and `TriggerDailyUpdate` tools rely entirely on the PCS API rejecting unauthorized callers, which is correct but means auth failures surface as opaque API errors rather than clean "you're not authenticated" messages.
-- The in-memory cache (`ConcurrentDictionary`) has no size bounds. An attacker or misbehaving LLM generating unique cache keys via `noCache=false` with varied parameters could grow memory unbounded. Unlikely in practice (cache keys are derived from a small parameter space), but worth noting for HTTP deployment.
-- The `maestro_clear_cache` tool is unauthenticated and available to any MCP client. In multi-user HTTP mode, one client can clear another's cache. In stdio mode this is a non-issue (single user per process).
-- `GetBuildFreshnessAsync` creates `HttpClient` inline — noted by Amos as untestable, but also relevant for threat model: no certificate validation customization, follows redirects from aka.ms without validating the target domain.
-- Action deduplication (2-minute cooldown via `CacheService`) is a useful defense against LLM retry storms but is trivially bypassed by clearing the cache first (`maestro_clear_cache` → `maestro_trigger_subscription`).
-- The HTTP transport (`MaestroTool.Mcp`) has no authentication middleware — it's wide open on localhost:5000. This is fine for local dev but would be critical in any shared deployment.
-
-📌 Team update (2025-07-15): STRIDE threat model completed — identified 14 threats, 8 with mitigations documented. P0 items (SSRF validation, dedup separation, tool-level auth gating) ready for next sprint. Decided by Holden, Naomi, Amos.
-
-### SQLite Cache Migration Threat Model (2026-02-18)
-
-- Conducted focused STRIDE analysis on the SQLite cache migration (ConcurrentDictionary → `~/.mstro/cache.db`). Identified 13 new threats across all 6 STRIDE categories. The migration fundamentally changes the trust boundary: data that was implicitly protected by process isolation is now accessible to any same-user process via a predictable filesystem path.
-- **Highest severity findings**: Cache poisoning (S1, HIGH) and direct database tampering (T1, HIGH) by same-user processes, and plaintext persistence of operationally sensitive data (I1, HIGH). These are all inherent to moving from in-memory to on-disk storage.
-- **Pragmatic assessment**: Same-user tampering threats (S1/T1/T2) require prior machine compromise. If an attacker has same-user code execution, they can already call the PCS API directly — cache tampering gains little. Prioritized file permissions (I2, P1) and corruption auto-recovery (D2, P1) as the actionable items.
-- **Cross-process auth boundary** (E1) is interesting: an anonymous mstro instance can read data cached by an authenticated instance. Accepted as low risk since PCS allows anonymous reads anyway — the "escalation" is avoiding rate limits, not accessing protected data.
-- **Key design recommendation**: HMAC integrity verification on cache entries (P2 backlog). Per-installation secret in `~/.mstro/.cache-key`, HMAC-SHA256 over key+value+expiry. This is the right long-term fix for S1/T1/T2 but not urgent for single-user dev workstations.
-- **Immediate P1 actions**: (1) Explicit file permissions on `~/.mstro/` directory and `cache.db` — use `File.SetUnixFileMode` on Linux/macOS. (2) `PRAGMA integrity_check` in `InitializeDatabase()` with auto-delete-and-recreate on corruption.
-
-📌 Threat model written to `.ai-team/decisions/inbox/holden-sqlite-threat-model.md`. 13 findings, 2 P1 items for next sprint, HMAC integrity on P2 backlog.
-
-📌 Team update (2026-02-19): P1 security fixes completed — file permissions (I2) and corruption auto-recovery (D2) implemented in CacheService. 6 security tests written. All 73 tests passing. Decided by Naomi, Amos.
-
-### GitHub Auth Cascade Threat Model (2025-07-16)
-
-- Conducted STRIDE-informed analysis of the v0.6.0 GitHub auth cascade (`GitHubApiClient.cs`): GITHUB_TOKEN env var → `gh auth token` subprocess → anonymous fallback. 9 findings total — 0 Critical, 0 High, 2 Medium, 4 Low, 3 Info.
-- **Most significant finding**: `process.WaitForExit()` with no timeout on the `gh auth token` subprocess call (GH-T1, Medium). This runs in a static initializer, so a hung `gh` process blocks the entire MCP server indefinitely. Fix: add 5-second timeout and kill on hang.
-- **Static HttpClient token lifetime** (GH-T4, Medium): Token is set once at type-load time and never refreshed. Acceptable for short-lived MCP subprocess sessions, but needs documentation that token changes require restart.
-- **Token handling is clean**: Confirmed the token value is never logged, never included in error messages, never persisted. Only auth method names go to stderr. `AuthenticationHeaderValue` validates the token format, preventing header injection.
-- **URL construction is low-risk**: The `owner`/`repo`/`baseSha`/`headSha` parameters come from internal BAR API data, not MCP tool parameters. `IsVmrRepository` restricts to dotnet/dotnet. `ParseGitHubUrl` validates github.com host. SHA format validation (`^[0-9a-f]{7,40}$`) recommended as defense-in-depth but not urgent.
-- **PATH-based executable resolution** for `gh` is standard practice and accepted — requires prior machine compromise to exploit.
-- **Pattern observed**: The separation between "what goes to stderr" (auth method) vs "what stays in scope" (token value) is a good security pattern worth maintaining across the codebase.
-
-📌 Threat model written to `.ai-team/decisions/inbox/holden-threat-model-github-auth.md`. 1 P1 fix (subprocess timeout), 2 P2 backlog items, 6 accepted.
-
-📌 Team update (2026-02-22): Always pass DefaultBaseUri to PcsApiFactory — decided by Naomi
-
-### Cross-Validation Strategies for Subscription Health (2026-03-11)
-
-- Analyzed vulnerability exposed in session 55857d51: Maestro's subscription bookkeeping can be wrong when `PullRequestUpdater.cs` throws exceptions that bypass `ClearAllStateAsync()`, leaving `LastAppliedBuildId` stuck at old values. Additionally, the `Success` field in subscription history is never set to `true` anywhere in the codebase.
-- Both `maestro_subscription_health` (Tool #3) and `maestro_codeflow_statuses` (Tool #20) are vulnerable to reporting stale data since they trust Maestro's internal state without cross-validation against ground truth.
-- Proposed 6 cross-validation strategies with architectural analysis of data sources, API costs, reliability, and implementation approaches. Key strategies:
-  1. **PR Ground Truth Cross-Check** (P1) — Detect when Maestro reports failures but PRs are actually merging. Uses GitHub search API to find merged PRs and compare against `LastAppliedBuild` commit SHAs. Directly addresses the emsdk scenario.
-  2. **Commit Reachability Validation** (P1) — Verify `LastAppliedBuild.Commit` is actually reachable from target repo HEAD using GitHub compare API. Catches corrupted bookkeeping states with lightweight API calls.
-  3. **Subscription History vs. PR Lifecycle Alignment** (P2) — Deep diagnostic tool correlating Maestro's history events with actual GitHub PR state transitions. For debugging specific anomalies.
-  4. **Build Freshness vs. Source Activity** (P3) — Detect when source repo has unreported commits since latest build. More useful for build pipeline monitoring than bookkeeping bug detection.
-  5. **Codeflow Status + Tracked PR Validation** (P3) — Cross-validate `/api/codeflows` endpoint data against tracked PR states and GitHub merge status.
-  6. **Success Field Audit** (P2) — Confirm the "Success never true" bug at scale by analyzing subscription history patterns.
-- **Key architectural decisions:**
-  - Make validation opt-in via `validate: bool` parameter to avoid rate limit impact on default usage
-  - Return structured anomaly data in new `ValidationResult` record for programmatic consumption
-  - Cache validation results longer than normal data (15–30 min) since ground truth changes slowly
-  - Batch validation to manage GitHub rate limits (30 req/min authenticated)
-- **Recommended roadmap:** Phase 1 (P1) implements Strategy 1+2 in v0.7.0 (~1 week effort). Phase 2 (P2) adds deep diagnostics in v0.8.0. Phase 3 (P3) is backlog.
-- **Security considerations:** Validation only queries public repos with existing auth cascade, implements rate limit back-off, and leverages existing URL validation to prevent SSRF.
-- **Success metric:** Tool correctly flags the emsdk subscription (from session 55857d51) as stuck with <5% false positive rate and <10s overhead for 10 subscriptions.
-- **Open questions:** Tool design preference (opt-in parameter vs. separate tool vs. always-on), whether to file upstream Maestro issues for the root cause bugs, and acceptable GitHub API budget for consuming skills.
-
-📌 Analysis document written to `.ai-team/decisions/inbox/holden-cross-validation-strategies.md`. 6 strategies analyzed, Phase 1 roadmap proposed (PR ground truth + commit reachability validation).
-
-### MCP Server Design Skill Review (2026-03-11)
-
-Reviewed the mcp-server-design skill for best practices against our real-world maestro.mcp implementation. **Verdict: solid bones, missing critical depth.**
-
-**Strong patterns worth keeping:**
-- **Knowledge tool architecture** — two-tier pattern (compact descriptions + on-demand knowledge endpoints) is our best design decision. The `helix_ci_guide` exemplar in helix.mcp validates this.
-- **Descriptions as routing signals** — treating them like skill frontmatter (always-loaded, token-tax aware) is the right mental model and directly informed our description tightening work.
-- **Purpose-first structure** — "lead with a verb, don't describe return schemas" matches what we actually do across 20 maestro.mcp tools.
-- **Cross-referencing related tools** — we use this extensively (`maestro_subscription` → `maestro_subscription_health`, tools mention alternatives in descriptions).
-
-**Critical gaps that need filling:**
-- **No caching guidance** — The skill doesn't mention caching at all. We have 15-min TTLs, SQLite persistence, cache invalidation via `maestro_clear_cache`, action deduplication with 2-minute cooldowns. This is foundational to real MCP servers.
-- **No auth patterns** — Missing auth cascades (PAT → Entra ID → Anonymous), when tools should enforce auth vs. rely on API-level rejection, auth error message design ("🔒 Authentication required" vs. opaque API errors). We spent STRIDE sessions on this.
-- **Parameter design underexplored** — Parameter descriptions do heavy lifting in maestro.mcp (format examples, valid ranges, cross-parameter relationships, standard `noCache` pattern across tool families). Skill gives this one sentence.
-- **Error handling absent** — No guidance on structured error messages, validation (`Guid.TryParse`, channel name resolution), recovery suggestions. We validate early and return clear errors.
-- **Real anti-patterns missing** — PCS factory crashes with `null` baseUri, process execution on Windows, GitHub rate limits, SQLite corruption auto-recovery. These are earned from building maestro.mcp.
-- **Health check / composite tool patterns** — When to create diagnostic tools (`maestro_subscription_health`) vs. expose primitives (`maestro_subscription`)? Design tradeoffs not discussed.
-
-**Slop detected:**
-- agent-integration-patterns.md repeats "domain language over tool names" 3 times with minor variations
-- industry-alignment.md summarizes research papers but doesn't extract actionable "so what?"
-- validation-methodology.md has good test templates but the "open questions" section reveals most patterns haven't been formally validated (concerning for a "best practices" guide)
-
-**What's genuinely earned:**
-- Knowledge tool pattern clearly derived from helix.mcp experience
-- Description length tradeoff grounded in research + measurement
-- Tool family naming consistency matches our actual design
-
-**Recommendations for Larry:**
-- P0: Add sections on caching, error handling, auth patterns, parameter design, real anti-patterns
-- P1: Expand tool annotations (security vs. documentation distinction), parameter descriptions (dedicated section), composite tool patterns
-- P2: Cut repetition in agent-integration-patterns.md, sharpen industry-alignment takeaways
-- P3: Add before/after examples, tool family case study (use maestro.mcp as exemplar), auth cascade walkthrough
-
-📌 Review findings valuable for future MCP server design work. The skill has a good foundation but needs depth in operational patterns we actually hit building maestro.mcp.
-
-
-### MCP Tool Audit for Agent Optimization (2026-02-20)
-
-- **Description bloat is real**: 8 of 19 tools list return fields ("Returns X, Y, Z") in their descriptions. Agents see the actual response — schema documentation in descriptions is pure waste. This pattern came from copying API docs verbatim rather than thinking about agent routing decisions.
-
-- **Composite tools are working well**: `maestro_subscription_health` and `maestro_codeflow_statuses` are excellent examples of agent-optimized design. The flow-analysis skill shows agents call these as first-step tools for "why is X stuck?" questions. They combine multiple data sources (subscriptions + builds + staleness + optional GitHub validation) in one call, exactly matching agent mental models.
-
-- **Multi-step workflows reveal abstraction gaps**: Agents repeatedly do "get latest build → parse markdown → extract build ID → trigger subscription". This 3-step pattern appears in every flow-analysis remediation workflow. Fix: add optional `sourceRepository`/`channelName` parameters to `maestro_trigger_subscription` to resolve the latest build internally. Same pattern applies to subscription discovery — agents call `maestro_subscriptions` to list all, then grep for the one they want. Fix: add `maestro_find_subscription(source, target, channel, branch)`.
-
-- **Channel ID vs name asymmetry**: `maestro_channel` requires an integer ID, but agents only ever have channel names (from PRs, subscriptions, user input). This forces a 2-step workflow: list all channels, grep for name, extract ID. The code already resolves names→IDs internally in other tools (`GetSubscriptions`, `GetLatestBuild`). Exposing that in `maestro_channel` (accept `string channelNameOrId`) would eliminate the friction.
-
-- **Cross-references matter when tools overlap**: Three subscription tools (`maestro_subscriptions`, `maestro_subscription`, `maestro_subscription_health`) serve different purposes but don't cross-reference each other. Agents need guidance: "Use X for discovery, Y for batch health, Z for single-subscription details." This is especially important for tools with similar names or overlapping parameters.
-
-- **Parameter descriptions with examples are highly effective**: Almost every parameter includes an example (e.g., "Filter by source repository URL (e.g. https://github.com/dotnet/runtime)"). This is significantly better than tools that say "repository URL" without context. Flow-analysis skill shows agents use these examples directly when constructing calls. Keep this pattern.
-
-- **noCache is well-understood**: All 17 read-only tools accept `noCache` with identical descriptions. Agents use it correctly (after write operations, when diagnosing stale data). The consistency helps — agents learn the pattern once and apply it everywhere.
-
-- **Tool naming follows implicit conventions**: Verbs for actions (`trigger_`, `clear_`), bare nouns for queries. Singular vs plural matches semantics (list vs get). The flow-analysis skill shows agents understand this pattern without documentation. The only asymmetry is "codeflow" vs "tracked" for PR tools — both are accurate but the split adds cognitive load.
-
-- **Agent workflows validated against skills**: The audit cross-referenced all 19 tools against flow-analysis (302 lines) and flow-tracing (147 lines) skill files. This revealed the actual usage patterns: subscription health checks are 90% of queries, triggering is the only write operation agents use, and flow graph is rarely called (too complex, defaults are usually fine). Skills are the ground truth for "what agents actually want".
-
-- **Commit tracing is intentionally out of scope**: Flow-tracing skill shows agents read `src/source-manifest.json` and `eng/Version.Details.xml` directly via GitHub tools. Maestro MCP doesn't (and shouldn't) expose commit ancestry or source manifest parsing — that's GitHub's domain. The separation is correct.
+*Earlier detailed audit findings and skill review entries archived 2026-03-12. Original content preserved in git history and decisions.md.*
 
