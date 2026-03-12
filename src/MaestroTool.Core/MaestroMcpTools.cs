@@ -868,10 +868,16 @@ public class MaestroMcpTools
                 sb.AppendLine($"    Head Branch: {pr.HeadBranch}");
         }
 
-        if (flow.NewerBuildsAvailable.HasValue && flow.NewerBuildsAvailable.Value > 0)
-            sb.AppendLine($"  ⚠️ {flow.NewerBuildsAvailable.Value} newer build(s) available");
-        else if (flow.NewerBuildsAvailable.HasValue)
-            sb.AppendLine($"  ✅ Up to date");
+        if (flow.NewestBuildId.HasValue)
+        {
+            var lastAppliedId = flow.Subscription?.LastAppliedBuild?.Id;
+            if (lastAppliedId.HasValue && lastAppliedId.Value < flow.NewestBuildId.Value)
+                sb.AppendLine($"  ⚠️ Behind — newest build #{flow.NewestBuildId.Value} ({flow.NewestBuildDate:u}), last applied #{lastAppliedId.Value}");
+            else if (lastAppliedId.HasValue)
+                sb.AppendLine($"  ✅ Up to date (build #{flow.NewestBuildId.Value})");
+            else
+                sb.AppendLine($"  Newest Build: #{flow.NewestBuildId.Value} ({flow.NewestBuildDate:u})");
+        }
 
         sb.AppendLine();
     }

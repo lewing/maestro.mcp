@@ -785,9 +785,15 @@ public class Commands
             Console.WriteLine($"      Last Update: {flow.ActivePullRequest.LastUpdate:u}");
         }
 
-        if (flow.NewerBuildsAvailable.HasValue && flow.NewerBuildsAvailable.Value > 0)
-            Console.WriteLine($"    ⚠️ {flow.NewerBuildsAvailable.Value} newer build(s) available");
-        else if (flow.NewerBuildsAvailable.HasValue)
-            Console.WriteLine($"    ✅ Up to date");
+        if (flow.NewestBuildId.HasValue)
+        {
+            var lastAppliedId = flow.Subscription?.LastAppliedBuild?.Id;
+            if (lastAppliedId.HasValue && lastAppliedId.Value < flow.NewestBuildId.Value)
+                Console.WriteLine($"    ⚠️ Behind — newest build #{flow.NewestBuildId.Value} ({flow.NewestBuildDate:u}), last applied #{lastAppliedId.Value}");
+            else if (lastAppliedId.HasValue)
+                Console.WriteLine($"    ✅ Up to date (build #{flow.NewestBuildId.Value})");
+            else
+                Console.WriteLine($"    Newest Build: #{flow.NewestBuildId.Value} ({flow.NewestBuildDate:u})");
+        }
     }
 }

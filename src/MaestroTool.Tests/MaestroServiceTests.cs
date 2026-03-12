@@ -2308,12 +2308,14 @@ public class MaestroServiceTests : IDisposable
     private static CodeflowSubscriptionStatus CreateCodeflowSubscriptionStatus(
         Subscription? subscription = null,
         TrackedPullRequest? activePr = null,
-        int? newerBuildsAvailable = null) =>
+        int? newestBuildId = null,
+        DateTimeOffset? newestBuildDate = null) =>
         new()
         {
             Subscription = subscription,
             ActivePullRequest = activePr,
-            NewerBuildsAvailable = newerBuildsAvailable
+            NewestBuildId = newestBuildId,
+            NewestBuildDate = newestBuildDate
         };
 
     [Fact]
@@ -2363,8 +2365,8 @@ public class MaestroServiceTests : IDisposable
     {
         var sub = CreateSubscription();
         var pr = CreateTrackedPullRequest("https://github.com/dotnet/dotnet/pull/9999");
-        var forwardFlow = CreateCodeflowSubscriptionStatus(subscription: sub, activePr: pr, newerBuildsAvailable: 3);
-        var backflow = CreateCodeflowSubscriptionStatus(subscription: sub, newerBuildsAvailable: 0);
+        var forwardFlow = CreateCodeflowSubscriptionStatus(subscription: sub, activePr: pr, newestBuildId: 100);
+        var backflow = CreateCodeflowSubscriptionStatus(subscription: sub, newestBuildId: null);
         var status = CreateCodeflowStatus(
             mappingName: "runtime",
             forwardFlow: forwardFlow,
@@ -2378,8 +2380,8 @@ public class MaestroServiceTests : IDisposable
         Assert.Single(result);
         Assert.NotNull(result[0].ForwardFlow);
         Assert.NotNull(result[0].Backflow);
-        Assert.True(result[0].ForwardFlow!.NewerBuildsAvailable > 0);
-        Assert.Equal(0, result[0].Backflow!.NewerBuildsAvailable);
+        Assert.True(result[0].ForwardFlow!.NewestBuildId > 0);
+        Assert.Null(result[0].Backflow!.NewestBuildId);
         Assert.Equal("https://github.com/dotnet/dotnet/pull/9999", result[0].ForwardFlow!.ActivePullRequest?.Url);
         Assert.Null(result[0].Backflow!.ActivePullRequest);
     }
