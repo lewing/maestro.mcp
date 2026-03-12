@@ -25,7 +25,7 @@ public class MaestroMcpTools
         $"_Retrieved: {DateTimeOffset.UtcNow:u}{(noCache ? " (fresh)" : " (cached)")}_\n\n";
 
     [McpServerTool(Name = "maestro_subscriptions", ReadOnly = true)]
-    [Description("List Maestro subscriptions filtered by source/target repository and/or channel name. Returns subscription ID, source/target repo, channel, target branch, and enabled status.")]
+    [Description("List Maestro subscriptions filtered by source/target repository and/or channel name. For health checks, use maestro_subscription_health. For details on a single subscription by ID, use maestro_subscription.")]
     public async Task<string> GetSubscriptions(
         [Description("Filter by source repository URL (e.g. https://github.com/dotnet/runtime)")] string? sourceRepository = null,
         [Description("Filter by target repository URL (e.g. https://github.com/dotnet/dotnet)")] string? targetRepository = null,
@@ -63,7 +63,7 @@ public class MaestroMcpTools
     }
 
     [McpServerTool(Name = "maestro_subscription", ReadOnly = true)]
-    [Description("Get a specific Maestro subscription by its GUID ID, including health diagnostic comparing last applied build to latest available.")]
+    [Description("Get a specific Maestro subscription by its GUID ID, including health diagnostic comparing last applied build to latest available. For batch health checks across a repository, use maestro_subscription_health instead.")]
     public async Task<string> GetSubscription(
         [Description("The subscription GUID")] string subscriptionId,
         [Description("Bypass cache and fetch fresh data")] bool noCache = false,
@@ -113,7 +113,7 @@ public class MaestroMcpTools
     }
 
     [McpServerTool(Name = "maestro_latest_build", ReadOnly = true)]
-    [Description("Get the latest build for a repository, optionally filtered by channel name. Returns build ID, commit, date, and channel info.")]
+    [Description("Get the latest build for a repository, optionally filtered by channel name.")]
     public async Task<string> GetLatestBuild(
         [Description("Repository URL (e.g. https://github.com/dotnet/runtime)")] string repository,
         [Description("Optional channel name filter")] string? channelName = null,
@@ -137,7 +137,7 @@ public class MaestroMcpTools
     }
 
     [McpServerTool(Name = "maestro_build", ReadOnly = true)]
-    [Description("Get a specific build by its BAR build ID. Returns build details including commit, date, channels, and repository.")]
+    [Description("Get a specific build by its BAR build ID. For listing/filtering builds, use maestro_builds.")]
     public async Task<string> GetBuild(
         [Description("The BAR build ID (integer)")] int buildId,
         [Description("Bypass cache and fetch fresh data")] bool noCache = false,
@@ -148,7 +148,7 @@ public class MaestroMcpTools
     }
 
     [McpServerTool(Name = "maestro_builds", ReadOnly = true)]
-    [Description("List builds, optionally filtered by repository, channel, commit, or build number. Returns build ID, repository, commit, date, and channels.")]
+    [Description("List builds, optionally filtered by repository, channel, commit, or build number.")]
     public async Task<string> ListBuilds(
         [Description("Filter by repository URL (e.g. https://github.com/dotnet/runtime)")] string? repository = null,
         [Description("Filter by channel name (e.g. '.NET 11.0.1xx SDK')")] string? channelName = null,
@@ -185,13 +185,38 @@ public class MaestroMcpTools
     }
 
     [McpServerTool(Name = "maestro_channel", ReadOnly = true)]
-    [Description("Get a specific channel by its ID. Returns channel name, classification, and associated repositories.")]
+    [Description("Get a specific channel by ID or name. For listing all channels, use maestro_channels.")]
     public async Task<string> GetChannel(
-        [Description("The channel ID (integer)")] int channelId,
+        [Description("Channel ID (integer) or channel name (e.g. '.NET 10.0.1xx SDK')")] string channelId,
         [Description("Bypass cache and fetch fresh data")] bool noCache = false,
         CancellationToken cancellationToken = default)
     {
-        var channel = await _service.GetChannelAsync(channelId, noCache, cancellationToken);
+        if (string.IsNullOrWhiteSpace(channelId))
+            return "Channel ID or name is required.";
+
+        Channel channel;
+        if (int.TryParse(channelId, out var parsedId))
+        {
+            if (parsedId < 0)
+                return $"Invalid channel ID '{channelId}'. Channel IDs must be non-negative integers.";
+
+            try
+            {
+                channel = await _service.GetChannelAsync(parsedId, noCache, cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                return $"Channel with ID {parsedId} not found.";
+            }
+        }
+        else
+        {
+            var found = await _service.GetChannelByNameAsync(channelId, noCache, cancellationToken);
+            if (found == null)
+                return $"Channel '{channelId}' not found. Use maestro_channels to list available channels.";
+            channel = found;
+        }
+
         var sb = new StringBuilder();
         sb.AppendLine($"**{channel.Name}** (ID: {channel.Id})");
         sb.AppendLine($"Classification: {channel.Classification}");
@@ -199,7 +224,7 @@ public class MaestroMcpTools
     }
 
     [McpServerTool(Name = "maestro_channels", ReadOnly = true)]
-    [Description("List all Maestro channels. Returns channel names and IDs.")]
+    [Description("List all Maestro channels.")]
     public async Task<string> GetChannels(
         [Description("Bypass cache and fetch fresh data")] bool noCache = false,
         CancellationToken cancellationToken = default)
@@ -241,7 +266,7 @@ public class MaestroMcpTools
     }
 
     [McpServerTool(Name = "maestro_subscription_health", ReadOnly = true)]
-    [Description("Check subscription health for a target repository. For each active subscription, compares the last applied build against the latest available build on the channel to detect stale subscriptions.")]
+    [Description("Check subscription health for a target repository. For each active subscription, compares the last applied build against the latest available build on the channel to detect stale subscriptions. Start here for most investigations. For listing/filtering subscriptions, use maestro_subscriptions.")]
     public async Task<string> GetSubscriptionHealth(
         [Description("Target repository URL (e.g. https://github.com/dotnet/dotnet)")] string targetRepository,
         [Description("Bypass cache and fetch fresh data")] bool noCache = false,
@@ -392,36 +417,65 @@ public class MaestroMcpTools
     }
 
     [McpServerTool(Name = "maestro_trigger_subscription")]
-    [Description("Trigger a specific Maestro subscription to process a build. This is a non-destructive action that initiates dependency flow processing. Use force=true to force-trigger (overwrites existing PR branch with fresh content) for stale backflow PR remediation.")]
+    [Description("Trigger a Maestro subscription. Provide buildId directly, or provide sourceRepository and channelName to auto-resolve the latest build. Use force=true to force-trigger (overwrites existing PR branch) for stale backflow PR remediation.")]
     public async Task<string> TriggerSubscription(
         [Description("The subscription GUID to trigger")] string subscriptionId,
-        [Description("The BAR build ID to process")] int buildId,
-        [Description("When true, force-triggers the subscription (overwrites existing PR branch with fresh content). Use for stale backflow PR remediation. Default: false.")] bool force = false,
+        [Description("BAR build ID. If omitted, the latest build is resolved from sourceRepository and channelName.")] int? buildId = null,
+        [Description("Source repository URL to resolve latest build (e.g. 'https://github.com/dotnet/runtime'). Required if buildId is omitted.")] string? sourceRepository = null,
+        [Description("Channel name to resolve latest build (e.g. '.NET 10.0.1xx SDK'). Required if buildId is omitted.")] string? channelName = null,
+        [Description("Force trigger (overwrites existing PR branch). Use for stale backflow PR remediation.")] bool force = false,
         CancellationToken cancellationToken = default)
     {
         if (!Guid.TryParse(subscriptionId, out var id))
             return "Invalid subscription ID format. Expected a GUID.";
 
-        var dedupKey = $"action:trigger-sub:{subscriptionId}:{buildId}:{force}";
+        int resolvedBuildId;
+        string? resolvedInfo = null;
+
+        if (buildId.HasValue)
+        {
+            resolvedBuildId = buildId.Value;
+        }
+        else
+        {
+            if (string.IsNullOrEmpty(sourceRepository) || string.IsNullOrEmpty(channelName))
+                return "Both sourceRepository and channelName are required when buildId is not provided.";
+
+            var channel = await _service.GetChannelByNameAsync(channelName, noCache: false, cancellationToken);
+            if (channel == null)
+                return $"Channel '{channelName}' not found. Use maestro_channels to list available channels.";
+
+            var latestBuild = await _service.GetLatestBuildAsync(sourceRepository, channel.Id, noCache: true, cancellationToken);
+            if (latestBuild == null)
+                return $"No build found for {sourceRepository} on channel '{channelName}'.";
+
+            resolvedBuildId = latestBuild.Id;
+            var commitShort = latestBuild.Commit?.Length >= 7 ? latestBuild.Commit[..7] : latestBuild.Commit ?? "N/A";
+            resolvedInfo = $"Auto-resolved build #{resolvedBuildId} ({commitShort}, {latestBuild.DateProduced:u}) from {sourceRepository} on '{channelName}'";
+        }
+
+        var dedupKey = $"action:trigger-sub:{subscriptionId}:{resolvedBuildId}:{force}";
         var recent = _cache.GetRecentAction(dedupKey);
         if (recent.HasValue)
         {
-            Console.Error.WriteLine($"[{DateTime.UtcNow:O}] Trigger: TriggerSubscription dedup-skipped args=(subscriptionId={subscriptionId}, buildId={buildId}, force={force}) lastTriggered={recent.Value:O}");
-            return $"⏳ This subscription was already triggered for build #{buildId}{(force ? " (force)" : "")} at {recent.Value:u}. Skipping duplicate.";
+            Console.Error.WriteLine($"[{DateTime.UtcNow:O}] Trigger: TriggerSubscription dedup-skipped args=(subscriptionId={subscriptionId}, buildId={resolvedBuildId}, force={force}) lastTriggered={recent.Value:O}");
+            return $"⏳ This subscription was already triggered for build #{resolvedBuildId}{(force ? " (force)" : "")} at {recent.Value:u}. Skipping duplicate.";
         }
 
         try
         {
-            var result = await _service.TriggerSubscriptionAsync(id, buildId, force, cancellationToken);
+            var result = await _service.TriggerSubscriptionAsync(id, resolvedBuildId, force, cancellationToken);
             _cache.RecordAction(dedupKey, ActionCooldown);
 
             var sb = new StringBuilder();
-            sb.AppendLine($"✅ Successfully {(force ? "force-" : "")}triggered subscription {subscriptionId} for build #{buildId}");
+            if (resolvedInfo != null)
+                sb.AppendLine($"ℹ️ {resolvedInfo}");
+            sb.AppendLine($"✅ Successfully {(force ? "force-" : "")}triggered subscription {subscriptionId} for build #{resolvedBuildId}");
             sb.AppendLine($"\nSubscription: **{result.SourceRepository}** → **{result.TargetRepository}** ({result.TargetBranch})");
             sb.AppendLine($"Channel: {result.Channel?.Name ?? "N/A"}");
             if (force)
                 sb.AppendLine($"\n⚡ Force mode: existing PR branch will be overwritten with fresh VMR content.");
-            sb.AppendLine($"\nThe subscription will now process build #{buildId} and create/update a dependency update PR if needed.");
+            sb.AppendLine($"\nThe subscription will now process build #{resolvedBuildId} and create/update a dependency update PR if needed.");
 
             return sb.ToString();
         }
@@ -465,7 +519,7 @@ public class MaestroMcpTools
     }
 
     [McpServerTool(Name = "maestro_codeflow_prs", ReadOnly = true)]
-    [Description("List active codeflow (tracked) pull requests managed by Maestro. Optionally filter by channel name. Shows PR URL, channel, target branch, last update, and subscription updates.")]
+    [Description("List active codeflow (tracked) pull requests managed by Maestro. Optionally filter by channel name.")]
     public async Task<string> GetCodeflowPrs(
         [Description("Filter by channel name (e.g. '.NET 10.0.1xx SDK')")] string? channelName = null,
         [Description("Bypass cache and fetch fresh data")] bool noCache = false,
@@ -511,7 +565,7 @@ public class MaestroMcpTools
     }
 
     [McpServerTool(Name = "maestro_codeflow_pr", ReadOnly = true)]
-    [Description("Get the tracked pull request for a specific Maestro subscription. Returns PR URL, channel, target branch, and update details. Returns a message if no PR is currently tracked.")]
+    [Description("Get the tracked pull request for a specific Maestro subscription.")]
     public async Task<string> GetTrackedPr(
         [Description("The subscription GUID")] string subscriptionId,
         [Description("Bypass cache and fetch fresh data")] bool noCache = false,

@@ -219,3 +219,39 @@ Related tool: `maestro_subscription_health` now includes validation results.
   - `SubscriptionHealth_NoOscillation_WithNonAlternatingHistory` — 10 same-action entries, not oscillation
   - `SubscriptionHealth_VmrConsumedCommit_PopulatedForVmrTargetingSub` — mocks `GetFileContentsAsync` with manifest JSON, asserts `VmrConsumedCommit` populated
 - **`CreateHistoryItem` helper updated** with optional `action` parameter (default: `"UpdateAssets"`) to support oscillation test scenarios.
+
+## Learnings
+
+### Test Structure Patterns (2025-03-11)
+- Test class setup follows pattern: mock IMaestroApiClient with NSubstitute, create real CacheService and MaestroService, pass to system under test
+- Use IDisposable pattern to clean up temp cache database files after each test
+- Helper factory methods (CreateChannel, CreateBuild, CreateSubscription) reduce boilerplate and improve test readability
+- Name tests descriptively: `MethodName_Scenario_ExpectedResult` (e.g., `GetChannel_WithIntegerString_ResolvesToChannelId`)
+
+### Channel Name-or-ID Resolution Testing
+- Need to test both integer string parsing ("42") and name lookup (".NET 10.0.1xx SDK")
+- Case-insensitive matching is important for user-friendly API
+- Edge cases: empty/null input, negative numbers, non-existent names
+- When testing name resolution, mock `ListChannelsAsync()` to return test channels
+- When testing ID resolution, mock `GetChannelAsync(id)` to return specific channel
+
+### Smart Trigger Subscription Testing
+- Auto-resolve feature requires testing two code paths: explicit buildId (backward compat) vs. auto-resolve
+- Auto-resolve path: validate sourceRepository + channelName → GetLatestBuildAsync() → TriggerSubscriptionAsync()
+- Validation errors must be clear: missing sourceRepository, missing channelName, channel not found, no builds available
+- Force flag must be preserved through auto-resolve path
+- Backward compatibility is critical: existing calls with explicit buildId must continue to work unchanged
+
+### NSubstitute Patterns
+- `_client.MethodAsync(...).Returns(value)` to set up mocks
+- `await _client.Received(1).MethodAsync(...)` to verify calls
+- `await _client.DidNotReceive().MethodAsync(...)` to ensure method wasn't called
+- Use `Arg.Any<T>()` for parameters we don't care about (e.g., CancellationToken)
+- Can verify specific parameter values: `_client.Received(1).GetChannelAsync(42, ...)`
+
+### Test Organization Principles
+- Created separate test class `MaestroMcpToolsTests` for MCP tool layer (parameter validation, resolution logic, formatting)
+- Existing `MaestroServiceTests` focuses on service layer (caching, API client delegation)
+- This separation clarifies the boundary: tools handle user input & formatting, service handles business logic & caching
+- Tests written proactively before implementation lands, may need minor adjustments post-merge but structure is solid
+

@@ -378,3 +378,11 @@ Affected work: `maestro_subscription_health` tool now supports `validate=true` p
 - **TryParseGitHubPrUrl**: Static helper parses `https://github.com/{owner}/{repo}/pull/{number}` into components. Non-GitHub URLs gracefully return false.
 - **Output integration**: Both MCP tool and CLI show tracked PR state with emoji indicators (🔴 stuck/merged, 🟠 stuck/closed, 🟡 CI-blocked, 🟢 active, ⚪ missing, ❓ unknown) after the oscillation block.
 - **flow-analysis emphasis**: The key insight is that oscillation alone can't tell you WHY a sub is stuck — all stuck subs produce the same alternating pattern. The tracked PR cross-reference is what distinguishes actionable root causes.
+
+### MCP tool audit implementation (P0 + P1) (2025-07-19)
+- **P0: Removed "Returns X, Y, Z" from 8 tool descriptions** — `maestro_subscriptions`, `maestro_latest_build`, `maestro_build`, `maestro_builds`, `maestro_channel`, `maestro_channels`, `maestro_codeflow_prs`, `maestro_codeflow_pr`. Agents see the actual response; listing return fields wastes tokens and clutters routing.
+- **P1-M4: Added cross-references to overlapping tools** — `maestro_subscriptions` ↔ `maestro_subscription_health` ↔ `maestro_subscription`, `maestro_build` → `maestro_builds`, `maestro_channel` → `maestro_channels`. Helps agents pick the right tool without trial-and-error.
+- **P1-M3: Fixed channel ID vs name asymmetry** — `maestro_channel` now accepts `string channelNameOrId` instead of `int channelId`. If it parses as int, calls `GetChannelAsync(int)`; otherwise looks up by name via `GetChannelByNameAsync`. Added null/empty guard and negative-ID validation with try/catch for invalid channel IDs.
+- **P1-M1: Smart trigger_subscription** — `buildId` is now optional (`int?`). When null, agents can provide `sourceRepository` + `channelName` to auto-resolve the latest build internally. Eliminates the 3-step dance (latest_build → parse → trigger). Commit short-SHA display safely handles strings shorter than 7 chars.
+- **Test constructor fix**: `MaestroMcpToolsTests` constructor was missing `MaestroToolOptions` and `CacheService` args for the `MaestroMcpTools` constructor — pre-existing issue fixed as part of this work.
+- **All 167 tests pass** after changes, including 8 new tests that were pre-written for this refactoring.
