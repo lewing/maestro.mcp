@@ -206,3 +206,16 @@ Cross-validation tests completed: 8 test cases, 148 total tests, 0 failures.
 All validation paths covered. Test suite validates decisions from concurrent implementation by Naomi.
 
 Related tool: `maestro_subscription_health` now includes validation results.
+
+### 2026-03-12 — Health-check overhaul: canary → oscillation + VMR ground truth
+
+- **The `Success` field on `SubscriptionHistoryItem` is never true** — old canary tests (`CanaryWarning_DetectsSuspiciousHistory`, `CanaryWarning_NotTriggeredWithFewFailures`) were testing a broken assumption. The check `!history.Any(h => h.Success)` always returned true, making the canary trigger on any subscription with ≥10 history entries regardless of actual state.
+- **Oscillation detection is the real diagnostic signal.** The new `DetectStateOscillationAsync` detects alternating `ApplyingUpdates ↔ MergingPullRequest` patterns (the arcade-services#6090 bug where merged PR state is never cleared from Redis). Threshold: ≥6 entries, ≥3 oscillation cycles, exactly 2 distinct action states.
+- **`SubscriptionHealthResult` updated**: `CanaryWarning` (string?) removed, replaced with `Oscillation` (OscillationResult?), `VmrConsumedCommit` (string?), `VmrConsumedDate` (DateTimeOffset?).
+- **`source-manifest.json` structure for VMR ground truth**: The VMR stores consumed commit SHAs in `src/source-manifest.json` under `submodules[]` with fields `path`, `remoteUri`, `commitSha`, `barId`. The `GetVmrConsumedCommitAsync` method matches `remoteUri` against `sourceRepository` using URL normalization (strip trailing `/` and `.git`).
+- **4 new tests written** (150 total, all passing):
+  - `SubscriptionHealth_OscillationDetected_WithAlternatingStates` — 10 alternating entries, asserts oscillation detected with ≥3 count
+  - `SubscriptionHealth_NoOscillation_WithFewEntries` — 3 entries, below 6-entry threshold
+  - `SubscriptionHealth_NoOscillation_WithNonAlternatingHistory` — 10 same-action entries, not oscillation
+  - `SubscriptionHealth_VmrConsumedCommit_PopulatedForVmrTargetingSub` — mocks `GetFileContentsAsync` with manifest JSON, asserts `VmrConsumedCommit` populated
+- **`CreateHistoryItem` helper updated** with optional `action` parameter (default: `"UpdateAssets"`) to support oscillation test scenarios.

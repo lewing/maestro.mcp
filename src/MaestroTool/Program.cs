@@ -315,9 +315,10 @@ public class Commands
         [Argument] string targetRepository,
         bool json = false,
         bool noCache = false,
-        bool includeCommitDetails = false)
+        bool includeCommitDetails = false,
+        bool validate = false)
     {
-        var results = await _service.GetSubscriptionHealthAsync(targetRepository, noCache, includeCommitDetails);
+        var results = await _service.GetSubscriptionHealthAsync(targetRepository, noCache, includeCommitDetails, validate);
 
         if (json)
         {
@@ -367,6 +368,47 @@ public class Commands
                     {
                         Console.WriteLine($"    {c.Sha} {c.Message} ({c.Author}, {c.Date:yyyy-MM-dd})");
                     }
+                }
+
+                if (r.Oscillation != null)
+                {
+                    var timespan = r.Oscillation.LastSeen.HasValue && r.Oscillation.FirstSeen.HasValue
+                        ? $" over {(r.Oscillation.LastSeen.Value - r.Oscillation.FirstSeen.Value).TotalHours:F1}h"
+                        : "";
+                    Console.WriteLine($"  🔄 State oscillation detected: {r.Oscillation.OscillationCount} cycles of {r.Oscillation.State1} ↔ {r.Oscillation.State2}{timespan}");
+                    Console.WriteLine($"     → Subscription likely stuck (arcade-services#6090)");
+                }
+
+                if (r.TrackedPr != null)
+                {
+                    var stateEmoji = r.TrackedPr.State switch
+                    {
+                        TrackedPrState.MergedButNotCleared => "🔴",
+                        TrackedPrState.ClosedButNotCleared => "🟠",
+                        TrackedPrState.BlockedByCI => "🟡",
+                        TrackedPrState.Active => "🟢",
+                        TrackedPrState.Missing => "⚪",
+                        _ => "❓"
+                    };
+                    var stateLabel = r.TrackedPr.State switch
+                    {
+                        TrackedPrState.MergedButNotCleared => "Stuck: PR merged but state not cleared (arcade-services#6090)",
+                        TrackedPrState.ClosedButNotCleared => "Stuck: PR closed but state not cleared",
+                        TrackedPrState.BlockedByCI => "Blocked: PR has failing CI checks",
+                        TrackedPrState.Active => "PR open and active",
+                        TrackedPrState.Missing => "No tracked PR",
+                        _ => "Unknown PR state"
+                    };
+                    Console.WriteLine($"  {stateEmoji} Tracked PR: {stateLabel}");
+                    if (r.TrackedPr.PrUrl != null)
+                        Console.WriteLine($"     {r.TrackedPr.PrUrl}");
+                }
+
+                if (r.VmrConsumedCommit != null)
+                {
+                    var shortSha = r.VmrConsumedCommit.Length > 7 ? r.VmrConsumedCommit[..7] : r.VmrConsumedCommit;
+                    var dateStr = r.VmrConsumedDate.HasValue ? $" ({r.VmrConsumedDate.Value:u})" : "";
+                    Console.WriteLine($"  📌 VMR consumed: {shortSha}{dateStr} — actual code in dotnet/dotnet");
                 }
 
                 Console.WriteLine();

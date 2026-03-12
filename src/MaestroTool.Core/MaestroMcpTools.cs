@@ -314,9 +314,45 @@ public class MaestroMcpTools
                 }
             }
 
-            if (r.CanaryWarning != null)
+            if (r.Oscillation != null)
             {
-                sb.AppendLine($"  {r.CanaryWarning}");
+                var timespan = r.Oscillation.LastSeen.HasValue && r.Oscillation.FirstSeen.HasValue
+                    ? $" over {(r.Oscillation.LastSeen.Value - r.Oscillation.FirstSeen.Value).TotalHours:F1}h"
+                    : "";
+                sb.AppendLine($"  🔄 State oscillation detected: {r.Oscillation.OscillationCount} cycles of {r.Oscillation.State1} ↔ {r.Oscillation.State2}{timespan}");
+                sb.AppendLine($"     → Subscription likely stuck (arcade-services#6090)");
+            }
+
+            if (r.TrackedPr != null)
+            {
+                var stateEmoji = r.TrackedPr.State switch
+                {
+                    TrackedPrState.MergedButNotCleared => "🔴",
+                    TrackedPrState.ClosedButNotCleared => "🟠",
+                    TrackedPrState.BlockedByCI => "🟡",
+                    TrackedPrState.Active => "🟢",
+                    TrackedPrState.Missing => "⚪",
+                    _ => "❓"
+                };
+                var stateLabel = r.TrackedPr.State switch
+                {
+                    TrackedPrState.MergedButNotCleared => "Stuck: PR merged but state not cleared (arcade-services#6090)",
+                    TrackedPrState.ClosedButNotCleared => "Stuck: PR closed but state not cleared",
+                    TrackedPrState.BlockedByCI => "Blocked: PR has failing CI checks",
+                    TrackedPrState.Active => "PR open and active",
+                    TrackedPrState.Missing => "No tracked PR",
+                    _ => "Unknown PR state"
+                };
+                sb.AppendLine($"  {stateEmoji} Tracked PR: {stateLabel}");
+                if (r.TrackedPr.PrUrl != null)
+                    sb.AppendLine($"     {r.TrackedPr.PrUrl}");
+            }
+
+            if (r.VmrConsumedCommit != null)
+            {
+                var shortSha = r.VmrConsumedCommit.Length > 7 ? r.VmrConsumedCommit[..7] : r.VmrConsumedCommit;
+                var dateStr = r.VmrConsumedDate.HasValue ? $" ({r.VmrConsumedDate.Value:u})" : "";
+                sb.AppendLine($"  📌 VMR consumed: {shortSha}{dateStr} — actual code in dotnet/dotnet");
             }
 
             sb.AppendLine();

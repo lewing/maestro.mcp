@@ -250,11 +250,37 @@ public class MaestroService
                     validation = await CrossValidateSubscriptionAsync(sub, lastApplied, noCache, cancellationToken);
                 }
 
-                // Canary check: cheap heuristic for stuck bookkeeping (runs even without validate=true)
-                string? canaryWarning = null;
+                // Oscillation detection: check for stuck state cycling (runs even without validate=true)
+                OscillationResult? oscillation = null;
+                string? vmrConsumedCommit = null;
+                DateTimeOffset? vmrConsumedDate = null;
+                TrackedPrDiagnosis? trackedPrDiagnosis = null;
                 if (isStale)
                 {
-                    canaryWarning = await CheckCanaryWarningAsync(sub.Id, noCache, cancellationToken);
+                    oscillation = await DetectStateOscillationAsync(sub.Id, noCache, cancellationToken);
+
+                    // Tracked PR diagnosis: cross-reference with GitHub to determine why it's stuck
+                    trackedPrDiagnosis = await DiagnoseTrackedPrAsync(sub.Id, noCache, cancellationToken);
+
+                    // For VMR-targeting subscriptions, look up actual consumed commit
+                    if (IsVmrRepository(sub.TargetRepository))
+                    {
+                        var manifestEntry = await GetVmrConsumedCommitAsync(sub.SourceRepository, sub.TargetBranch, noCache, cancellationToken);
+                        if (manifestEntry != null)
+                        {
+                            vmrConsumedCommit = manifestEntry.CommitSha;
+                            // Try to resolve date from barId if available
+                            if (manifestEntry.BarId.HasValue)
+                            {
+                                try
+                                {
+                                    var vmrBuild = await GetBuildAsync(manifestEntry.BarId.Value, noCache, cancellationToken);
+                                    vmrConsumedDate = vmrBuild?.DateProduced;
+                                }
+                                catch { /* non-critical */ }
+                            }
+                        }
+                    }
                 }
 
                 results.Add(new SubscriptionHealthResult(
@@ -272,7 +298,10 @@ public class MaestroService
                     CommitsBehind: commitsBehind,
                     RecentCommits: recentCommits,
                     Validation: validation,
-                    CanaryWarning: canaryWarning
+                    Oscillation: oscillation,
+                    TrackedPr: trackedPrDiagnosis,
+                    VmrConsumedCommit: vmrConsumedCommit,
+                    VmrConsumedDate: vmrConsumedDate
                 ));
             }
             catch (Exception ex)
@@ -544,32 +573,214 @@ public class MaestroService
     }
 
     /// <summary>
-    /// Canary warning: cheaply check if a subscription has suspicious history
-    /// (many consecutive failures with zero successes → possible stuck bookkeeping).
+    /// Detect stuck subscription by checking for state oscillation pattern
+    /// (alternating ApplyingUpdates ↔ MergingPullRequest) in history.
+    /// This is the primary signal for the arcade-services#6090 bug where
+    /// merged PR state is never cleared from Redis.
     /// </summary>
-    private async Task<string?> CheckCanaryWarningAsync(Guid subscriptionId, bool noCache, CancellationToken cancellationToken)
+    private async Task<OscillationResult?> DetectStateOscillationAsync(Guid subscriptionId, bool noCache, CancellationToken cancellationToken)
     {
         try
         {
             var history = await GetSubscriptionHistoryAsync(subscriptionId, noCache, cancellationToken);
-            if (history.Count < 10) return null;
+            if (history.Count < 6) return null; // Need at least 6 entries for 3 oscillations
 
-            var hasAnySuccess = history.Any(h => h.Success);
-            if (!hasAnySuccess)
+            // Get recent actions in chronological order
+            var recentActions = history
+                .OrderByDescending(h => h.Timestamp)
+                .Take(50)
+                .Select(h => (Action: h.Action ?? "", Timestamp: h.Timestamp))
+                .Where(h => !string.IsNullOrEmpty(h.Action))
+                .ToList();
+
+            if (recentActions.Count < 6) return null;
+
+            // Detect alternating pattern between exactly two states
+            var distinctStates = recentActions.Select(a => a.Action).Distinct().ToList();
+            if (distinctStates.Count != 2) return null;
+
+            var state1 = distinctStates[0];
+            var state2 = distinctStates[1];
+
+            // Count oscillations: an oscillation is A→B→A
+            int oscillationCount = 0;
+            for (int i = 0; i < recentActions.Count - 2; i++)
             {
-                return $"⚠️ Possible bookkeeping anomaly: {history.Count} consecutive failures with no recorded successes";
+                if (recentActions[i].Action == recentActions[i + 2].Action &&
+                    recentActions[i].Action != recentActions[i + 1].Action)
+                {
+                    oscillationCount++;
+                }
+                else
+                {
+                    break; // Stop counting at first break in pattern
+                }
             }
+
+            if (oscillationCount < 3) return null;
+
+            return new OscillationResult(
+                OscillationCount: oscillationCount,
+                State1: state1,
+                State2: state2,
+                FirstSeen: recentActions.LastOrDefault().Timestamp,
+                LastSeen: recentActions.FirstOrDefault().Timestamp
+            );
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[maestro-mcp] Canary check failed for {subscriptionId}: {ex.Message}");
+            Console.Error.WriteLine($"[maestro-mcp] Oscillation check failed for {subscriptionId}: {ex.Message}");
         }
 
         return null;
     }
 
+    /// <summary>
+    /// For stale subscriptions, check the tracked PR state to diagnose WHY it's stuck.
+    /// Cross-references Maestro's tracked PR with GitHub to distinguish:
+    /// - Stuck (PR merged but state not cleared) → arcade-services#6090
+    /// - Blocked (PR open but CI failing)
+    /// - Missing (no tracked PR at all)
+    /// - Active (PR open and healthy — may be in progress)
+    /// </summary>
+    private async Task<TrackedPrDiagnosis?> DiagnoseTrackedPrAsync(Guid subscriptionId, bool noCache, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var trackedPr = await GetTrackedPullRequestBySubscriptionIdAsync(subscriptionId.ToString(), noCache, cancellationToken);
+
+            if (trackedPr == null || string.IsNullOrEmpty(trackedPr.Url))
+            {
+                return new TrackedPrDiagnosis(TrackedPrState.Missing, null, null);
+            }
+
+            string prUrl = trackedPr.Url;
+
+            // Try to check the PR's actual state on GitHub
+            if (_gitHubClient != null && TryParseGitHubPrUrl(prUrl, out var owner, out var repo, out var prNumber))
+            {
+                try
+                {
+                    var prState = await _gitHubClient.GetPullRequestStateAsync(owner, repo, prNumber, cancellationToken);
+                    if (prState != null)
+                    {
+                        if (prState.Merged)
+                        {
+                            return new TrackedPrDiagnosis(TrackedPrState.MergedButNotCleared, prUrl, "PR merged but subscription state not cleared — arcade-services#6090");
+                        }
+                        else if (prState.Closed)
+                        {
+                            return new TrackedPrDiagnosis(TrackedPrState.ClosedButNotCleared, prUrl, "PR closed but subscription state not cleared");
+                        }
+                        else if (prState.ChecksFailing)
+                        {
+                            return new TrackedPrDiagnosis(TrackedPrState.BlockedByCI, prUrl, "PR open but CI checks are failing");
+                        }
+                        else
+                        {
+                            return new TrackedPrDiagnosis(TrackedPrState.Active, prUrl, null);
+                        }
+                    }
+                }
+                catch
+                {
+                    // If GitHub check fails, still report the PR URL
+                }
+            }
+
+            // Fallback: we know a PR exists but can't check GitHub
+            return new TrackedPrDiagnosis(TrackedPrState.Unknown, prUrl, null);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool TryParseGitHubPrUrl(string url, out string owner, out string repo, out int prNumber)
+    {
+        owner = repo = "";
+        prNumber = 0;
+
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Host != "github.com")
+            return false;
+
+        var segments = uri.AbsolutePath.Trim('/').Split('/');
+        if (segments.Length >= 4 && segments[2] == "pull" && int.TryParse(segments[3], out prNumber))
+        {
+            owner = segments[0];
+            repo = segments[1];
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// For subscriptions targeting dotnet/dotnet, read source-manifest.json to find
+    /// the commit SHA that the VMR actually consumed from the source repo.
+    /// This is the ground truth for what code is in the VMR.
+    /// </summary>
+    private async Task<SourceManifestEntry?> GetVmrConsumedCommitAsync(string sourceRepository, string targetBranch, bool noCache, CancellationToken cancellationToken)
+    {
+        if (_gitHubClient == null) return null;
+
+        var cacheKey = $"vmr-manifest:{sourceRepository}:{targetBranch}";
+        if (noCache) _cache.Invalidate(cacheKey);
+
+        return await _cache.GetOrAddAsync(cacheKey, async () =>
+        {
+            try
+            {
+                var content = await _gitHubClient.GetFileContentsAsync(
+                    "dotnet", "dotnet", "src/source-manifest.json", targetBranch, cancellationToken);
+
+                if (string.IsNullOrEmpty(content)) return null;
+
+                var doc = System.Text.Json.JsonDocument.Parse(content);
+                if (!doc.RootElement.TryGetProperty("submodules", out var submodules) ||
+                    submodules.ValueKind != System.Text.Json.JsonValueKind.Array)
+                    return null;
+
+                foreach (var entry in submodules.EnumerateArray())
+                {
+                    var remoteUri = entry.TryGetProperty("remoteUri", out var uriProp) ? uriProp.GetString() : null;
+                    if (remoteUri == null) continue;
+
+                    // Normalize comparison: strip trailing slashes and .git suffix
+                    var normalizedRemote = NormalizeRepoUrl(remoteUri);
+                    var normalizedSource = NormalizeRepoUrl(sourceRepository);
+
+                    if (string.Equals(normalizedRemote, normalizedSource, StringComparison.OrdinalIgnoreCase))
+                    {
+                        var commitSha = entry.TryGetProperty("commitSha", out var shaProp) ? shaProp.GetString() : null;
+                        var path = entry.TryGetProperty("path", out var pathProp) ? pathProp.GetString() : null;
+                        int? barId = entry.TryGetProperty("barId", out var barProp) && barProp.ValueKind == System.Text.Json.JsonValueKind.Number
+                            ? barProp.GetInt32() : null;
+
+                        if (commitSha != null)
+                            return new SourceManifestEntry(commitSha, path ?? "", barId);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[maestro-mcp] VMR manifest lookup failed: {ex.Message}");
+            }
+
+            return null;
+        }, MediumTtl);
+    }
+
     private static bool IsVmrRepository(string? repoUrl) =>
         repoUrl != null && repoUrl.Contains("github.com/dotnet/dotnet", StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeRepoUrl(string url)
+    {
+        var result = url.TrimEnd('/');
+        if (result.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
+            result = result[..^4];
+        return result;
+    }
 
     internal static bool IsGitHubRepository(string? repoUrl) =>
         repoUrl != null && ParseGitHubUrl(repoUrl) != null;
@@ -648,7 +859,40 @@ public record SubscriptionHealthResult(
     int? CommitsBehind = null,
     IReadOnlyList<CommitInfo>? RecentCommits = null,
     ValidationResult? Validation = null,
-    string? CanaryWarning = null
+    OscillationResult? Oscillation = null,
+    TrackedPrDiagnosis? TrackedPr = null,
+    string? VmrConsumedCommit = null,
+    DateTimeOffset? VmrConsumedDate = null
+);
+
+public record OscillationResult(
+    int OscillationCount,
+    string State1,
+    string State2,
+    DateTimeOffset? FirstSeen,
+    DateTimeOffset? LastSeen
+);
+
+public enum TrackedPrState
+{
+    Missing,             // No tracked PR exists
+    MergedButNotCleared, // PR merged but subscription still cycling (the #6090 bug)
+    ClosedButNotCleared, // PR closed but subscription still cycling
+    BlockedByCI,         // PR open but checks failing
+    Active,              // PR open and healthy — might be in progress
+    Unknown              // PR exists but couldn't check GitHub state
+}
+
+public record TrackedPrDiagnosis(
+    TrackedPrState State,
+    string? PrUrl,
+    string? Reason
+);
+
+public record SourceManifestEntry(
+    string CommitSha,
+    string Path,
+    int? BarId
 );
 
 public record ValidationResult(

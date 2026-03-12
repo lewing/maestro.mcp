@@ -356,3 +356,25 @@ Phase 1 cross-validation for subscription health completed. Decisions now in dec
 - GitHub search API capped at 10 results
 
 Affected work: `maestro_subscription_health` tool now supports `validate=true` parameter.
+
+### Health-check overhaul: oscillation detection + VMR manifest (2026-07-25)
+
+- **CRITICAL FINDING: `SubscriptionUpdate.Success` is NEVER set to `true`** in the PCS codebase. ALL history entries report Success=false regardless of actual health. The previous `CheckCanaryWarningAsync` method checked `history.Any(h => h.Success)` — this always returned false, making the canary fire on EVERY stale subscription with 10+ history entries. It was pure noise.
+- **Replaced canary with oscillation detection**: The real signal for stuck subscriptions (arcade-services#6090) is state oscillation — history entries that alternate between `ApplyingUpdates` and `MergingPullRequest` indefinitely. The new `DetectStateOscillationAsync` method counts consecutive A→B→A patterns in recent history and flags subscriptions with 3+ oscillations.
+- **source-manifest.json structure**: `dotnet/dotnet` at `src/source-manifest.json` contains ground truth for what code is in the VMR. It's a JSON object with a `submodules` array, each entry having `path`, `remoteUri`, `commitSha`, `barId`. The `remoteUri` matches against source repository URLs (needs `.git` suffix normalization). Cached at MediumTtl since the manifest changes infrequently.
+- **New records**: `OscillationResult` (count, two alternating states, time span) and `SourceManifestEntry` (commitSha, path, barId) added to the data model. `CanaryWarning` field removed from `SubscriptionHealthResult`.
+- **CLI `--validate` flag**: Now exposed in the `subscription-health` CLI command, matching the MCP tool's parameter.
+- **IGitHubApiClient.GetFileContentsAsync**: New method using `application/vnd.github.raw+json` Accept header to get raw file content from GitHub.
+
+### Tracked PR diagnosis enrichment (2026-07-24)
+- **Cross-reference pattern**: For stale subscriptions, `DiagnoseTrackedPrAsync` fetches the Maestro tracked PR via `GetTrackedPullRequestBySubscriptionIdAsync`, then checks the actual GitHub PR state via `GetPullRequestStateAsync`. This cross-reference distinguishes four root causes:
+  - `MergedButNotCleared` — PR is merged but Maestro keeps cycling (arcade-services#6090 bug)
+  - `ClosedButNotCleared` — PR was closed/abandoned but state not cleared
+  - `BlockedByCI` — PR is open but CI checks are failing
+  - `Active` — PR is open and healthy, may just be in progress
+  - `Missing` — No tracked PR at all, subscription may be failing earlier
+  - `Unknown` — PR exists but couldn't verify state on GitHub
+- **GitHub API additions**: `IGitHubApiClient.GetPullRequestStateAsync` calls `GET /repos/{owner}/{repo}/pulls/{prNumber}` for PR state, then `GET /repos/{owner}/{repo}/commits/{head_sha}/status` for combined CI status. `PullRequestState` record holds `Merged`, `Closed`, `ChecksFailing`.
+- **TryParseGitHubPrUrl**: Static helper parses `https://github.com/{owner}/{repo}/pull/{number}` into components. Non-GitHub URLs gracefully return false.
+- **Output integration**: Both MCP tool and CLI show tracked PR state with emoji indicators (🔴 stuck/merged, 🟠 stuck/closed, 🟡 CI-blocked, 🟢 active, ⚪ missing, ❓ unknown) after the oscillation block.
+- **flow-analysis emphasis**: The key insight is that oscillation alone can't tell you WHY a sub is stuck — all stuck subs produce the same alternating pattern. The tracked PR cross-reference is what distinguishes actionable root causes.

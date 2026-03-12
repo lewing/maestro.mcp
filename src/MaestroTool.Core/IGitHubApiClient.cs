@@ -12,7 +12,20 @@ public interface IGitHubApiClient
     Task<List<GitHubPullRequest>?> SearchMergedPullRequestsAsync(
         string owner, string repo, string sourceRepoFullName,
         DateTimeOffset? since = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Get raw file contents from a GitHub repository.
+    /// Returns null on 404 or error.
+    /// </summary>
+    Task<string?> GetFileContentsAsync(string owner, string repo, string path, string? gitRef = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Get the state of a pull request on GitHub (open/closed/merged and check status).
+    /// </summary>
+    Task<PullRequestState?> GetPullRequestStateAsync(string owner, string repo, int prNumber, CancellationToken cancellationToken = default);
 }
+
+public record PullRequestState(bool Merged, bool Closed, bool ChecksFailing);
 
 public record CommitInfo(string Sha, string Message, string Author, DateTimeOffset Date);
 

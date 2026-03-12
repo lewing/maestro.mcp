@@ -181,6 +181,101 @@ public class GitHubApiClient : IGitHubApiClient
         }
     }
 
+    public async Task<string?> GetFileContentsAsync(string owner, string repo, string path, string? gitRef = null, CancellationToken cancellationToken = default)
+    {
+        var url = $"https://api.github.com/repos/{owner}/{repo}/contents/{path}";
+        if (!string.IsNullOrEmpty(gitRef))
+            url += $"?ref={Uri.EscapeDataString(gitRef)}";
+
+        try
+        {
+            var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Accept.Clear();
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github.raw+json"));
+
+            var response = await _httpClient.SendAsync(request, cancellationToken);
+
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                return null;
+
+            if (!response.IsSuccessStatusCode)
+            {
+                Console.Error.WriteLine($"[maestro-mcp] GitHub contents API error: {response.StatusCode} for {owner}/{repo}/{path}");
+                return null;
+            }
+
+            return await response.Content.ReadAsStringAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[maestro-mcp] GitHub contents API exception: {ex.Message}");
+            return null;
+        }
+    }
+
+    public async Task<PullRequestState?> GetPullRequestStateAsync(string owner, string repo, int prNumber, CancellationToken cancellationToken = default)
+    {
+        var url = $"https://api.github.com/repos/{owner}/{repo}/pulls/{prNumber}";
+
+        try
+        {
+            var response = await _httpClient.GetAsync(url, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                Console.Error.WriteLine($"[maestro-mcp] GitHub PR API error: {response.StatusCode} for {owner}/{repo}#{prNumber}");
+                return null;
+            }
+
+            var json = await response.Content.ReadAsStringAsync(cancellationToken);
+            var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            var merged = root.TryGetProperty("merged", out var mergedProp) && mergedProp.GetBoolean();
+            var state = root.TryGetProperty("state", out var stateProp) ? stateProp.GetString() : "unknown";
+            var closed = string.Equals(state, "closed", StringComparison.OrdinalIgnoreCase) && !merged;
+
+            // Check CI status via the head commit's combined status
+            bool checksFailing = false;
+            if (!merged && !closed)
+            {
+                var headSha = root.TryGetProperty("head", out var headNode) &&
+                              headNode.TryGetProperty("sha", out var shaProp)
+                    ? shaProp.GetString()
+                    : null;
+
+                if (!string.IsNullOrEmpty(headSha))
+                {
+                    try
+                    {
+                        var statusUrl = $"https://api.github.com/repos/{owner}/{repo}/commits/{headSha}/status";
+                        var statusResponse = await _httpClient.GetAsync(statusUrl, cancellationToken);
+                        if (statusResponse.IsSuccessStatusCode)
+                        {
+                            var statusJson = await statusResponse.Content.ReadAsStringAsync(cancellationToken);
+                            var statusDoc = JsonDocument.Parse(statusJson);
+                            var combinedState = statusDoc.RootElement.TryGetProperty("state", out var statStateProp)
+                                ? statStateProp.GetString()
+                                : null;
+                            checksFailing = string.Equals(combinedState, "failure", StringComparison.OrdinalIgnoreCase)
+                                         || string.Equals(combinedState, "error", StringComparison.OrdinalIgnoreCase);
+                        }
+                    }
+                    catch
+                    {
+                        // Non-critical: if status check fails, report as not-failing
+                    }
+                }
+            }
+
+            return new PullRequestState(merged, closed, checksFailing);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[maestro-mcp] GitHub PR API exception: {ex.Message}");
+            return null;
+        }
+    }
+
     private static IReadOnlyList<CommitInfo>? ParseCommits(JsonElement root)
     {
         if (!root.TryGetProperty("commits", out var commitsArray) || commitsArray.ValueKind != JsonValueKind.Array)

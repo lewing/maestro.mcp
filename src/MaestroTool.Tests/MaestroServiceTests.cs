@@ -2412,9 +2412,9 @@ public class MaestroServiceTests : IDisposable
     private MaestroService CreateServiceWithGitHub(IGitHubApiClient gitHubClient) =>
         new MaestroService(_client, _cache, gitHubClient);
 
-    private static SubscriptionHistoryItem CreateHistoryItem(Guid subId, bool success, int minutesAgo = 0) =>
+    private static SubscriptionHistoryItem CreateHistoryItem(Guid subId, bool success, int minutesAgo = 0, string? action = null) =>
         new(DateTimeOffset.UtcNow.AddMinutes(-minutesAgo), success: success, subscriptionId: subId,
-            errorMessage: success ? "" : "error", action: "UpdateAssets", retryUrl: "");
+            errorMessage: success ? "" : "error", action: action ?? "UpdateAssets", retryUrl: "");
 
     /// <summary>
     /// Helper: set up a stale GitHub subscription scenario and return (service, sub, channel) for validation tests.
@@ -2633,67 +2633,128 @@ public class MaestroServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task SubscriptionHealth_CanaryWarning_DetectsSuspiciousHistory()
+    public async Task SubscriptionHealth_OscillationDetected_WithAlternatingStates()
     {
-        // Arrange: stale subscription with 15 consecutive failures (0 successes)
+        // Arrange: stale subscription with alternating ApplyingUpdates ↔ MergingPullRequest history
         var mockGitHub = Substitute.For<IGitHubApiClient>();
         var (service, sub, channel, lastApplied, latestBuild) = SetupStaleGitHubSubscription(mockGitHub);
 
-        // Mock both compare calls (commitsBehind + validation reachability)
         mockGitHub.CompareCommitsAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new GitHubCompareResult(AheadBy: 10, BehindBy: 0, Status: "ahead", TotalCommits: 10));
 
-        mockGitHub.SearchMergedPullRequestsAsync(
-            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
-            Arg.Any<DateTimeOffset?>(), Arg.Any<CancellationToken>())
-            .Returns(new List<GitHubPullRequest>());
-
-        // 15 consecutive failure history items (> 10 threshold, 0 successes)
-        var historyItems = Enumerable.Range(0, 15)
-            .Select(i => CreateHistoryItem(sub.Id, success: false, minutesAgo: i * 5))
-            .ToList();
+        // Create alternating history: ApplyingUpdates, MergingPullRequest, ApplyingUpdates, ...
+        var historyItems = new List<SubscriptionHistoryItem>();
+        for (int i = 0; i < 10; i++)
+        {
+            historyItems.Add(CreateHistoryItem(sub.Id, success: false, minutesAgo: i * 5,
+                action: i % 2 == 0 ? "ApplyingUpdates" : "MergingPullRequest"));
+        }
 
         _client.GetSubscriptionHistoryAsync(sub.Id, null, null, Arg.Any<CancellationToken>())
             .Returns(historyItems);
 
-        // Act — canary runs even without validate=true on stale subs
+        // Act
         var results = await service.GetSubscriptionHealthAsync(sub.TargetRepository);
 
-        // Assert: CanaryWarning field should be populated
+        // Assert: oscillation should be detected
         Assert.Single(results);
         var result = results[0];
         Assert.True(result.IsStale);
-        Assert.NotNull(result.CanaryWarning);
-        Assert.Contains("15", result.CanaryWarning);
-        Assert.Contains("failure", result.CanaryWarning, StringComparison.OrdinalIgnoreCase);
+        Assert.NotNull(result.Oscillation);
+        Assert.True(result.Oscillation.OscillationCount >= 3);
+        Assert.Contains("ApplyingUpdates", new[] { result.Oscillation.State1, result.Oscillation.State2 });
+        Assert.Contains("MergingPullRequest", new[] { result.Oscillation.State1, result.Oscillation.State2 });
     }
 
     [Fact]
-    public async Task SubscriptionHealth_CanaryWarning_NotTriggeredWithFewFailures()
+    public async Task SubscriptionHealth_NoOscillation_WithFewEntries()
     {
-        // Arrange: stale subscription with only 3 failures (below 10 threshold)
+        // Arrange: stale subscription with only 3 history entries (below detection threshold)
         var mockGitHub = Substitute.For<IGitHubApiClient>();
         var (service, sub, channel, lastApplied, latestBuild) = SetupStaleGitHubSubscription(mockGitHub);
 
-        // Mock compare calls
         mockGitHub.CompareCommitsAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new GitHubCompareResult(AheadBy: 10, BehindBy: 0, Status: "ahead", TotalCommits: 10));
 
-        // Only 3 failures — below the 10+ threshold
         var historyItems = Enumerable.Range(0, 3)
-            .Select(i => CreateHistoryItem(sub.Id, success: false, minutesAgo: i * 5))
+            .Select(i => CreateHistoryItem(sub.Id, success: false, minutesAgo: i * 5,
+                action: i % 2 == 0 ? "ApplyingUpdates" : "MergingPullRequest"))
             .ToList();
 
         _client.GetSubscriptionHistoryAsync(sub.Id, null, null, Arg.Any<CancellationToken>())
             .Returns(historyItems);
 
-        // Act — canary runs on all stale subs
+        // Act
         var results = await service.GetSubscriptionHealthAsync(sub.TargetRepository);
 
-        // Assert: no canary warning for only 3 failures (below 10 threshold)
+        // Assert: too few entries for oscillation detection
         Assert.Single(results);
         var result = results[0];
         Assert.True(result.IsStale);
-        Assert.Null(result.CanaryWarning);
+        Assert.Null(result.Oscillation);
+    }
+
+    [Fact]
+    public async Task SubscriptionHealth_NoOscillation_WithNonAlternatingHistory()
+    {
+        // Arrange: stale subscription with history that doesn't alternate
+        var mockGitHub = Substitute.For<IGitHubApiClient>();
+        var (service, sub, channel, lastApplied, latestBuild) = SetupStaleGitHubSubscription(mockGitHub);
+
+        mockGitHub.CompareCommitsAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new GitHubCompareResult(AheadBy: 10, BehindBy: 0, Status: "ahead", TotalCommits: 10));
+
+        // All same action — no alternation
+        var historyItems = Enumerable.Range(0, 10)
+            .Select(i => CreateHistoryItem(sub.Id, success: false, minutesAgo: i * 5,
+                action: "ApplyingUpdates"))
+            .ToList();
+
+        _client.GetSubscriptionHistoryAsync(sub.Id, null, null, Arg.Any<CancellationToken>())
+            .Returns(historyItems);
+
+        // Act
+        var results = await service.GetSubscriptionHealthAsync(sub.TargetRepository);
+
+        // Assert: same action repeated is NOT oscillation
+        Assert.Single(results);
+        Assert.Null(results[0].Oscillation);
+    }
+
+    [Fact]
+    public async Task SubscriptionHealth_VmrConsumedCommit_PopulatedForVmrTargetingSub()
+    {
+        // Arrange: stale subscription targeting dotnet/dotnet (VMR)
+        var mockGitHub = Substitute.For<IGitHubApiClient>();
+        var (service, sub, channel, lastApplied, latestBuild) = SetupStaleGitHubSubscription(mockGitHub,
+            source: "https://github.com/dotnet/runtime",
+            target: "https://github.com/dotnet/dotnet");
+
+        mockGitHub.CompareCommitsAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new GitHubCompareResult(AheadBy: 10, BehindBy: 0, Status: "ahead", TotalCommits: 10));
+
+        // Mock source-manifest.json response
+        var manifestJson = """
+        {
+            "submodules": [
+                {
+                    "path": "src/runtime",
+                    "remoteUri": "https://github.com/dotnet/runtime",
+                    "commitSha": "abc1234567890",
+                    "barId": 12345
+                }
+            ]
+        }
+        """;
+        mockGitHub.GetFileContentsAsync("dotnet", "dotnet", "src/source-manifest.json", "main", Arg.Any<CancellationToken>())
+            .Returns(manifestJson);
+
+        // Act
+        var results = await service.GetSubscriptionHealthAsync(sub.TargetRepository);
+
+        // Assert
+        var result = results[0];
+        Assert.NotNull(result.VmrConsumedCommit);
+        Assert.Equal("abc1234567890", result.VmrConsumedCommit);
     }
 }
