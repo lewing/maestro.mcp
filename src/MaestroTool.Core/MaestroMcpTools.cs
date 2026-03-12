@@ -24,7 +24,7 @@ public class MaestroMcpTools
     private static string Timestamp(bool noCache) =>
         $"_Retrieved: {DateTimeOffset.UtcNow:u}{(noCache ? " (fresh)" : " (cached)")}_\n\n";
 
-    [McpServerTool(Name = "maestro_subscriptions", ReadOnly = true)]
+    [McpServerTool(Name = "maestro_subscriptions", Title = "List Subscriptions", ReadOnly = true, Idempotent = true)]
     [Description("List Maestro subscriptions filtered by source/target repository and/or channel name. For health checks, use maestro_subscription_health. For details on a single subscription by ID, use maestro_subscription.")]
     public async Task<string> GetSubscriptions(
         [Description("Filter by source repository URL (e.g. https://github.com/dotnet/runtime)")] string? sourceRepository = null,
@@ -62,7 +62,7 @@ public class MaestroMcpTools
         return Timestamp(noCache) + sb.ToString();
     }
 
-    [McpServerTool(Name = "maestro_subscription", ReadOnly = true)]
+    [McpServerTool(Name = "maestro_subscription", Title = "Get Subscription", ReadOnly = true, Idempotent = true)]
     [Description("Get a specific Maestro subscription by its GUID ID, including health diagnostic comparing last applied build to latest available. For batch health checks across a repository, use maestro_subscription_health instead.")]
     public async Task<string> GetSubscription(
         [Description("The subscription GUID")] string subscriptionId,
@@ -112,7 +112,7 @@ public class MaestroMcpTools
         return Timestamp(noCache) + sb.ToString();
     }
 
-    [McpServerTool(Name = "maestro_latest_build", ReadOnly = true)]
+    [McpServerTool(Name = "maestro_latest_build", Title = "Latest Build", ReadOnly = true, Idempotent = true)]
     [Description("Get the latest build for a repository, optionally filtered by channel name.")]
     public async Task<string> GetLatestBuild(
         [Description("Repository URL (e.g. https://github.com/dotnet/runtime)")] string repository,
@@ -136,7 +136,7 @@ public class MaestroMcpTools
         return Timestamp(noCache) + FormatBuild(build);
     }
 
-    [McpServerTool(Name = "maestro_build", ReadOnly = true)]
+    [McpServerTool(Name = "maestro_build", Title = "Get Build", ReadOnly = true, Idempotent = true)]
     [Description("Get a specific build by its BAR build ID. For listing/filtering builds, use maestro_builds.")]
     public async Task<string> GetBuild(
         [Description("The BAR build ID (integer)")] int buildId,
@@ -147,7 +147,7 @@ public class MaestroMcpTools
         return Timestamp(noCache) + FormatBuild(build);
     }
 
-    [McpServerTool(Name = "maestro_builds", ReadOnly = true)]
+    [McpServerTool(Name = "maestro_builds", Title = "List Builds", ReadOnly = true, Idempotent = true)]
     [Description("List builds, optionally filtered by repository, channel, commit, or build number.")]
     public async Task<string> ListBuilds(
         [Description("Filter by repository URL (e.g. https://github.com/dotnet/runtime)")] string? repository = null,
@@ -184,7 +184,7 @@ public class MaestroMcpTools
         return Timestamp(noCache) + sb.ToString();
     }
 
-    [McpServerTool(Name = "maestro_channel", ReadOnly = true)]
+    [McpServerTool(Name = "maestro_channel", Title = "Get Channel", ReadOnly = true, Idempotent = true)]
     [Description("Get a specific channel by ID or name. For listing all channels, use maestro_channels.")]
     public async Task<string> GetChannel(
         [Description("Channel ID (integer) or channel name (e.g. '.NET 10.0.1xx SDK')")] string channelId,
@@ -223,7 +223,7 @@ public class MaestroMcpTools
         return Timestamp(noCache) + sb.ToString();
     }
 
-    [McpServerTool(Name = "maestro_channels", ReadOnly = true)]
+    [McpServerTool(Name = "maestro_channels", Title = "List Channels", ReadOnly = true, Idempotent = true)]
     [Description("List all Maestro channels.")]
     public async Task<string> GetChannels(
         [Description("Bypass cache and fetch fresh data")] bool noCache = false,
@@ -241,7 +241,7 @@ public class MaestroMcpTools
         return Timestamp(noCache) + sb.ToString();
     }
 
-    [McpServerTool(Name = "maestro_default_channels", ReadOnly = true)]
+    [McpServerTool(Name = "maestro_default_channels", Title = "Default Channels", ReadOnly = true, Idempotent = true)]
     [Description("List default channel mappings (repo/branch → channel auto-assignment). Optionally filter by repository URL or branch.")]
     public async Task<string> GetDefaultChannels(
         [Description("Filter by repository URL")] string? repository = null,
@@ -265,7 +265,7 @@ public class MaestroMcpTools
         return Timestamp(noCache) + sb.ToString();
     }
 
-    [McpServerTool(Name = "maestro_subscription_health", ReadOnly = true)]
+    [McpServerTool(Name = "maestro_subscription_health", Title = "Subscription Health", ReadOnly = true, Idempotent = true)]
     [Description("Check subscription health for a target repository. For each active subscription, compares the last applied build against the latest available build on the channel to detect stale subscriptions. Start here for most investigations. For listing/filtering subscriptions, use maestro_subscriptions.")]
     public async Task<string> GetSubscriptionHealth(
         [Description("Target repository URL (e.g. https://github.com/dotnet/dotnet)")] string targetRepository,
@@ -386,7 +386,7 @@ public class MaestroMcpTools
         return Timestamp(noCache) + sb.ToString();
     }
 
-    [McpServerTool(Name = "maestro_build_freshness", ReadOnly = true)]
+    [McpServerTool(Name = "maestro_build_freshness", Title = "Build Freshness", ReadOnly = true, Idempotent = true)]
     [Description("Check build freshness for a channel by resolving aka.ms redirect URLs and checking the Last-Modified header of the published build artifacts.")]
     public async Task<string> GetBuildFreshness(
         [Description("Channel short name for aka.ms URL (e.g. '10.0.1xx', '9.0.1xx')")] string channel,
@@ -416,7 +416,7 @@ public class MaestroMcpTools
         return Timestamp(noCache) + sb.ToString();
     }
 
-    [McpServerTool(Name = "maestro_trigger_subscription")]
+    [McpServerTool(Name = "maestro_trigger_subscription", Title = "Trigger Subscription", Idempotent = true)]
     [Description("Trigger a Maestro subscription. Provide buildId directly, or provide sourceRepository and channelName to auto-resolve the latest build. Use force=true to force-trigger (overwrites existing PR branch) for stale backflow PR remediation.")]
     public async Task<string> TriggerSubscription(
         [Description("The subscription GUID to trigger")] string subscriptionId,
@@ -485,7 +485,7 @@ public class MaestroMcpTools
         }
     }
 
-    [McpServerTool(Name = "maestro_trigger_daily_update")]
+    [McpServerTool(Name = "maestro_trigger_daily_update", Title = "Trigger Daily Update", Idempotent = true)]
     [Description("Trigger all daily-update subscriptions to run. This is a non-destructive action that initiates processing of all subscriptions configured for daily updates.")]
     public async Task<string> TriggerDailyUpdate(CancellationToken cancellationToken = default)
     {
@@ -510,7 +510,7 @@ public class MaestroMcpTools
         }
     }
 
-    [McpServerTool(Name = "maestro_clear_cache", Destructive = true)]
+    [McpServerTool(Name = "maestro_clear_cache", Title = "Clear Cache", Destructive = true, Idempotent = true)]
     [Description("Clear all cached Maestro data (shared across all mstro instances). Use after performing actions or when you need guaranteed fresh data from all tools.")]
     public string ClearCache()
     {
@@ -518,7 +518,7 @@ public class MaestroMcpTools
         return "✅ Cache cleared. All subsequent tool calls will fetch fresh data from the Maestro API.";
     }
 
-    [McpServerTool(Name = "maestro_codeflow_prs", ReadOnly = true)]
+    [McpServerTool(Name = "maestro_codeflow_prs", Title = "Codeflow PRs", ReadOnly = true, Idempotent = true)]
     [Description("List active codeflow (tracked) pull requests managed by Maestro. Optionally filter by channel name.")]
     public async Task<string> GetCodeflowPrs(
         [Description("Filter by channel name (e.g. '.NET 10.0.1xx SDK')")] string? channelName = null,
@@ -564,7 +564,7 @@ public class MaestroMcpTools
         return Timestamp(noCache) + sb.ToString();
     }
 
-    [McpServerTool(Name = "maestro_codeflow_pr", ReadOnly = true)]
+    [McpServerTool(Name = "maestro_codeflow_pr", Title = "Tracked PR", ReadOnly = true, Idempotent = true)]
     [Description("Get the tracked pull request for a specific Maestro subscription.")]
     public async Task<string> GetTrackedPr(
         [Description("The subscription GUID")] string subscriptionId,
@@ -604,7 +604,7 @@ public class MaestroMcpTools
         }
     }
 
-    [McpServerTool(Name = "maestro_backflow_status", ReadOnly = true)]
+    [McpServerTool(Name = "maestro_backflow_status", Title = "Backflow Status", ReadOnly = true, Idempotent = true)]
     [Description("Get backflow status for a specific VMR build. Shows per-branch backflow status including commit distance and subscription details.")]
     public async Task<string> GetBackflowStatus(
         [Description("The VMR (dotnet/dotnet) BAR build ID to check backflow status for")] int vmrBuildId,
@@ -646,7 +646,7 @@ public class MaestroMcpTools
         return Timestamp(noCache) + sb.ToString();
     }
 
-    [McpServerTool(Name = "maestro_subscription_history", ReadOnly = true)]
+    [McpServerTool(Name = "maestro_subscription_history", Title = "Subscription History", ReadOnly = true, Idempotent = true)]
     [Description("Get the update history for a specific Maestro subscription. Shows timestamped actions, success/failure status, and error messages for failed updates.")]
     public async Task<string> GetSubscriptionHistory(
         [Description("The subscription GUID")] string subscriptionId,
@@ -678,7 +678,7 @@ public class MaestroMcpTools
         return Timestamp(noCache) + sb.ToString();
     }
 
-    [McpServerTool(Name = "maestro_build_graph", ReadOnly = true)]
+    [McpServerTool(Name = "maestro_build_graph", Title = "Build Graph", ReadOnly = true, Idempotent = true)]
     [Description("Get the full dependency graph for a build. Returns all builds in the dependency tree with their relationships.")]
     public async Task<string> GetBuildGraph(
         [Description("The BAR build ID to get the dependency graph for")] int buildId,
@@ -720,7 +720,7 @@ public class MaestroMcpTools
         return Timestamp(noCache) + sb.ToString();
     }
 
-    [McpServerTool(Name = "maestro_flow_graph", ReadOnly = true)]
+    [McpServerTool(Name = "maestro_flow_graph", Title = "Flow Graph", ReadOnly = true, Idempotent = true)]
     [Description("Get the dependency flow graph for a channel showing how builds flow through subscriptions between repositories.")]
     public async Task<string> GetFlowGraph(
         [Description("The channel ID to get the flow graph for")] int channelId,
@@ -803,7 +803,7 @@ public class MaestroMcpTools
         return Timestamp(noCache) + sb.ToString();
     }
 
-    [McpServerTool(Name = "maestro_codeflow_statuses", ReadOnly = true)]
+    [McpServerTool(Name = "maestro_codeflow_statuses", Title = "Codeflow Statuses", ReadOnly = true, Idempotent = true)]
     [Description("Get codeflow status for a repository and branch. Shows forward flow and backflow subscription statuses, active PRs, and build staleness for each mapping. Defaults to the VMR (dotnet/dotnet, main).")]
     public async Task<string> GetCodeflowStatuses(
         [Description("Repository URL (default: https://github.com/dotnet/dotnet)")] string repositoryUrl = "https://github.com/dotnet/dotnet",

@@ -238,21 +238,21 @@ The server registers **20 MCP tools** for querying and triggering Maestro/BAR op
 | Tool Name | Description | Key Parameters |
 |-----------|-------------|-----------------|
 | `maestro_subscriptions` | List all subscriptions | `sourceRepository`, `targetRepository`, `channelName`, `targetBranch` (all optional filters); `noCache`: bypass cache |
-| `maestro_subscription` | Get a single subscription by ID | `subscriptionId`: UUID; `noCache`: bypass cache |
-| `maestro_latest_build` | Get the latest build from a channel | `channelId`: channel ID; `sourceRepository`: source repo URL; `noCache`: bypass cache |
-| `maestro_build` | Get a build by ID | `buildId`: build ID; `noCache`: bypass cache |
+| `maestro_subscription` | Get a subscription by GUID ID, with health diagnostic | `subscriptionId`: UUID; `noCache`: bypass cache |
+| `maestro_latest_build` | Get the latest build for a repository, optionally filtered by channel name | `repository`: repo URL; `channelName` (optional); `noCache`: bypass cache |
+| `maestro_build` | Get a build by its BAR build ID | `buildId`: build ID; `noCache`: bypass cache |
 | `maestro_builds` | List builds, optionally filtered by repository, channel, commit, or build number | `repository`, `channelName`, `commit`, `buildNumber`, `count` (all optional); `noCache`: bypass cache |
 | `maestro_channels` | List all channels | `noCache`: bypass cache |
-| `maestro_channel` | Get a specific channel by ID | `channelId`: channel ID; `noCache`: bypass cache |
+| `maestro_channel` | Get a specific channel by ID or name | `channelId`: channel ID (integer) or channel name (string); `noCache`: bypass cache |
 | `maestro_default_channels` | Get default channels for a repository | `repository`: source repository URL; `noCache`: bypass cache |
-| `maestro_subscription_health` | Get health status of a subscription (awaiting build, failed, etc.) | `subscriptionId`: UUID; `noCache`: bypass cache |
-| `maestro_build_freshness` | Check how long since a source repository branch was built | `sourceRepository`: source repo URL; `branch`: branch name; `noCache`: bypass cache |
-| `maestro_trigger_subscription` | Trigger a subscription to process a specific build | `subscriptionId`: UUID; `buildId`: BAR build ID |
+| `maestro_subscription_health` | Check subscription health for a target repository — detects stale subscriptions | `targetRepository`: repo URL; `noCache`, `includeCommitDetails`, `validate` (optional bools) |
+| `maestro_build_freshness` | Check build freshness for a channel via aka.ms redirect | `channel`: channel short name (e.g. '10.0.1xx'); `noCache`: bypass cache |
+| `maestro_trigger_subscription` | Trigger a subscription — provide `buildId` directly, or `sourceRepository` + `channelName` to auto-resolve | `subscriptionId`: UUID; `buildId` (optional); `sourceRepository`, `channelName` (optional, for auto-resolve); `force` (optional bool) |
 | `maestro_trigger_daily_update` | Trigger all daily-update subscriptions | None |
-| `maestro_codeflow_prs` | List active codeflow (backflow) tracked PRs, optionally filtered by channel | `channelName` (optional); `noCache`: bypass cache |
-| `maestro_codeflow_pr` | Get the tracked PR for a specific subscription by ID | `subscriptionId`: UUID; `noCache`: bypass cache |
+| `maestro_codeflow_prs` | List active codeflow (tracked) pull requests managed by Maestro | `channelName` (optional); `noCache`: bypass cache |
+| `maestro_codeflow_pr` | Get the tracked PR for a specific subscription | `subscriptionId`: UUID; `noCache`: bypass cache |
 | `maestro_backflow_status` | Get backflow status for a VMR build | `vmrBuildId`: build ID; `noCache`: bypass cache |
-| `maestro_subscription_history` | Get update history for a subscription | `subscriptionId`: UUID; `noCache`: bypass cache |
+| `maestro_subscription_history` | Get update history for a subscription — shows timestamped actions and errors | `subscriptionId`: UUID; `noCache`: bypass cache |
 | `maestro_build_graph` | Get the full dependency graph for a build | `buildId`: BAR build ID; `noCache`: bypass cache |
 | `maestro_flow_graph` | Get the dependency flow graph for a channel | `channelId`: channel ID; `days`: lookback (default 7); `includeArcade`, `includeBuildTimes`, `includeDisabledSubscriptions` (optional bools); `noCache`: bypass cache |
 | `maestro_codeflow_statuses` | Get codeflow status (forward flow and backflow) for a repository and branch | `repositoryUrl`: repo URL (default: VMR); `branch`: branch name (default: main); `noCache`: bypass cache |
@@ -299,6 +299,12 @@ Beyond the raw Maestro/PCS APIs, this MCP server provides several value-added en
 
 **Backflow Status Aggregation** — For a given VMR build, aggregates per-branch backflow status including commit distance and subscription details across all target repositories.
 
+**State Oscillation Detection** — Detects stuck subscriptions by analyzing update history for alternating ApplyingUpdates ↔ MergingPullRequest state cycles (per [arcade-services#6090](https://github.com/dotnet/arcade-services/issues/6090)). Runs automatically for stale subscriptions during health checks.
+
+**Source-Manifest Tracing** — For subscriptions targeting dotnet/dotnet, reads `src/source-manifest.json` from the VMR to determine what commit the VMR actually consumed, cross-referencing against the subscription's last-applied build.
+
+**Tracked PR Diagnosis** — For stale subscriptions with tracked codeflow PRs, checks the GitHub PR state (merged-but-not-cleared, closed-but-not-cleared, blocked-by-CI, or active) to explain why the subscription is stuck.
+
 **Flow Graph Visualization** — Formats the dependency flow graph with build times, longest-path critical path indicators, and channel routing information for end-to-end dependency analysis.
 
 **Human-Readable Formatting** — All tool responses use emoji status indicators (✅ Current, ⚠️ STALE, ⏳ Pending, 🔒 Auth Required), structured tables, and visual markers for quick scanning. Commit details include SHA, message, author, and date when available.
@@ -319,7 +325,7 @@ src/
 │   └── MaestroApiClient.cs   # PCS client wrapper with auth cascade
 ├── MaestroTool.Mcp/          # MCP HTTP server (ASP.NET Core)
 │   └── Program.cs
-└── MaestroTool.Tests/        # Unit tests (135 tests)
+└── MaestroTool.Tests/        # Unit tests (167 tests)
 ```
 
 - **MaestroTool** — Dual-mode entry point: standalone CLI for humans and stdio MCP server for AI agents. Packaged as a [dotnet tool](https://learn.microsoft.com/dotnet/core/tools/global-tools). Default entry point for `dnx` / `dotnet tool` usage.
@@ -397,7 +403,7 @@ dotnet test
 ```
 
 The test suite includes:
-- **135 unit tests** covering `CacheService`, `MaestroService`, security hardening, and tool behavior.
+- **167 unit tests** covering `CacheService`, `MaestroService`, security hardening, and tool behavior.
 - **Framework**: xUnit + NSubstitute for mocking.
 - **Coverage**: cache hit/miss, TTL expiration, null handling, error scenarios, commit distance, SSRF validation, corruption recovery.
 
