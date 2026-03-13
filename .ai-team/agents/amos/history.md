@@ -73,3 +73,27 @@
 - Unit tests for trigger JSON output (success and error cases)
 - Integration tests with MaestroService mock responses
 - Validate error format consistency across all commands
+
+### SchemaGenerator TDD Coverage (2026-03-13)
+
+**Test patterns established:**
+- New schema tests live in `src/MaestroTool.Tests/SchemaGeneratorTests.cs` and parse generated JSON with `System.Text.Json` before asserting specific property paths.
+- The tests discover `SchemaGenerator` via reflection so the test project still compiles before Naomi's implementation lands, while keeping the public API contract (`GenerateSchema<T>()` and `GenerateSchema(Type)`) explicit.
+- Real DTO coverage uses `BuildFreshnessResult` and `SubscriptionHealthResult` to verify nested records, collection wrapping, enum placeholders, and PascalCase property names against production model shapes.
+
+**Edge cases identified:**
+- Self-referential types must stop recursion and emit `"<circular>"` rather than overflowing the stack.
+- Root collection schemas should serialize as a one-element array skeleton, not an object with collection metadata.
+- Nullable members should render the underlying placeholder shape (`0`, `"<string>"`, `"<datetime>"`, etc.) instead of `null` sentinel values.
+
+**Recent deliverables (2026-03-13, Session 3 - Schema Testing):**
+- Wrote 12 comprehensive tests for schema generation in `src/MaestroTool.Tests/SchemaGeneratorTests.cs`
+- Test coverage: placeholder mappings (strings, numerics, booleans, enums, DateTime variants), cycle detection, nullable unwrapping, collections/dictionaries
+- Tests validate `SchemaGenerator` walks public instance properties correctly and produces PascalCase JSON skeletons
+- All 179 tests passing after merge (167 existing + 12 new schema tests)
+- Build verified clean
+
+**Testing notes:**
+- Schema cycle protection validation: visited-type set + max recursion depth of 5
+- Placeholder consistency: `<string>`, `0`, `false`, `<datetime>`, `<Value1|Value2|...>`, `<circular>`
+- JavaScriptEncoder validation ensures placeholders remain human-readable in output

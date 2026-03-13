@@ -53,6 +53,13 @@ public class Commands
         _cache = cache;
     }
 
+    private static bool TryPrintSchema<T>(bool schema)
+    {
+        if (!schema) return false;
+        Console.WriteLine(SchemaGenerator.GenerateSchema<T>());
+        return true;
+    }
+
     [Command("mcp")]
     [Description("Start MCP server mode (default when no arguments provided)")]
     public async Task Mcp()
@@ -101,8 +108,11 @@ public class Commands
         string? channelName = null,
         string? targetBranch = null,
         bool json = false,
+        bool schema = false,
         bool noCache = false)
     {
+        if (TryPrintSchema<List<Subscription>>(schema)) return;
+
         int? channelId = null;
         if (!string.IsNullOrEmpty(channelName))
         {
@@ -146,8 +156,11 @@ public class Commands
     public async Task Subscription(
         [Argument] string subscriptionId,
         bool json = false,
+        bool schema = false,
         bool noCache = false)
     {
+        if (TryPrintSchema<Subscription>(schema)) return;
+
         if (!Guid.TryParse(subscriptionId, out var id))
         {
             Console.Error.WriteLine("Invalid subscription ID format. Expected a GUID.");
@@ -205,8 +218,11 @@ public class Commands
         [Argument] string repository,
         string? channelName = null,
         bool json = false,
+        bool schema = false,
         bool noCache = false)
     {
+        if (TryPrintSchema<Build>(schema)) return;
+
         int? channelId = null;
         if (!string.IsNullOrEmpty(channelName))
         {
@@ -243,8 +259,11 @@ public class Commands
     public async Task Build(
         [Argument] int buildId,
         bool json = false,
+        bool schema = false,
         bool noCache = false)
     {
+        if (TryPrintSchema<Build>(schema)) return;
+
         var build = await _service.GetBuildAsync(buildId, noCache);
 
         if (json)
@@ -266,8 +285,11 @@ public class Commands
         string? buildNumber = null,
         int? count = null,
         bool json = false,
+        bool schema = false,
         bool noCache = false)
     {
+        if (TryPrintSchema<List<Build>>(schema)) return;
+
         int? channelId = null;
         if (!string.IsNullOrEmpty(channelName))
         {
@@ -308,8 +330,11 @@ public class Commands
     [Description("List all Maestro channels.")]
     public async Task Channels(
         bool json = false,
+        bool schema = false,
         bool noCache = false)
     {
+        if (TryPrintSchema<List<Channel>>(schema)) return;
+
         var channels = await _service.GetChannelsAsync(noCache);
 
         if (json)
@@ -331,8 +356,11 @@ public class Commands
     public async Task Channel(
         [Argument] string channelId,
         bool json = false,
+        bool schema = false,
         bool noCache = false)
     {
+        if (TryPrintSchema<Channel>(schema)) return;
+
         if (string.IsNullOrWhiteSpace(channelId))
         {
             Console.Error.WriteLine("Channel ID or name is required.");
@@ -390,8 +418,11 @@ public class Commands
         string? repository = null,
         string? branch = null,
         bool json = false,
+        bool schema = false,
         bool noCache = false)
     {
+        if (TryPrintSchema<List<DefaultChannel>>(schema)) return;
+
         var defaults = await _service.GetDefaultChannelsAsync(repository, branch, noCache);
 
         if (json)
@@ -419,10 +450,13 @@ public class Commands
     public async Task SubscriptionHealth(
         [Argument] string targetRepository,
         bool json = false,
+        bool schema = false,
         bool noCache = false,
         bool includeCommitDetails = false,
         bool validate = false)
     {
+        if (TryPrintSchema<List<SubscriptionHealthResult>>(schema)) return;
+
         var results = await _service.GetSubscriptionHealthAsync(targetRepository, noCache, includeCommitDetails, validate);
 
         if (json)
@@ -526,8 +560,11 @@ public class Commands
     public async Task BuildFreshness(
         [Argument] string channel,
         bool json = false,
+        bool schema = false,
         bool noCache = false)
     {
+        if (TryPrintSchema<BuildFreshnessResult>(schema)) return;
+
         var result = await _service.GetBuildFreshnessAsync(channel, noCache);
 
         if (json)
@@ -610,8 +647,11 @@ public class Commands
     public async Task CodeflowPrs(
         string? channelName = null,
         bool json = false,
+        bool schema = false,
         bool noCache = false)
     {
+        if (TryPrintSchema<List<TrackedPullRequest>>(schema)) return;
+
         int? channelId = null;
         if (!string.IsNullOrEmpty(channelName))
         {
@@ -655,8 +695,11 @@ public class Commands
     public async Task TrackedPr(
         [Argument] string subscriptionId,
         bool json = false,
+        bool schema = false,
         bool noCache = false)
     {
+        if (TryPrintSchema<TrackedPullRequest>(schema)) return;
+
         try
         {
             var pr = await _service.GetTrackedPullRequestBySubscriptionIdAsync(subscriptionId, noCache);
@@ -686,8 +729,11 @@ public class Commands
     public async Task BackflowStatus(
         [Argument] int vmrBuildId,
         bool json = false,
+        bool schema = false,
         bool noCache = false)
     {
+        if (TryPrintSchema<BackflowStatus>(schema)) return;
+
         var status = await _service.GetBackflowStatusAsync(vmrBuildId, noCache);
 
         if (json)
@@ -709,8 +755,11 @@ public class Commands
     public async Task SubscriptionHistory(
         [Argument] string subscriptionId,
         bool json = false,
+        bool schema = false,
         bool noCache = false)
     {
+        if (TryPrintSchema<List<SubscriptionHistoryItem>>(schema)) return;
+
         if (!Guid.TryParse(subscriptionId, out var id))
         {
             Console.Error.WriteLine("Invalid subscription ID format. Expected a GUID.");
@@ -751,8 +800,11 @@ public class Commands
     public async Task BuildGraph(
         [Argument] int buildId,
         bool json = false,
+        bool schema = false,
         bool noCache = false)
     {
+        if (TryPrintSchema<BuildGraph>(schema)) return;
+
         var graph = await _service.GetBuildGraphAsync(buildId, noCache);
 
         if (json)
@@ -775,8 +827,11 @@ public class Commands
         bool includeBuildTimes = true,
         bool includeDisabled = false,
         bool json = false,
+        bool schema = false,
         bool noCache = false)
     {
+        if (TryPrintSchema<FlowGraph>(schema)) return;
+
         var graph = await _service.GetFlowGraphAsync(days, channelId, includeArcade, includeBuildTimes, includeDisabled, null, noCache);
 
         if (json)
@@ -796,8 +851,11 @@ public class Commands
         [Argument] string repositoryUrl = "https://github.com/dotnet/dotnet",
         string branch = "main",
         bool json = false,
+        bool schema = false,
         bool noCache = false)
     {
+        if (TryPrintSchema<List<CodeflowStatus>>(schema)) return;
+
         var statuses = await _service.GetCodeflowStatusesAsync(repositoryUrl, branch, noCache);
 
         if (json)
@@ -988,6 +1046,7 @@ mstro trigger-subscription <guid> --build-id 302353 --force
 
 ## Notes
 - All query commands support `--json` for structured output
+- All query commands support `--schema` to print a JSON result skeleton without calling Maestro (`--schema` wins over `--json`)
 - All commands support `--no-cache` to bypass the cache
 - Cache is shared across processes at `~/.mstro/cache.db` (SQLite WAL mode)
 - Install: `dotnet tool install -g lewing.maestro.mcp`
