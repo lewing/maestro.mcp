@@ -24,6 +24,44 @@
 - Added cross-references between overlapping subscription/build/channel tools
 - All 167 tests pass (commit 792b4ee)
 
+**Recent deliverables (2026-03-13):**
+- Executed Holden's restructuring plan (Option A: partial classes + subfolders)
+- Moved API clients to domain folders (Maestro/, GitHub/, AzDO/) using git mv to preserve history
+- Split 902-line MaestroMcpTools.cs into 6 partial class files organized by domain:
+  - MaestroMcpTools.cs (34 lines): class declaration, constructor, Timestamp helper
+  - MaestroMcpTools.Channels.cs (94 lines): 3 channel tools
+  - MaestroMcpTools.Subscriptions.cs (318 lines): 5 subscription tools
+  - MaestroMcpTools.Builds.cs (153 lines): 5 build tools
+  - MaestroMcpTools.Codeflow.cs (339 lines): 6 codeflow tools including FormatBuild/FormatFlowStatus helpers
+  - MaestroMcpTools.Utilities.cs (19 lines): 1 cache utility tool
+- Moved test files to mirror source structure (MaestroMcpTools/, Maestro/, AzDO/ subdirectories)
+- NO namespace changes - all files remain in MaestroTool.Core namespace
+- NO DI registration changes required - partial class is transparent to dependency injection
+- All 167 tests pass after restructure
+
+## Learnings
+
+### Partial Class File Organization (2026-03-13)
+
+**Structure decisions:**
+- Used `partial class` to split large monolithic file while maintaining single logical class
+- Organized by **user-facing domain concepts** (Channels, Subscriptions, Builds, Codeflow, Utilities) rather than backend APIs
+- Helper methods stay in the partial file where they're used (FormatBuild, FormatFlowStatus in Codeflow)
+- Main file keeps only class declaration, constructor, fields, and shared helpers (Timestamp)
+
+**File extraction gotchas:**
+- Each partial file needs its own complete `using` statements - cannot rely on main file
+- Must include PCS client imports: `Microsoft.DotNet.ProductConstructionService.Client` and `.Models`
+- Domain-specific helpers (like FormatBuild) can live in their respective partial files
+- Easy to miss closing brace when extracting - each partial file needs proper class closure
+
+**Benefits realized:**
+- 902-line file → largest partial is 339 lines, most under 200
+- Clear separation for code review (e.g., "review subscription tools" targets one file)
+- Folder structure mirrors API client architecture (Maestro, GitHub, AzDO)
+- Git history preserved through `git mv`
+- Zero breaking changes - same public surface, same DI registration
+
 **Known issues & constraints:**
 - SQLite tests fail on object identity checks (Assert.Same) due to JSON deserialization — value equality works, production unaffected
 - PcsApiFactory overloads are confusing; all three auth paths need explicit baseUri
