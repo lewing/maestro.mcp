@@ -47,3 +47,35 @@
 - Main `MaestroMcpTools.cs` correctly retained the `[McpServerToolType]` declaration, constructor, shared fields, and `Timestamp` helper while the partial files kept `MaestroTool.Core` namespace and independent using sets.
 - File moves were clean `git mv` renames for API clients and matching tests: `AzDO/`, `GitHub/`, `Maestro/`, and `MaestroMcpTools/` now mirror the intended structure without namespace churn.
 - Future restructure pattern: validate with a tool-name set diff against the pre-split file, then confirm `dotnet test MaestroTool.slnx --no-restore` to catch missing usings, dropped methods, or accidental duplication fast.
+
+### 2026-03-18: Context Tax Analysis & Progressive Disclosure Patterns
+
+**Context tax quantification:**
+- Current MCP tool surface: 20 tools, 74 description attributes, 5,241 chars → **~1,310 tokens**
+- Every agent pays this upfront, even for simple queries using 1-3 tools
+- Multi-client deployments (VS Code + CLI + Claude) replicate this cost 3×
+
+**Progressive disclosure patterns:**
+- **Pattern 1 (Help command):** Skill → `mstro --help` → command-specific help. Token cost: 50 initial + 500 help = 650 total (50% reduction)
+- **Pattern 2 (MCP resource):** Skill → `maestro://guide` resource with markdown guide. Token cost: 50 initial + 200 guide = 250 total (81% reduction)
+- **Key insight:** Defer 95% of documentation cost until actually needed. Most agents only use 1-3 tools, not all 20.
+
+**CLI vs MCP tradeoff analysis:**
+- ✅ CLI advantages: No persistent connection, lower latency, easier debugging, shared cache, `--json` for structured output
+- ❌ CLI disadvantages: Process overhead (~200ms), no streaming (but not needed for <10KB responses)
+- **Verdict:** CLI disadvantages are negligible for maestro.mcp use case
+
+**Recommended architecture (Option C - Hybrid):**
+1. Add `maestro://guide` MCP resource (2-3KB markdown) for progressive disclosure
+2. Publish Copilot skill that routes to CLI + resource (50 token entry point)
+3. Keep MCP tools unchanged (backward compatible)
+4. Let clients choose: MCP tools (1,310 tokens) vs skill+resource (250 tokens)
+
+**Comparison to helix.mcp approaches:**
+- Helix knowledge tool (`helix_ci_guide`): Good discovery, but still counts against context tax
+- Helix resource experiment: Semantic search over `helix://knowledgebase`. Complex implementation, debugging harder.
+- Maestro hybrid: Simpler (static markdown), cheaper (resource on-demand), more flexible (CLI is standalone)
+
+**Implementation cost:** ~4 hours (resource handler + skill + testing). Zero breaking changes.
+
+**Decision documented:** Merged to `.ai-team/decisions.md` (2026-03-13) — Skill-Based Architecture decision approved for implementation. Hybrid approach (Option C) recommended: resource handler + CLI skill + backward-compatible MCP tools.

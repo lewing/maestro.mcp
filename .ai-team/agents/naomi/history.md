@@ -41,6 +41,30 @@
 
 ## Learnings
 
+### CLI Help Text and ConsoleAppFramework (2026-03-13)
+
+**CLI-as-Skill Pattern:**
+- Enhanced all CLI command descriptions to mirror MCP tool descriptions for agent discoverability
+- Pattern enables agents to use `mstro` CLI instead of MCP tools with equivalent information density
+- Cross-references between commands help agents navigate (e.g., "use subscription-health for batch checks")
+
+**ConsoleAppFramework 5.x limitations:**
+- No command grouping/category support (commands are flat list in `--help`)
+- Parameter descriptions not shown in help output (only types and defaults)
+- Auto-generates kebab-case option names from C# parameter names (`sourceRepository` → `--source-repository`)
+- Command-level `[Description]` attribute is the primary discoverability mechanism
+
+**Mapping MCP to CLI:**
+- All 20 MCP tools now have corresponding CLI commands
+- Added missing commands: `channel` (singular) and `builds` to achieve parity
+- CLI cross-references use kebab-case command names, not MCP tool names
+- Command descriptions include: purpose, cross-refs, defaults, and auth requirements
+
+**Portability insights:**
+- Pattern uses only framework-provided attributes (no custom code)
+- Portable to other CLI tools (e.g., helix.mcp) without maestro-specific dependencies
+- Could be enhanced with code generation (auto-generate CLI from `[McpServerTool]` attributes)
+
 ### Partial Class File Organization (2026-03-13)
 
 **Structure decisions:**
@@ -76,3 +100,22 @@
 
 
 📌 Team update (2026-03-13): Restructure review approved — Holden reviewed and approved the restructure implementation. All 20 MCP tools present exactly once across Channels, Subscriptions, Builds, Codeflow, and Utilities partials. API surface and namespace stability preserved. Full test suite passing (167/167). — decided by Holden
+
+### CLI Help Text Enhancement (2026-03-13)
+
+**Decision merged to decisions.md:**
+- Enhanced all CLI command `[Description]` attributes to mirror MCP tool descriptions
+- Added 2 missing commands: `channel` (singular) and `builds` for parity with MCP tools (20 tools total)
+- Implemented CLI-as-skill pattern: agents can use `mstro --help` instead of MCP tool descriptions
+- Progressive disclosure: command-level help → command-specific help for parameters
+
+**Key architectural insights:**
+- ConsoleAppFramework 5.x limitation: no parameter-level descriptions in help output (command-level only)
+- Pattern is portable to other CLI tools (e.g., helix.mcp) using only framework-provided attributes
+- Cross-references use kebab-case command names for consistency
+- Descriptions include: purpose, cross-refs, defaults, auth requirements
+
+**Next phases (pending Larry's approval of Holden's skill architecture):**
+1. Implement `maestro://guide` MCP resource (static markdown guide)
+2. Publish Copilot skill that routes to CLI + resource
+3. Document CLI-as-skill pattern for agents
