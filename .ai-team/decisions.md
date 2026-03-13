@@ -5106,17 +5106,17 @@ Implement schema generation as a shared reflection-based concern in `src/Maestro
 
 ### Decision
 
-`mstro --schema` should be a **contract feature**, not a docs dump. Add `--schema` to every query command that already supports `--json`, emit a minified JSON skeleton with exact live field names/root shape, and generate it from shared CLI contract types in `MaestroTool.Core`. Use real custom records where they already exist; introduce curated CLI contract types for noisy PCS-backed commands instead of reflecting raw BAR client models.
+`mstro --schema` should be a **contract feature**, not a docs dump. Add `--schema` to every query command that already supports `--json`, emit a pretty-printed JSON skeleton with exact live field names/root shape, and generate it via reflection over the existing return types in `MaestroTool.Core`. Use real custom records and PCS client models directly where they exist.
 
 ### Rationale
 
 1. **Agents need exact jq field discovery**, not a verbose specification language or a transport-model object dump
 2. **Keeping schema generation in Core** preserves the project architecture (host → service → client/cache)
-3. **Tying it to intentional CLI contracts** keeps schemas compact and avoids coupling the agent experience to the full upstream PCS object graph
-4. **Curated contract types** for noisy PCS commands allow agent-friendly field filtering without bloating the schema
+3. **Direct type reflection** generates schemas from actual return types, keeping implementation simple and maintainable
+4. **Pretty-printed output** allows agents to easily parse and understand the exact field structure they'll encounter
 
 ### Related Work
 
-- Naomi's implementation uses reflection over CLI contract types, not raw PCS client models
+- Naomi's implementation uses reflection over existing return types (PCS models and custom records)
 - Consolidates schema generation logic in single `SchemaGenerator.cs` file
 - Supports all 17 query commands with consistent field naming (PascalCase)
