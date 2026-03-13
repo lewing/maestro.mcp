@@ -35,3 +35,5 @@
 
 *Earlier detailed test session entries archived 2026-03-12. Original content preserved in git history.*
 
+
+📌 Team update (2026-03-13): Restructure review approved — The core MCP tools restructure has been approved by Holden. All tools organized into domain partials with clean separation and test validation (167/167 passing). — decided by Holden

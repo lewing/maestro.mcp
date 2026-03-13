@@ -4132,3 +4132,7 @@ From Holden's plan:
 - Holden's plan: `.ai-team/decisions/inbox/holden-restructure-plan.md`
 - helix.mcp commit 731260e (reference pattern, different use case)
 - Current commit: All changes staged, ready for review
+### 2026-03-13: Restructure review approved
+**By:** Holden
+**What:** Reviewed Naomi's `squad/restructure-core-partials` implementation against the Option A partial-class plan and approved it. All 20 MCP tools are present exactly once, grouped into the intended Channels, Subscriptions, Builds, Codeflow, and Utilities partials; the main `MaestroMcpTools.cs` retained the constructor, shared fields, and helper.
+**Why:** The restructure preserved API surface and namespace stability, moved API clients and tests into the planned subfolders with clean renames, and passed the full solution test suite (`167/167`).

@@ -59,3 +59,5 @@ The README is production-ready and suitable for both internal developers and ext
   2. CacheService `SetUnixFileMode` crash fix on Linux/WSL (`/tmp` chmod)
   3. ReadOnly/Destructive tool annotations on all 19 MCP tools
 - **All 135 tests passed** before release
+
+📌 Team update (2026-03-13): Restructure review approved — The core MCP tools restructure has been approved by Holden. All tools now organized into domain partials (Channels, Subscriptions, Builds, Codeflow, Utilities) with clean API preservation. — decided by Holden

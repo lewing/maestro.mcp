@@ -40,3 +40,10 @@
 
 *Earlier detailed audit findings and skill review entries archived 2026-03-12. Original content preserved in git history and decisions.md.*
 
+## Learnings
+
+- 2026-03-13 restructure review: approved Naomi's Option A implementation on `squad/restructure-core-partials`.
+- Verified the tool surface stayed intact across the split: all 20 MCP tools moved exactly once into domain partials with the expected 3/5/5/6/1 breakdown for Channels, Subscriptions, Builds, Codeflow, and Utilities.
+- Main `MaestroMcpTools.cs` correctly retained the `[McpServerToolType]` declaration, constructor, shared fields, and `Timestamp` helper while the partial files kept `MaestroTool.Core` namespace and independent using sets.
+- File moves were clean `git mv` renames for API clients and matching tests: `AzDO/`, `GitHub/`, `Maestro/`, and `MaestroMcpTools/` now mirror the intended structure without namespace churn.
+- Future restructure pattern: validate with a tool-name set diff against the pre-split file, then confirm `dotnet test MaestroTool.slnx --no-restore` to catch missing usings, dropped methods, or accidental duplication fast.
