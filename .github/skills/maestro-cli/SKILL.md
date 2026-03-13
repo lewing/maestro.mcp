@@ -81,9 +81,11 @@ mstro build-graph <build-id> --json
 
 ### Trigger a stale subscription
 ```bash
-# Provide --source-repository + --channel-name (auto-resolves latest build)
-mstro trigger-subscription <guid> --source-repository https://github.com/dotnet/runtime --channel-name ".NET 10.0.1xx SDK"
-# Or provide --build-id directly. Add --force to overwrite stale PR branch.
+# First resolve the build ID, then trigger
+BUILD_ID=$(mstro latest-build https://github.com/dotnet/runtime --channel-name ".NET 10.0.1xx SDK" --json | jq -r '.Id')
+mstro trigger-subscription <guid> $BUILD_ID
+# Add --force to overwrite an existing stale PR branch
+mstro trigger-subscription <guid> $BUILD_ID --force
 ```
 
 ## Chaining with jq
