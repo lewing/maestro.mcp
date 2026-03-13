@@ -4136,3 +4136,925 @@ From Holden's plan:
 **By:** Holden
 **What:** Reviewed Naomi's `squad/restructure-core-partials` implementation against the Option A partial-class plan and approved it. All 20 MCP tools are present exactly once, grouped into the intended Channels, Subscriptions, Builds, Codeflow, and Utilities partials; the main `MaestroMcpTools.cs` retained the constructor, shared fields, and helper.
 **Why:** The restructure preserved API surface and namespace stability, moved API clients and tests into the planned subfolders with clean renames, and passed the full solution test suite (`167/167`).
+# CLI Help Text Enhancement for CLI-as-Skill Pattern
+
+**Date:** 2026-03-13  
+**Author:** Naomi  
+**Status:** Implemented
+
+## Context
+
+We're establishing a "CLI-as-skill" pattern where AI agents can use the `mstro` CLI tool instead of MCP tools. The pattern requires progressive disclosure via help text, so agents get the same information from `mstro --help` and `mstro <cmd> --help` that they would from MCP tool descriptions.
+
+## Decision
+
+### Updated CLI Command Descriptions
+
+Enhanced all CLI command `[Description]` attributes in `src/MaestroTool/Program.cs` to mirror the corresponding MCP tool descriptions from `src/MaestroTool.Core/MaestroMcpTools/*.cs`.
+
+**Changes made:**
+- Updated all 18 existing command descriptions to match MCP tool descriptions
+- Added 2 missing commands: `channel` (singular) and `builds` to achieve parity with MCP tools
+- Command descriptions now include cross-references (e.g., "For health checks, use subscription-health")
+- Added contextual information (e.g., "Defaults to the VMR (dotnet/dotnet, main)")
+- Included important details like "Requires authentication" for destructive operations
+
+### ConsoleAppFramework Limitations
+
+ConsoleAppFramework 5.x does **not** support:
+- Command grouping/categories (unlike MCP which uses partial classes for logical domains)
+- Parameter-level descriptions in help output (only shows parameter names and types)
+- Rich help text formatting beyond command-level descriptions
+
+The framework auto-generates kebab-case option names from parameter names (e.g., `sourceRepository` → `--source-repository`).
+
+## Rationale
+
+1. **Parity:** CLI and MCP now expose equivalent information density to agents
+2. **Progressive disclosure:** Agents can discover commands via `--help`, then get detailed info on specific commands
+3. **Portability:** This pattern uses only framework-provided attributes (no custom code), making it portable to other CLI tools (e.g., lewing/helix.mcp)
+4. **Maintainability:** Descriptions live in one place (ConsoleAppFramework attributes), not duplicated in external docs
+
+## Alternative Considered
+
+**Enhanced parameter descriptions via custom middleware:** Could inject parameter descriptions into help output via ConsoleAppFramework filters. **Rejected** because:
+- Adds complexity and maintenance burden
+- Would require duplicating MCP parameter descriptions
+- Framework limitation suggests this isn't a priority for the library maintainers
+- Command-level descriptions provide sufficient context for the CLI-as-skill pattern
+
+## Implementation Notes
+
+- All command names use kebab-case (e.g., `subscription-health`, not `subscriptionHealth`)
+- The `builds` command was added to match `maestro_builds` MCP tool (was previously missing)
+- The `channel` command (singular) was added to match `maestro_channel` MCP tool (was previously missing)
+- Cross-references use CLI command names, not MCP tool names (e.g., "use subscription-health" not "use maestro_subscription_health")
+
+## Future Considerations
+
+If porting this pattern to other tools:
+- Keep command descriptions synchronized with MCP tool descriptions as a build-time check
+- Consider auto-generating CLI commands from MCP tool definitions (code generation from `[McpServerTool]` attributes)
+- For frameworks that support parameter descriptions, add them for even better discoverability
+### 2026-03-13: CLI-as-skill pattern portability
+**By:** Larry Ewing (via Copilot)
+**What:** If the CLI-as-skill pattern works for maestro.mcp, apply the same pattern to lewing/helix.mcp
+**Why:** User request — both MCP packages should share the same progressive disclosure approach
+### 2026-03-13: JSON output audit findings
+**By:** Amos  
+**What:** Comprehensive audit of CLI command output formats  
+**Why:** Needed to plan JSON output mode work for CLI-as-skill pattern
+
+---
+
+## Executive Summary
+
+**Total Endpoints:** 20 CLI commands, 20 MCP tools (40 total)  
+**JSON Support:** 17/20 CLI commands have `--json` flag  
+**MCP Format:** All 20 MCP tools return Markdown strings (NO JSON support)  
+**Shared Data:** CLI and MCP use identical `MaestroService` methods → same underlying data  
+
+---
+
+## 🎯 Critical Findings
+
+1. **CLI has strong JSON support** - 17/20 commands support `--json` flag with pretty-printed JSON via `JsonSerializer.Serialize(data, WriteIndented=true)`
+2. **MCP tools are Markdown-only** - All 20 MCP tools return formatted Markdown strings built with `StringBuilder` + emojis
+3. **No output parity** - CLI JSON ≠ MCP Markdown → different representations of same data
+4. **Triggers don't support JSON** - 2 destructive commands (`trigger-subscription`, `trigger-daily-update`) output only human-readable text with emojis
+5. **Cache command is admin-only** - No JSON needed for `cache clear`
+6. **Shared infrastructure** - Both CLI and MCP use same `MaestroService` and `CacheService` (SQLite)
+
+---
+
+## 📊 Complete CLI Command Audit
+
+| Command | Has --json | JSON Output | Text Output | Notes |
+|---------|-----------|-------------|-------------|-------|
+| `mcp` | ❌ | N/A | N/A | Starts MCP server mode (stdio transport) |
+| `subscriptions` | ✅ | List of subscription objects | Formatted list with arrows | Filters by source/target/channel/branch |
+| `subscription` | ✅ | Single subscription object | Formatted details + health check | GUID required |
+| `latest-build` | ✅ | Build object | Formatted build details | Requires repo + channel |
+| `build` | ✅ | Build object | Formatted build details | Requires build ID |
+| `builds` | ✅ | List of build objects | Formatted list | Filters by repo/channel/commit/buildNumber |
+| `channels` | ✅ | List of channel objects | Formatted list | Lists all channels |
+| `channel` | ✅ | Channel object with classification | Formatted channel details | Accepts int ID or string name |
+| `default-channels` | ✅ | List of default channel mappings | Formatted list | Filters by repo/branch |
+| `subscription-health` | ✅ | Health report object | Formatted health report with emojis | Compares last applied vs latest builds |
+| `build-freshness` | ✅ | Freshness check object | Formatted freshness report | Uses aka.ms redirect + Last-Modified headers |
+| `trigger-subscription` | ❌ | N/A | Success/error message with emojis | **Destructive** - requires MAESTRO_BAR_TOKEN |
+| `trigger-daily-update` | ❌ | N/A | Success/error message with emojis | **Destructive** - triggers all daily subs |
+| `codeflow-prs` | ✅ | List of tracked PRs | Formatted PR list | Filters by channel name |
+| `tracked-pr` | ✅ | Single tracked PR object | Formatted PR details | Requires subscription ID |
+| `backflow-status` | ✅ | Backflow status object | Formatted backflow report | Requires VMR build ID |
+| `subscription-history` | ✅ | History entries list | Formatted history timeline | Requires subscription ID |
+| `build-graph` | ✅ | Build graph object | Formatted dependency graph | Requires build ID |
+| `flow-graph` | ✅ | Flow graph object | Formatted flow graph | Requires channel ID + optional filters |
+| `codeflow-statuses` | ✅ | Codeflow status object | Formatted status report | Defaults to VMR (dotnet/dotnet, main) |
+| `cache` | ❌ | N/A | Cache cleared message | Admin command - clears SQLite cache |
+
+**Summary:** 17/20 = **85% JSON coverage** (excludes: mcp, 2 triggers, cache)
+
+---
+
+## 🔍 MCP Tool Output Analysis
+
+**All 20 MCP tools return `Task<string>`** with the following pattern:
+
+```csharp
+public async Task<string> GetSubscriptions(...)
+{
+    var subs = await _service.GetSubscriptionsAsync(...);
+    
+    var sb = new StringBuilder();
+    sb.AppendLine($"Found {subs.Count} subscription(s):\n");
+    foreach (var sub in subs)
+    {
+        sb.AppendLine($"**{sub.SourceRepository}** → **{sub.TargetRepository}**");
+        sb.AppendLine($"  Channel: {sub.Channel?.Name} | ID: {sub.Id}");
+    }
+    
+    return Timestamp(noCache) + sb.ToString();  // Always includes timestamp
+}
+```
+
+**MCP Output Characteristics:**
+- ✅ Human-readable Markdown formatting
+- ✅ Bold headers (`**text**`), bullet points, structured layout
+- ✅ Emojis for status indicators (✅ ⚠️ 🔒 ⚡)
+- ✅ Timestamp prefix on every response (cached or fresh)
+- ❌ NO JSON support - strings are not machine-parseable
+- ❌ NO `--json` equivalent option
+
+**MCP Tool List (20 total):**
+1. `maestro_subscriptions`
+2. `maestro_subscription`
+3. `maestro_latest_build`
+4. `maestro_build`
+5. `maestro_builds`
+6. `maestro_channels`
+7. `maestro_channel`
+8. `maestro_default_channels`
+9. `maestro_subscription_health`
+10. `maestro_build_freshness`
+11. `maestro_trigger_subscription` (destructive)
+12. `maestro_trigger_daily_update` (destructive)
+13. `maestro_codeflow_prs`
+14. `maestro_codeflow_pr` (tracked PR)
+15. `maestro_backflow_status`
+16. `maestro_subscription_history`
+17. `maestro_build_graph`
+18. `maestro_flow_graph`
+19. `maestro_codeflow_statuses`
+20. `maestro_clear_cache` (admin)
+
+---
+
+## 🔧 Output Format Patterns
+
+### CLI Text Output Pattern
+```csharp
+Console.WriteLine($"Found {subs.Count} subscription(s):\n");
+foreach (var sub in subs)
+{
+    Console.WriteLine($"{sub.SourceRepository} → {sub.TargetRepository} ({sub.TargetBranch})");
+    Console.WriteLine($"  Channel: {sub.Channel?.Name ?? "N/A"} | ID: {sub.Id}");
+    Console.WriteLine($"  Enabled: {sub.Enabled} | Last Build: {sub.LastAppliedBuild?.Id.ToString() ?? "none"}");
+    Console.WriteLine();
+}
+```
+
+### CLI JSON Output Pattern
+```csharp
+if (json)
+{
+    Console.WriteLine(JsonSerializer.Serialize(subs, s_jsonOptions));
+}
+```
+
+Where `s_jsonOptions = new() { WriteIndented = true }` (pretty-printed)
+
+### MCP Output Pattern
+```csharp
+var sb = new StringBuilder();
+sb.AppendLine($"**{sub.SourceRepository}** → **{sub.TargetRepository}** ({sub.TargetBranch})");
+sb.AppendLine($"  Channel: {sub.Channel?.Name ?? "N/A"} | ID: {sub.Id}");
+sb.AppendLine($"  Enabled: {sub.Enabled} | Last Build: {sub.LastAppliedBuild?.Id.ToString() ?? "none"}");
+return Timestamp(noCache) + sb.ToString();
+```
+
+**Key Differences:**
+- CLI text: Plain text, no Markdown, no timestamp
+- CLI JSON: Pretty-printed JSON objects, no timestamp
+- MCP: Markdown + emojis + timestamp prefix
+
+---
+
+## 📋 Gap Analysis
+
+### ✅ What Works Well
+1. **17/20 CLI commands support JSON** - Strong foundation for agent use
+2. **Consistent JSON pattern** - All use same `s_jsonOptions` (WriteIndented=true)
+3. **Shared data layer** - `MaestroService` ensures CLI and MCP return same underlying data
+4. **Error handling** - CLI uses `Console.Error.WriteLine()` + `Environment.Exit(1)` for failures
+
+### ⚠️ Gaps for CLI-as-Skill Pattern
+
+#### **Gap 1: Trigger commands lack JSON output**
+- `trigger-subscription` outputs: `✅ Successfully triggered subscription {id} for build #{buildId}`
+- `trigger-daily-update` outputs: `✅ Successfully triggered daily update for all subscriptions`
+- **Problem:** Agents can't parse success/error in structured way
+- **Impact:** Agents must use regex/string matching to detect success
+
+#### **Gap 2: MCP has no JSON mode**
+- MCP tools return Markdown strings only
+- **Problem:** If agents call MCP tools via bash (indirect), they can't get structured data
+- **Impact:** Not relevant for direct CLI-as-skill pattern, but limits MCP-as-skill use
+
+#### **Gap 3: Error format inconsistency**
+- CLI errors: `Console.Error.WriteLine()` + exit code 1
+- MCP errors: Return error string (graceful, no exception)
+- **Problem:** Agents need to check both stderr and exit codes
+- **Impact:** Slightly more complex error detection logic
+
+#### **Gap 4: No structured trigger responses**
+- Trigger commands return void (no data object)
+- Success message is human-readable only
+- **Problem:** Agents can't get subscription details after trigger
+- **Impact:** Agents must make second call to `subscription` command to verify
+
+---
+
+## 💡 Recommendations
+
+### **Priority 1: Add JSON support to trigger commands**
+
+**Change:** Add `bool json = false` parameter to both trigger commands
+
+**Example:**
+```csharp
+[Command("trigger-subscription")]
+public async Task TriggerSubscription(
+    [Argument] string subscriptionId,
+    [Argument] int buildId,
+    bool force = false,
+    bool json = false)  // NEW
+{
+    if (!Guid.TryParse(subscriptionId, out var id))
+    {
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(new { error = "Invalid subscription ID format. Expected a GUID." }, s_jsonOptions));
+            Environment.Exit(1);
+        }
+        else
+        {
+            Console.Error.WriteLine("Invalid subscription ID format. Expected a GUID.");
+            Environment.Exit(1);
+        }
+        return;
+    }
+
+    try
+    {
+        var result = await _service.TriggerSubscriptionAsync(id, buildId, force);
+        
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(new
+            {
+                success = true,
+                subscriptionId = subscriptionId,
+                buildId = buildId,
+                forced = force,
+                subscription = result
+            }, s_jsonOptions));
+        }
+        else
+        {
+            Console.WriteLine($"✅ Successfully {(force ? "force-" : "")}triggered subscription {subscriptionId} for build #{buildId}");
+            Console.WriteLine($"\nSubscription: {result.SourceRepository} → {result.TargetRepository} ({result.TargetBranch})");
+            Console.WriteLine($"Channel: {result.Channel?.Name ?? "N/A"}");
+            if (force)
+                Console.WriteLine($"\n⚡ Force mode: existing PR branch will be overwritten with fresh VMR content.");
+        }
+    }
+    catch (InvalidOperationException ex) when (ex.Message.Contains("Authentication required"))
+    {
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(new { error = ex.Message }, s_jsonOptions));
+            Environment.Exit(1);
+        }
+        else
+        {
+            Console.Error.WriteLine($"🔒 {ex.Message}");
+            Environment.Exit(1);
+        }
+    }
+}
+```
+
+**Impact:** Agents can parse trigger results reliably
+
+---
+
+### **Priority 2: Standardize JSON error responses**
+
+**Current:** Mix of `Console.Error.WriteLine()` + exit code 1  
+**Proposed:** When `--json` flag is used, output JSON to stdout (not stderr) + exit code
+
+**Example:**
+```json
+{
+  "error": "Channel 'invalid-channel' not found.",
+  "exitCode": 1
+}
+```
+
+**Benefits:**
+- Agents can parse errors in JSON mode
+- Consistent with success responses
+- Still uses exit codes for shell integration
+
+---
+
+### **Priority 3: Document CLI-as-skill pattern**
+
+**Create:** Documentation for agents using `mstro` via bash
+
+**Include:**
+- Complete command reference with JSON output schemas
+- Error handling guide (exit codes + JSON errors)
+- Example bash scripts for common workflows
+- Comparison: CLI vs MCP tool equivalents
+
+**Location:** `docs/cli-as-skill.md`
+
+---
+
+### **Priority 4 (Optional): Add MCP JSON mode**
+
+**If** we want MCP tools to support JSON (low priority for current CLI-as-skill focus):
+
+**Change:** Add optional parameter to MCP tools
+```csharp
+[McpServerTool(...)]
+public async Task<string> GetSubscriptions(
+    ...,
+    bool jsonOutput = false)  // NEW
+{
+    var subs = await _service.GetSubscriptionsAsync(...);
+    
+    if (jsonOutput)
+    {
+        return JsonSerializer.Serialize(new
+        {
+            timestamp = DateTime.UtcNow,
+            cached = !noCache,
+            data = subs
+        }, s_jsonOptions);
+    }
+    
+    // ... existing Markdown output ...
+}
+```
+
+**Note:** This is lower priority since agents will use CLI, not MCP tools directly
+
+---
+
+## 🎓 Data Structures Reference
+
+### MaestroService Return Types (from service layer)
+
+The CLI `--json` flag serializes these objects directly:
+
+- `GetSubscriptionsAsync()` → `List<Subscription>`
+- `GetSubscriptionAsync(Guid)` → `Subscription`
+- `GetLatestBuildAsync(string, int)` → `Build`
+- `GetBuildAsync(int)` → `Build`
+- `GetBuildsAsync(...)` → `List<Build>`
+- `GetChannelsAsync()` → `List<Channel>`
+- `GetChannelByIdAsync(int)` → `Channel`
+- `GetChannelByNameAsync(string)` → `Channel`
+- `GetDefaultChannelsAsync(...)` → `List<DefaultChannel>`
+- `GetSubscriptionHealthAsync(...)` → `SubscriptionHealthReport` (custom object)
+- `GetBuildFreshnessAsync(string)` → `BuildFreshnessResult` (custom object)
+- `TriggerSubscriptionAsync(...)` → `Subscription`
+- `TriggerDailyUpdateAsync()` → `void`
+- `GetCodeflowPrsAsync(...)` → `List<CodeflowPr>`
+- `GetTrackedPrAsync(Guid)` → `CodeflowPr`
+- `GetBackflowStatusAsync(int)` → `BackflowStatus` (custom object)
+- `GetSubscriptionHistoryAsync(Guid)` → `List<SubscriptionHistoryItem>`
+- `GetBuildGraphAsync(int)` → `BuildGraph` (custom object)
+- `GetFlowGraphAsync(...)` → `FlowGraph` (custom object)
+- `GetCodeflowStatusesAsync(...)` → `CodeflowStatuses` (custom object)
+
+**Note:** Most are direct Maestro API models (`Subscription`, `Build`, `Channel`), some are custom aggregations for specific use cases.
+
+---
+
+## 📝 Summary
+
+**Current State:**
+- ✅ **85% CLI JSON coverage** (17/20 commands)
+- ❌ **0% MCP JSON coverage** (20/20 Markdown-only)
+- ✅ Strong foundation for CLI-as-skill pattern
+
+**Minimal Changes Needed:**
+1. Add `--json` to 2 trigger commands
+2. Standardize JSON error format
+3. Document CLI-as-skill usage
+
+**Estimated Effort:**
+- Priority 1 (trigger JSON): ~2 hours (straightforward pattern replication)
+- Priority 2 (error standardization): ~1 hour (refactor error handling)
+- Priority 3 (documentation): ~3 hours (comprehensive guide)
+- **Total: ~6 hours** for full agent-friendly CLI
+
+**Agent Benefits:**
+- Reliable JSON parsing for all commands
+- Consistent error detection (exit codes + JSON)
+- No need to parse human-readable text
+- Can chain commands via bash scripts with structured data flow
+
+---
+
+**Audit completed:** 2026-03-13  
+**Next steps:** Review with team, prioritize changes, implement trigger JSON support
+# Skill-Based Architecture for Context Tax Reduction
+
+**Author:** Holden (Lead / Architect)  
+**Date:** 2026-03-18  
+**Status:** Proposal — Awaiting Larry's review
+
+---
+
+## Executive Summary
+
+**Recommendation: Implement a lightweight Copilot skill that routes to the CLI tool, supplemented by a knowledge-base resource for progressive disclosure.**
+
+This hybrid approach reduces context tax from **~1,310 tokens** (20 MCP tools) to **~50-100 tokens** (1 skill entry point + 1 knowledge resource), while preserving full functionality and improving agent discoverability through progressive help patterns.
+
+---
+
+## 1. Context Tax Quantification
+
+### Current MCP Tool Surface (20 tools)
+
+**Total description text:** 5,241 characters across 74 description attributes  
+**Estimated token cost:** ~1,310 tokens (using 4 chars/token approximation)  
+**Breakdown:**
+- Tool-level descriptions: 20 tools × ~75 chars each = ~1,500 chars
+- Parameter descriptions: 54 parameters × ~65 chars each = ~3,500 chars
+- Attribute overhead: ~240 chars
+
+**Per-agent impact:**
+- Every agent connected to the MCP server pays this cost upfront
+- Even simple queries like "what's the latest runtime build?" consume 1,310 tokens before the agent writes a single word
+- Multi-client deployments (VS Code + CLI + Claude) replicate this cost across 3 separate processes
+
+### Proposed Skill Approach (1 entry point + 1 resource)
+
+**Skill entry description:** ~50-100 chars  
+**Knowledge resource:** ~200-500 chars (overview + routing hints)  
+**Total context tax:** ~50-100 tokens (87-94% reduction)
+
+**Progressive disclosure cost:**
+- Initial context: 50-100 tokens
+- When agent needs help: +500 tokens (via resource read or help command output)
+- Total worst-case: 550-600 tokens (still 58% cheaper than MCP tools)
+
+**Key insight:** Most agent interactions use 1-3 tools. The current approach pays for 20 upfront. The skill approach defers 95% of the documentation cost until it's actually needed.
+
+---
+
+## 2. Feasibility: CLI vs MCP for Agent Use
+
+### Can a CLI replace MCP tools?
+
+**Yes, with caveats.** The maestro.mcp CLI already implements 19 commands that mirror the 20 MCP tools (1:1 parity minus `mcp` command itself). The CLI has been designed for both humans and agents:
+
+- ✅ **Structured output:** `--json` flag on every command returns machine-readable JSON
+- ✅ **Exit codes:** Proper 0/1 exit codes signal success/failure
+- ✅ **Stderr separation:** Errors go to stderr, data to stdout (agent-friendly)
+- ✅ **Parameter consistency:** Same parameter names as MCP tools
+- ✅ **Shared cache:** CLI and MCP server use the same SQLite cache at `~/.mstro/cache.db`
+
+**CLI advantages over MCP:**
+1. **No persistent connection** — agents spawn on-demand, no stdio lifecycle management
+2. **Lower latency** — bash tool is faster than MCP tool roundtrip for simple queries
+3. **Easier debugging** — humans can test exact commands agents run (`mstro subscriptions --source-repository=...`)
+4. **Tool install friction:** `dnx lewing.maestro.mcp` downloads on first use (no install step)
+
+**CLI disadvantages vs MCP:**
+1. **No parameter validation** — MCP tools get typed parameter validation; CLI requires manual parsing
+2. **No streaming** — MCP supports streaming responses for long operations; CLI dumps full output
+3. **Process overhead** — Each CLI invocation spawns a new .NET process (~200ms startup)
+
+**Tradeoff verdict:** For maestro.mcp, the CLI disadvantages are **negligible**:
+- Parameter validation: ConsoleAppFramework handles this (type-safe, auto help)
+- Streaming: Not needed — largest response (build graph) is <10KB
+- Process overhead: Acceptable — 200ms startup << 5min cache TTL benefit
+
+---
+
+## 3. Progressive Disclosure Patterns
+
+### Pattern 1: Help Command (Current Helix Model)
+
+The helix.mcp MCP server uses a `helix_ci_guide` tool that returns repo-specific documentation on-demand. This is a **knowledge tool** — it doesn't perform actions, just returns structured help text.
+
+**Applied to maestro.mcp:**
+
+Agent sees skill → runs `mstro --help` → sees 19 commands (200 lines, ~500 tokens) → runs `mstro help <command>` for details
+
+**Token cost:**
+- Initial: ~50 tokens (skill description)
+- After help: +500 tokens (command list)
+- After command help: +100 tokens (parameter details)
+- **Total: 650 tokens** (still 50% cheaper than 1,310 for all MCP tools upfront)
+
+### Pattern 2: MCP Knowledge Resource (New Model)
+
+The MCP spec supports **resources** — documents that agents can read on-demand. This is what lewing/helix.mcp is experimenting with as an alternative to tool descriptions.
+
+**Applied to maestro.mcp:**
+
+```json
+{
+  "resources": [
+    {
+      "uri": "maestro://guide",
+      "name": "Maestro CLI Guide",
+      "description": "Command reference and usage patterns for Maestro/BAR data"
+    }
+  ]
+}
+```
+
+Resource content includes: command overview table, common task examples, parameter conventions, cache behavior, cross-references.
+
+**Token cost:**
+- Initial: ~50 tokens (skill description)
+- After resource read: +200 tokens (guide overview)
+- **Total: 250 tokens** (81% cheaper than MCP tools)
+
+**Resource advantages:**
+- ✅ Agents can re-read the guide mid-session (no CLI invocation)
+- ✅ Can include examples, gotchas, cross-references
+- ✅ Can be versioned/updated independently of tool code
+
+**Resource disadvantages:**
+- ❌ MCP resource support is new (not all clients support it yet)
+- ❌ Requires implementing `resources/read` handler in MCP server
+
+---
+
+## 4. Skill vs MCP vs Resources: Comparison
+
+| Dimension | Full MCP Tools (Current) | CLI Skill + Help | CLI Skill + Resource |
+|-----------|-------------------------|------------------|---------------------|
+| **Initial context tax** | ~1,310 tokens | ~50 tokens | ~50 tokens |
+| **Worst-case context tax** | ~1,310 tokens | ~650 tokens | ~250 tokens |
+| **Agent discovery** | Excellent (all tools listed in `tools/list`) | Good (via `--help`) | Excellent (resource is discoverable) |
+| **Parameter validation** | Excellent (typed, auto-checked) | Good (ConsoleAppFramework validates) | Good (ConsoleAppFramework validates) |
+| **Cross-references** | Medium (via description text) | Good (via `--help` related commands) | Excellent (markdown links in resource) |
+| **Client compatibility** | Universal (all MCP clients) | Universal (bash tool) | Limited (resource support new) |
+| **Implementation complexity** | Low (already exists) | Low (CLI exists, skill is trivial) | Medium (need resource handler) |
+| **Maintainability** | Medium (descriptions in code) | Medium (help text in CLI) | High (guide is separate markdown) |
+| **Multi-step workflows** | Good (agent chains tools) | Good (agent chains CLI commands) | Excellent (guide shows patterns) |
+| **Offline usage** | No (requires MCP server) | Yes (CLI is standalone) | No (requires MCP server for resource) |
+
+**Verdict:**
+- **Best for context tax:** CLI Skill + Resource (81% reduction)
+- **Best for compatibility:** CLI Skill + Help (works everywhere)
+- **Best for agent experience:** CLI Skill + Resource (if client supports it)
+
+---
+
+## 5. Implementation Sketch
+
+### Option A: CLI Skill + Help (Conservative)
+
+**Copilot skill definition:**
+
+```yaml
+name: maestro
+description: Query Maestro/BAR dependency flow data using the mstro CLI tool
+invoke: |
+  # Check if mstro is installed
+  if ! command -v mstro &> /dev/null; then
+    echo "Installing mstro CLI..."
+    dnx lewing.maestro.mcp --help > /dev/null 2>&1 || {
+      echo "ERROR: dnx not available. Install .NET 10 SDK first."
+      exit 1
+    }
+  fi
+  
+  echo "Maestro CLI (mstro) is available. Use 'mstro --help' to see all commands."
+  echo ""
+  echo "Common tasks:"
+  echo "  - Check subscription health: mstro subscription-health <repo-url>"
+  echo "  - List subscriptions: mstro subscriptions --target-repository <url>"
+  echo "  - Get latest build: mstro latest-build <repo-url> --channel-name '<channel>'"
+  echo ""
+  echo "All commands support --json for structured output and --no-cache to bypass cache."
+```
+
+**Implementation cost:** ~1 hour (write skill YAML, test in Copilot CLI)
+
+### Option B: CLI Skill + MCP Resource (Optimal)
+
+**MCP server changes:**
+
+```csharp
+// In new file: src/MaestroTool.Core/MaestroResources.cs
+
+[McpServerResource]
+public class MaestroResources
+{
+    private const string GuideContent = @"# Maestro CLI Guide
+The `mstro` CLI provides access to Maestro/BAR data...
+(full guide content)
+";
+
+    [Resource(Uri = "maestro://guide")]
+    [Description("Command reference and usage patterns for Maestro/BAR data")]
+    public Task<string> GetGuide()
+    {
+        return Task.FromResult(GuideContent);
+    }
+}
+```
+
+**Implementation cost:** ~3 hours (resource handler, guide content, testing)
+
+### Option C: Hybrid (Recommended)
+
+**Combine both approaches:**
+1. Keep the full MCP tool surface for clients that prefer it (backward compatible)
+2. Add a `maestro://guide` resource for progressive disclosure
+3. Publish a Copilot skill that routes to the CLI + resource
+
+**Client choice:**
+- **MCP-native clients:** Use tools directly (pay 1,310 token tax if they want)
+- **Skill-aware clients:** Use skill → CLI + resource (pay 250 token tax)
+- **Humans:** Use CLI directly (no agent needed)
+
+**Implementation cost:** ~4 hours (resource handler + skill + testing)
+
+**Benefits:**
+- ✅ Zero breaking changes (MCP tools stay)
+- ✅ Context tax reduction for skill-aware clients
+- ✅ Resource acts as living documentation
+- ✅ CLI stays independent (works without MCP server)
+
+---
+
+## 6. Comparison to Helix MCP Approaches
+
+### Helix MCP: Knowledge Tools
+
+The helix.mcp server uses a `helix_ci_guide` tool that returns repo-specific help text. Agents discover it naturally (it's in the tool list), but it still counts against initial context tax.
+
+### Helix MCP: Resource Experiment
+
+The helix.mcp team is experimenting with:
+- Resource: `helix://knowledgebase` (large markdown document)
+- Tool: `helix_query_kb(question)` (semantic search over the resource)
+
+**Pros:** Resource only loaded on-demand (no upfront context tax), can store huge amounts of documentation
+
+**Cons:** Requires semantic search implementation (complex), resource support is new, debugging is harder
+
+### Maestro MCP: Proposed Approach
+
+**Hybrid of both:**
+- Resource: `maestro://guide` (command reference, 2-3KB markdown)
+- Skill: Routes to CLI, points to resource
+- MCP tools: Stay available for MCP-native clients
+
+**Advantages over Helix approaches:**
+1. **Simpler than semantic search** — guide is static markdown, no embeddings
+2. **Cheaper than knowledge tools** — resource doesn't count against initial context
+3. **More flexible than pure MCP** — skill works even if MCP server is down (CLI is standalone)
+
+---
+
+## 7. Recommended Architecture
+
+**Implement Option C (Hybrid):**
+
+1. **Add `maestro://guide` resource to MCP server**
+   - Content: 2-3KB markdown guide (command reference, common patterns, examples)
+   - Estimated token cost when read: ~200 tokens
+   - Located in: `src/MaestroTool.Core/MaestroResources.cs` (new file)
+
+2. **Publish Copilot skill**
+   - Name: `maestro`
+   - Description: "Query Maestro/BAR dependency flow data. Read maestro://guide or run mstro --help."
+   - Invoke script: Checks `mstro` availability, prints routing message
+   - Located in: `.copilot/skills/maestro/` (new directory)
+
+3. **Keep MCP tools unchanged**
+   - Backward compatible — existing clients continue working
+   - Located in: `src/MaestroTool.Core/MaestroMcpTools/*.cs` (no changes)
+
+4. **Document the tradeoff in README**
+   - Section: "Reducing Context Tax"
+   - Explain: MCP tools (1,310 tokens) vs skill+resource (250 tokens)
+   - Recommend: Use skill for Copilot CLI, MCP tools for other clients
+
+### Implementation Checklist
+
+- [ ] Create `MaestroResources.cs` with `maestro://guide` resource handler
+- [ ] Write guide content (markdown, 2-3KB):
+  - [ ] Command overview table
+  - [ ] Common task examples (health checks, triggers, flow status)
+  - [ ] Parameter conventions (--json, --no-cache)
+  - [ ] Cache behavior explanation
+  - [ ] Cross-references to related commands
+- [ ] Create `.copilot/skills/maestro/skill.yaml`
+- [ ] Test skill in Copilot CLI:
+  - [ ] Verify `mstro` installs via `dnx` if not present
+  - [ ] Verify resource is readable
+  - [ ] Verify agents can chain CLI commands
+- [ ] Update README with "Reducing Context Tax" section
+- [ ] Update CHANGELOG with new resource + skill
+
+### Migration Path
+
+**Phase 1 (now):** Implement resource + skill (4 hours)  
+**Phase 2 (after validation):** Promote skill in documentation, update Copilot CLI defaults  
+**Phase 3 (future):** Deprecate MCP tools if skill adoption is high (breaking change, needs major version bump)
+
+---
+
+## 8. Open Questions
+
+1. **Copilot skill format:** What's the actual YAML/JSON schema for Copilot skills?
+2. **Resource client support:** Which MCP clients support `resources/read`? (VS Code Copilot? Claude Desktop?)
+3. **Skill discovery:** How do agents discover available skills?
+4. **Skill vs MCP tool priority:** If both skill and MCP tools are available, which do agents prefer?
+
+**Action items:**
+- [ ] Larry: Confirm Copilot skill format and discovery mechanism
+- [ ] Holden: Test MCP resource support in VS Code Copilot + Claude Desktop
+- [ ] Naomi: Implement resource handler once format is confirmed
+
+---
+
+## Appendix: Token Cost Calculation Details
+
+### MCP Tools (Current)
+
+```python
+# Data from codebase analysis:
+total_chars = 5241  # All [Description("...")] text
+tool_count = 20
+param_count = 54
+
+# Token estimation (conservative: 4 chars/token)
+estimated_tokens = total_chars / 4  # = 1,310 tokens
+
+# Breakdown:
+tool_descriptions = 1500 / 4  # ~375 tokens
+param_descriptions = 3500 / 4  # ~875 tokens
+attribute_overhead = 240 / 4   # ~60 tokens
+```
+
+### Skill + Resource (Proposed)
+
+```python
+# Skill description
+skill_tokens = 25  # "Query Maestro/BAR... Read maestro://guide..."
+
+# Resource content (guide)
+guide_tokens = 625  # 2500 chars / 4
+
+# Initial context (before agent reads resource)
+initial_cost = 25 tokens
+
+# Worst-case (agent reads guide)
+worst_case = 25 + 625 = 650 tokens
+
+# Typical case (agent uses guide examples, doesn't read full text)
+typical_cost = 25 + (625 * 0.3) = ~200 tokens
+```
+
+**Reduction:** 1,310 → 200 = **85% context tax reduction** in typical usage
+
+---
+
+## Conclusion
+
+The skill-based architecture achieves **81-85% context tax reduction** while preserving full functionality and improving agent discoverability. The hybrid approach (Option C) is recommended because it:
+
+1. **Reduces context tax** from 1,310 to ~250 tokens (worst-case) for skill-aware clients
+2. **Maintains backward compatibility** — MCP tools stay available
+3. **Improves agent experience** — progressive disclosure via resource + help text
+4. **Works everywhere** — skill uses CLI (universal), resource is MCP bonus
+5. **Low implementation cost** — 4 hours to ship, no breaking changes
+
+**Next step:** Larry confirms Copilot skill format, then Naomi implements resource handler.
+# CLI-as-Skill Files and Guide Command
+
+**Date:** 2026-03-13  
+**Author:** Naomi  
+**Status:** Implemented
+
+## Context
+
+We're establishing a CLI-as-skill pattern where AI agents can use the `mstro` CLI tool via bash instead of loading the MCP server. This requires:
+1. Lightweight documentation shipped with the NuGet package
+2. Squad skill file documenting the pattern
+3. Workflow-organized guide command for agent consumption
+
+This pattern needs to be portable to `lewing/helix.mcp` later.
+
+## Decision
+
+### Created Three Deliverables
+
+**1. `src/MaestroTool/copilot-skill.md` (~6KB)**
+- Ships in NuGet package as discoverable documentation
+- Content: what mstro does, install command, quick discovery, 5-6 common workflows, JSON output, cache notes
+- All examples use `--json` flag to teach structured output pattern
+- Focuses on most common use cases: subscription-health, latest-build, codeflow-statuses, build tracing
+
+**2. `.ai-team/skills/maestro-cli/SKILL.md` (~4.5KB)**
+- Squad skill documentation following standard skill format
+- Sections: Pattern, When to Use, Examples, Implementation Notes, Portability
+- Documents preference rules: CLI when need JSON/bash pipeline, MCP when conversational/long-running
+- 3 concrete examples showing bash scripting patterns with jq, variable capture, cache warming
+
+**3. `mstro guide` command in Program.cs (~5KB inline)**
+- New CLI command that outputs workflow-organized markdown guide
+- Structure: Quick Reference table → Workflows (by scenario) → Notes
+- Each workflow section: numbered steps with command + explanation, followed by bash example
+- Organized by **user intent** (Investigating Subscription Health, Tracing Build Flow) not by command
+
+### Key Design Choices
+
+**Why workflow organization in guide?**
+- Teaches agents HOW to accomplish tasks, not just what commands exist
+- Agent searches guide for "subscription health" and finds complete workflow with examples
+- Shows command chaining patterns (pipe to jq, capture output to variable)
+- More valuable than `--help` which only lists commands
+
+**Why inline string constant?**
+- Guide content is static, doesn't need external file dependencies
+- Easy to maintain (single location in Program.cs)
+- Always in sync with command availability
+- No build-time generation complexity
+
+**Why ship copilot-skill.md in NuGet package?**
+- Agents can discover it without needing to query the repo
+- Available immediately after `dotnet tool install`
+- Lightweight entry point (100 lines) that points to `mstro guide` for details
+- Pattern is portable to other NuGet-packaged CLI+MCP tools
+
+## Rationale
+
+1. **Progressive disclosure:** `copilot-skill.md` → `mstro --help` → `mstro guide` → `mstro <cmd> --help`
+2. **Portability:** Pattern uses only framework features, portable to helix.mcp with different content
+3. **Maintainability:** Guide content is single string constant, easy to update when commands change
+4. **Discoverability:** NuGet package ships with skill file, no external docs needed
+
+## Alternative Considered
+
+**Generate guide from command attributes at build time:** Could extract `[Description]` attributes and build guide automatically. **Rejected** because:
+- Guide needs workflow organization, not command-alphabetical
+- Examples and command chaining patterns can't be auto-generated
+- Inline string constant is easier to maintain for workflow-based content
+- Code generation adds complexity for marginal benefit
+
+## Implementation Notes
+
+- Guide command is simple: no parameters, outputs string constant to stdout
+- Guide content organized by workflows matching common user tasks (not by command)
+- All examples include `--json` flag to reinforce structured output pattern
+- Quick Reference table lists all 21 commands (20 query/action + 1 cache utility)
+- copilot-skill.md focuses on top 5-6 most common workflows only
+
+## Future Considerations
+
+When porting this pattern to helix.mcp:
+- Keep same file structure (`copilot-skill.md`, `SKILL.md`, `guide` command)
+- Adapt workflow sections to helix/AzDO tasks (test failures, CI analysis, work items)
+- Use same progressive disclosure pattern (skill file → --help → guide → command help)
+- Consider sharing guide format template between maestro.mcp and helix.mcp
+
+## Testing
+
+- Build verified: `dotnet build src/MaestroTool/MaestroTool.csproj` succeeded
+- Guide command tested: `dotnet run --project src/MaestroTool/MaestroTool.csproj -- guide` outputs formatted markdown
+- Help listing verified: `mstro --help` shows guide command in list
+
+## Related Decisions
+
+- **naomi-cli-help.md** — Enhanced CLI command descriptions for MCP/CLI parity
+- **amos-json-audit.md** — Documented JSON output coverage (17/20 commands support --json)
+- **holden-skill-architecture.md** — Squad skill format and organization
