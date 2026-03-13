@@ -150,8 +150,8 @@ Add the following to your MCP client config. The `--yes` flag ensures `dnx` does
   "servers": {
     "maestro": {
       "type": "stdio",
-      "command": "dnx",
-      "args": ["lewing.maestro.mcp", "--yes"]
+      "command": "dotnet",
+      "args": ["dnx", "--yes", "lewing.maestro.mcp"]
     }
   }
 }
@@ -166,8 +166,8 @@ Add the following to your MCP client config. The `--yes` flag ensures `dnx` does
   "servers": {
     "maestro": {
       "type": "stdio",
-      "command": "dnx",
-      "args": ["lewing.maestro.mcp", "--yes"],
+      "command": "dotnet",
+      "args": ["dnx, "--yes", "lewing.maestro.mcp"],
       "env": {
         "MAESTRO_BAR_TOKEN": "your-token-here"
       }
@@ -222,7 +222,7 @@ Future versions may include destructive actions (delete subscription, remove def
     "maestro": {
       "type": "stdio",
       "command": "dotnet",
-      "args": ["dnx", "lewing.maestro.mcp", "--yes"],
+      "args": ["dnx", "--yes", "lewing.maestro.mcp"],
       "env": {
         "MAESTRO_ENABLE_DESTRUCTIVE_ACTIONS": "true"
       }
