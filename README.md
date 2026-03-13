@@ -167,7 +167,7 @@ Add the following to your MCP client config. The `--yes` flag ensures `dnx` does
     "maestro": {
       "type": "stdio",
       "command": "dotnet",
-      "args": ["dnx, "--yes", "lewing.maestro.mcp"],
+      "args": ["dnx", "--yes", "lewing.maestro.mcp"],
       "env": {
         "MAESTRO_BAR_TOKEN": "your-token-here"
       }
