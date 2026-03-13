@@ -1,0 +1,21 @@
+{
+  "universe_usage_history": [
+    {
+      "assignment_id": "maestro-mcp-001",
+      "universe": "The Expanse",
+      "timestamp": "2026-02-18T21:00:00Z"
+    }
+  ],
+  "assignment_cast_snapshots": {
+    "maestro-mcp-001": {
+      "universe": "The Expanse",
+      "agent_map": {
+        "holden": "Holden",
+        "naomi": "Naomi",
+        "amos": "Amos",
+        "alex": "Alex"
+      },
+      "created_at": "2026-02-18T21:00:00Z"
+    }
+  }
+}
