@@ -64,6 +64,16 @@
 
 ## Learnings
 
+### Reflection-Based CLI Schema Output (2026-03-13)
+
+**Pattern established:**
+- Query commands that already expose `--json` now also expose `--schema`, implemented with `TryPrintSchema<T>(schema)` as the first line in each handler.
+- `SchemaGenerator` lives in `src/MaestroTool.Core/CliSchema/SchemaGenerator.cs` and reflects public instance properties into a PascalCase JSON skeleton, so PCS model types do not need curated hand-maintained contracts.
+- Placeholder rules are centralized: strings → `<string>`, numerics → `0`, booleans → `false`, date/time values → `<datetime>`, enums → `<Value1|Value2|...>`, nullable types unwrap to their underlying placeholder, collections emit a single sample element, and dictionaries emit a single `<key>` entry.
+- Use `JavaScriptEncoder.UnsafeRelaxedJsonEscaping` for schema serialization so placeholders render as `<string>` instead of escaped unicode sequences.
+- Recursion is guarded with both a per-path visited-type set and a max depth of 5; depth/cycle cutoffs emit `<circular>`.
+- `--schema` wins over `--json` and returns before any command-specific Maestro lookups, so `--no-cache` is effectively irrelevant for schema generation.
+
 ### CLI-as-Skill Pattern (2026-03-13)
 
 **Pattern established:**
@@ -181,3 +191,13 @@
 1. Implement `maestro://guide` MCP resource (static markdown guide)
 2. Publish Copilot skill that routes to CLI + resource
 3. Document CLI-as-skill pattern for agents
+
+**Recent deliverables (2026-03-13, Session 3 - Schema Implementation):**
+- Implemented reflection-based schema generation engine in `src/MaestroTool.Core/CliSchema/SchemaGenerator.cs`
+- Added `--schema` flag to all 17 query commands in `Program.cs`
+- Schema uses `TryPrintSchema<T>(bool schema)` helper at top of command body; short-circuits before API lookups
+- Placeholder mappings: strings → `"<string>"`, numerics → `0`, enums → `"<Value1|Value2|...>"`, with cycle protection (max depth 5)
+- Output uses `JavaScriptEncoder.UnsafeRelaxedJsonEscaping` to keep placeholders human-readable
+- Decision files merged: holden-schema-architecture.md, naomi-schema-implementation.md
+
+**Related decision:** CLI Schema as Intentional Contracts (holden-schema-architecture.md) — schema generation from shared CLI contract types in Core, not raw BAR client models

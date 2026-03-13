@@ -79,3 +79,22 @@
 **Implementation cost:** ~4 hours (resource handler + skill + testing). Zero breaking changes.
 
 **Decision documented:** Merged to `.ai-team/decisions.md` (2026-03-13) — Skill-Based Architecture decision approved for implementation. Hybrid approach (Option C) recommended: resource handler + CLI skill + backward-compatible MCP tools.
+
+### 2026-03-13: `--schema` CLI contract architecture
+
+- `mstro` query commands in `src/MaestroTool/Program.cs` already share a strong output pattern: per-command `--json`/`--no-cache` flags and a single `JsonSerializerOptions` instance with default STJ naming, so schema output must preserve the current PascalCase field names exactly.
+- `src/MaestroTool.Core/Maestro/MaestroService.cs` already contains the best agent-facing JSON contracts in the codebase (`SubscriptionHealthResult`, `BuildFreshnessResult`, plus nested validation/oscillation/PR records); those can be used directly for schema generation.
+- Architecture decision: implement `--schema` as a per-command flag on every query command, not as a meta-command. It belongs beside `--json` in the CLI discovery flow (`--help` → `--schema` → `--json`).
+- Architecture decision: schema format should be a minified JSON skeleton with typed placeholders and the same root shape as the live payload. Schema is a contract mirror, not prose and not full JSON Schema.
+- Architecture decision: put schema generation in `MaestroTool.Core`, driven by explicit CLI response contracts. For raw PCS client types like `Build`, `Subscription`, and `Channel`, prefer curated CLI contract types over exposing the full generated BAR object graph.
+- New design doc: `.ai-team/agents/holden/schema-architecture.md` captures the recommendations, rationale, rollout phases, and testing expectations for issue #12.
+
+**Recent deliverables (2026-03-13, Session 3 - Schema Architecture):**
+- Designed `mstro --schema` as intentional contract feature, not docs dump
+- Architecture decision: schema generation uses CLI contract types in Core, not raw PCS client models
+- Consolidates schema logic in single `SchemaGenerator.cs` file
+- Supports all 17 query commands with consistent field naming (PascalCase)
+- Key insight: curated contract types for noisy PCS commands allow agent-friendly field filtering without bloating the schema
+- Naomi implemented per architecture; all 179 tests passing
+
+**Related decision:** Reflection-based CLI Schema Output (naomi-schema-implementation.md) — implementation details and file changes

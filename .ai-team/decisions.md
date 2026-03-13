@@ -5058,3 +5058,65 @@ When porting this pattern to helix.mcp:
 - **naomi-cli-help.md** — Enhanced CLI command descriptions for MCP/CLI parity
 - **amos-json-audit.md** — Documented JSON output coverage (17/20 commands support --json)
 - **holden-skill-architecture.md** — Squad skill format and organization
+
+---
+
+## Reflection-based CLI Schema Output
+
+**Author:** Naomi (Backend Dev)  
+**Date:** 2026-03-13  
+**Status:** Implemented
+
+### Context
+
+Issue #12 adds a `--schema` flag to every read/query CLI command that already supports `--json`. The goal is to let agents and users inspect the JSON result shape without calling Maestro APIs or hand-maintaining separate schema contracts for PCS client models.
+
+### Decision
+
+Implement schema generation as a shared reflection-based concern in `src/MaestroTool.Core/CliSchema/SchemaGenerator.cs`, then wire each CLI query command through a common `TryPrintSchema<T>(bool schema)` helper at the top of the command body.
+
+### Implementation Details
+
+1. `SchemaGenerator` walks public instance properties and produces a PascalCase JSON skeleton that matches the CLI's default JSON naming.
+2. Placeholder mapping is centralized:
+   - strings/chars/URIs → `"<string>"`
+   - numerics → `0`
+   - booleans → `false`
+   - `DateTime`/`DateTimeOffset`/`DateOnly`/`TimeOnly` → `"<datetime>"`
+   - enums → `"<Value1|Value2|...>"`
+   - nullable types unwrap to the underlying placeholder
+   - collections emit a one-element sample array
+   - dictionaries emit a single `"<key>"` sample entry
+3. Cycle protection uses both a visited-type set and a max recursion depth of 5. When either guard trips, the generator emits `"<circular>"`.
+4. Schema output uses `JavaScriptEncoder.UnsafeRelaxedJsonEscaping` so placeholder tokens remain human-readable (`<string>`, not `\u003Cstring\u003E`).
+5. `--schema` short-circuits before per-command API/service lookups and wins over `--json`.
+
+### Files Changed
+
+- `src/MaestroTool.Core/CliSchema/SchemaGenerator.cs`
+- `src/MaestroTool/Program.cs`
+
+---
+
+## CLI Schema as Intentional Contracts
+
+**Author:** Holden (Architect)  
+**Date:** 2026-03-13  
+**Status:** Decided
+
+### Decision
+
+`mstro --schema` should be a **contract feature**, not a docs dump. Add `--schema` to every query command that already supports `--json`, emit a minified JSON skeleton with exact live field names/root shape, and generate it from shared CLI contract types in `MaestroTool.Core`. Use real custom records where they already exist; introduce curated CLI contract types for noisy PCS-backed commands instead of reflecting raw BAR client models.
+
+### Rationale
+
+1. **Agents need exact jq field discovery**, not a verbose specification language or a transport-model object dump
+2. **Keeping schema generation in Core** preserves the project architecture (host → service → client/cache)
+3. **Tying it to intentional CLI contracts** keeps schemas compact and avoids coupling the agent experience to the full upstream PCS object graph
+4. **Curated contract types** for noisy PCS commands allow agent-friendly field filtering without bloating the schema
+
+### Related Work
+
+- Naomi's implementation uses reflection over CLI contract types, not raw PCS client models
+- Consolidates schema generation logic in single `SchemaGenerator.cs` file
+- Supports all 17 query commands with consistent field naming (PascalCase)
