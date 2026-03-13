@@ -221,7 +221,7 @@ public class Commands
         bool schema = false,
         bool noCache = false)
     {
-        if (TryPrintSchema<Build?>(schema)) return;
+        if (TryPrintSchema<Build>(schema)) return;
 
         int? channelId = null;
         if (!string.IsNullOrEmpty(channelName))
