@@ -20,8 +20,14 @@
 - Some earlier tests failed due to JSON deserialization breaking reference equality (Assert.Same) — refactored to value equality, all now pass
 - SQLite cache tests need care around object identity vs equality
 
+**Recent deliverables (2026-03-13):**
+- Verified restructure plan execution: all 167 tests pass after core refactoring
+- Tests remain in mirrored folder structure (MaestroMcpTools/, Maestro/, AzDO/)
+- No test regressions from file moves and partial class reorganization
+
 **Files modified:**
 - src/MaestroTool.Tests/MaestroMcpToolsTests.cs — 16 new test cases for P1-M1, P1-M3 features
+- src/MaestroTool.Tests/ — mirrored folder structure after restructure
 
 ---
 

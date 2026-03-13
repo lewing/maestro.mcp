@@ -17,6 +17,13 @@
 - **Parameter design matters**: Standard params (noCache), format examples in descriptions, cross-parameter relationships
 - **MCP skill gaps**: Needs operational patterns (caching TTLs, auth cascade, error handling, real anti-patterns from production experience)
 
+**Recent deliverables (2026-03-13):**
+- Restructuring plan (holden-restructure-plan.md) executed successfully by Naomi
+- Option A (partial classes + subfolders) selected and implemented — zero breaking changes
+- Core structure now: 6 partial class files organized by domain (Channels, Subscriptions, Builds, Codeflow, Utilities)
+- API clients moved to domain folders (Maestro/, GitHub/, AzDO/) with mirrored test structure
+- All 167 tests passing after restructure (commit pending)
+
 **Known issues identified but deferred:**
 - P0 (description cleanup) — implemented by Naomi
 - P1-M1 (smart trigger) — implemented by Naomi
