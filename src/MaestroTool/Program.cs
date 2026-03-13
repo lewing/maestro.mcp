@@ -94,7 +94,7 @@ public class Commands
     }
 
     [Command("subscriptions")]
-    [Description("List Maestro subscriptions filtered by source/target repository and/or channel")]
+    [Description("List Maestro subscriptions filtered by source/target repository and/or channel name. For health checks, use subscription-health. For details on a single subscription by ID, use subscription.")]
     public async Task Subscriptions(
         string? sourceRepository = null,
         string? targetRepository = null,
@@ -142,7 +142,7 @@ public class Commands
     }
 
     [Command("subscription")]
-    [Description("Get a specific Maestro subscription by ID")]
+    [Description("Get a specific Maestro subscription by its GUID ID, including health diagnostic comparing last applied build to latest available. For batch health checks across a repository, use subscription-health instead.")]
     public async Task Subscription(
         [Argument] string subscriptionId,
         bool json = false,
@@ -200,7 +200,7 @@ public class Commands
     }
 
     [Command("latest-build")]
-    [Description("Get the latest build for a repository")]
+    [Description("Get the latest build for a repository, optionally filtered by channel name.")]
     public async Task LatestBuild(
         [Argument] string repository,
         string? channelName = null,
@@ -239,7 +239,7 @@ public class Commands
     }
 
     [Command("build")]
-    [Description("Get a specific build by ID")]
+    [Description("Get a specific build by its BAR build ID. For listing/filtering builds, use builds command.")]
     public async Task Build(
         [Argument] int buildId,
         bool json = false,
@@ -257,8 +257,55 @@ public class Commands
         }
     }
 
+    [Command("builds")]
+    [Description("List builds, optionally filtered by repository, channel, commit, or build number.")]
+    public async Task Builds(
+        string? repository = null,
+        string? channelName = null,
+        string? commit = null,
+        string? buildNumber = null,
+        int? count = null,
+        bool json = false,
+        bool noCache = false)
+    {
+        int? channelId = null;
+        if (!string.IsNullOrEmpty(channelName))
+        {
+            var ch = await _service.GetChannelByNameAsync(channelName, noCache);
+            if (ch == null)
+            {
+                Console.Error.WriteLine($"Channel '{channelName}' not found.");
+                Environment.Exit(1);
+                return;
+            }
+            channelId = ch.Id;
+        }
+
+        var builds = await _service.ListBuildsAsync(repository, channelId, commit, buildNumber, count, noCache);
+
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(builds, s_jsonOptions));
+        }
+        else
+        {
+            if (builds.Count == 0)
+            {
+                Console.WriteLine("No builds found matching the specified filters.");
+                return;
+            }
+
+            Console.WriteLine($"Found {builds.Count} build(s):\n");
+            foreach (var build in builds)
+            {
+                PrintBuild(build);
+                Console.WriteLine("---");
+            }
+        }
+    }
+
     [Command("channels")]
-    [Description("List all Maestro channels")]
+    [Description("List all Maestro channels.")]
     public async Task Channels(
         bool json = false,
         bool noCache = false)
@@ -279,8 +326,66 @@ public class Commands
         }
     }
 
+    [Command("channel")]
+    [Description("Get a specific channel by ID or name. For listing all channels, use channels command.")]
+    public async Task Channel(
+        [Argument] string channelId,
+        bool json = false,
+        bool noCache = false)
+    {
+        if (string.IsNullOrWhiteSpace(channelId))
+        {
+            Console.Error.WriteLine("Channel ID or name is required.");
+            Environment.Exit(1);
+            return;
+        }
+
+        Channel channel;
+        if (int.TryParse(channelId, out var parsedId))
+        {
+            if (parsedId < 0)
+            {
+                Console.Error.WriteLine($"Invalid channel ID '{channelId}'. Channel IDs must be non-negative integers.");
+                Environment.Exit(1);
+                return;
+            }
+
+            try
+            {
+                channel = await _service.GetChannelAsync(parsedId, noCache);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Console.Error.WriteLine($"Channel with ID {parsedId} not found.");
+                Environment.Exit(1);
+                return;
+            }
+        }
+        else
+        {
+            var found = await _service.GetChannelByNameAsync(channelId, noCache);
+            if (found == null)
+            {
+                Console.Error.WriteLine($"Channel '{channelId}' not found.");
+                Environment.Exit(1);
+                return;
+            }
+            channel = found;
+        }
+
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(channel, s_jsonOptions));
+        }
+        else
+        {
+            Console.WriteLine($"{channel.Name} (ID: {channel.Id})");
+            Console.WriteLine($"Classification: {channel.Classification}");
+        }
+    }
+
     [Command("default-channels")]
-    [Description("List default channel mappings (repo/branch → channel)")]
+    [Description("List default channel mappings (repo/branch → channel auto-assignment). Optionally filter by repository URL or branch.")]
     public async Task DefaultChannels(
         string? repository = null,
         string? branch = null,
@@ -310,7 +415,7 @@ public class Commands
     }
 
     [Command("subscription-health")]
-    [Description("Check subscription health for a target repository")]
+    [Description("Check subscription health for a target repository. For each active subscription, compares the last applied build against the latest available build on the channel to detect stale subscriptions. Start here for most investigations.")]
     public async Task SubscriptionHealth(
         [Argument] string targetRepository,
         bool json = false,
@@ -417,7 +522,7 @@ public class Commands
     }
 
     [Command("build-freshness")]
-    [Description("Check build freshness by resolving aka.ms URLs")]
+    [Description("Check build freshness for a channel by resolving aka.ms redirect URLs and checking the Last-Modified header of the published build artifacts.")]
     public async Task BuildFreshness(
         [Argument] string channel,
         bool json = false,
@@ -455,7 +560,7 @@ public class Commands
     }
 
     [Command("trigger-subscription")]
-    [Description("Trigger a Maestro subscription (requires authentication)")]
+    [Description("Trigger a Maestro subscription. Provide buildId directly. Use force=true to force-trigger (overwrites existing PR branch) for stale backflow PR remediation. Requires authentication.")]
     public async Task TriggerSubscription(
         [Argument] string subscriptionId,
         [Argument] int buildId,
@@ -485,7 +590,7 @@ public class Commands
     }
 
     [Command("trigger-daily-update")]
-    [Description("Trigger all daily subscriptions (requires authentication)")]
+    [Description("Trigger all daily-update subscriptions to run. This is a non-destructive action that initiates processing of all subscriptions configured for daily updates. Requires authentication.")]
     public async Task TriggerDailyUpdate()
     {
         try
@@ -501,7 +606,7 @@ public class Commands
     }
 
     [Command("codeflow-prs")]
-    [Description("List active codeflow (tracked) pull requests")]
+    [Description("List active codeflow (tracked) pull requests managed by Maestro. Optionally filter by channel name.")]
     public async Task CodeflowPrs(
         string? channelName = null,
         bool json = false,
@@ -546,7 +651,7 @@ public class Commands
     }
 
     [Command("tracked-pr")]
-    [Description("Get tracked pull request for a subscription")]
+    [Description("Get the tracked pull request for a specific Maestro subscription.")]
     public async Task TrackedPr(
         [Argument] string subscriptionId,
         bool json = false,
@@ -577,7 +682,7 @@ public class Commands
     }
 
     [Command("backflow-status")]
-    [Description("Get backflow status for a VMR build")]
+    [Description("Get backflow status for a specific VMR build. Shows per-branch backflow status including commit distance and subscription details.")]
     public async Task BackflowStatus(
         [Argument] int vmrBuildId,
         bool json = false,
@@ -600,7 +705,7 @@ public class Commands
     }
 
     [Command("subscription-history")]
-    [Description("Get update history for a subscription")]
+    [Description("Get the update history for a specific Maestro subscription. Shows timestamped actions, success/failure status, and error messages for failed updates.")]
     public async Task SubscriptionHistory(
         [Argument] string subscriptionId,
         bool json = false,
@@ -642,7 +747,7 @@ public class Commands
     }
 
     [Command("build-graph")]
-    [Description("Get the dependency graph for a build")]
+    [Description("Get the full dependency graph for a build. Returns all builds in the dependency tree with their relationships.")]
     public async Task BuildGraph(
         [Argument] int buildId,
         bool json = false,
@@ -662,7 +767,7 @@ public class Commands
     }
 
     [Command("flow-graph")]
-    [Description("Get the dependency flow graph for a channel")]
+    [Description("Get the dependency flow graph for a channel showing how builds flow through subscriptions between repositories.")]
     public async Task FlowGraph(
         [Argument] int channelId,
         int days = 7,
@@ -686,7 +791,7 @@ public class Commands
     }
 
     [Command("codeflow-statuses")]
-    [Description("Get codeflow status for a repository and branch (forward flow and backflow)")]
+    [Description("Get codeflow status for a repository and branch. Shows forward flow and backflow subscription statuses, active PRs, and build staleness for each mapping. Defaults to the VMR (dotnet/dotnet, main).")]
     public async Task CodeflowStatuses(
         [Argument] string repositoryUrl = "https://github.com/dotnet/dotnet",
         string branch = "main",
@@ -722,8 +827,179 @@ public class Commands
         }
     }
 
+    [Command("guide")]
+    [Description("Output a structured guide to all mstro capabilities, organized by workflow. Designed for agent consumption.")]
+    public void Guide()
+    {
+        const string guide = @"# mstro — Maestro/BAR CLI Guide
+
+## Quick Reference
+| Command | Description |
+|---------|-------------|
+| subscriptions | List subscriptions filtered by source/target repository and/or channel |
+| subscription | Get a subscription by GUID ID with health diagnostic |
+| latest-build | Get the latest build for a repository, optionally filtered by channel |
+| build | Get a specific build by BAR build ID |
+| builds | List builds, filtered by repository, channel, commit, or build number |
+| channels | List all Maestro channels |
+| channel | Get a specific channel by ID or name |
+| default-channels | List default channel mappings (repo/branch → channel auto-assignment) |
+| subscription-health | Check subscription health for a target repository (detects stale subscriptions) |
+| build-freshness | Check build freshness for a channel via aka.ms redirect |
+| trigger-subscription | Trigger a subscription update (requires authentication) |
+| trigger-daily-update | Trigger all daily-update subscriptions (requires authentication) |
+| codeflow-prs | List active codeflow (tracked) pull requests managed by Maestro |
+| tracked-pr | Get the tracked PR for a specific subscription |
+| backflow-status | Get backflow status for a VMR build |
+| subscription-history | Get update history for a subscription |
+| build-graph | Get the full dependency graph for a build |
+| flow-graph | Get the dependency flow graph for a channel |
+| codeflow-statuses | Get codeflow status (forward/backflow) for a repository and branch |
+| cache | Cache management (clear, status) |
+
+## Workflows
+
+### Investigating Subscription Health
+1. `mstro subscription-health --target-repository <repo-url> --json`
+   Check all subscriptions targeting a repository, detect stale subscriptions by comparing
+   last-applied builds against latest available builds on their channels.
+
+2. `mstro subscription <subscription-id> --json`
+   Drill into a specific subscription by GUID to see detailed configuration, last applied
+   build, and health status.
+
+3. `mstro subscription-history <subscription-id> --json`
+   Check subscription update history to see timestamped actions, success/failure status,
+   and error messages for failed updates. Useful for diagnosing stuck subscriptions.
+
+**Example:** Find stale subscriptions for the VMR, then investigate a specific one:
+```bash
+mstro subscription-health --target-repository https://github.com/dotnet/dotnet --json | jq '.StaleSubs[]'
+mstro subscription <guid> --json
+mstro subscription-history <guid> --json
+```
+
+### Tracing Build Flow
+1. `mstro latest-build --repository <repo-url> --channel-name <channel> --json`
+   Find the latest build for a repository on a specific channel. Use this to identify
+   the most recent build that should have flowed downstream.
+
+2. `mstro build <build-id> --json`
+   Get detailed information about a specific build including repository, commit,
+   date produced, and channels.
+
+3. `mstro build-graph <build-id> --json`
+   Get the full dependency graph showing all builds in the dependency tree with their
+   relationships. Useful for tracing where dependencies came from.
+
+**Example:** Trace runtime dependency flow:
+```bash
+BUILD_ID=$(mstro latest-build https://github.com/dotnet/runtime --channel-name "".NET 10.0.1xx SDK"" --json | jq -r '.Id')
+mstro build $BUILD_ID --json
+mstro build-graph $BUILD_ID --json
+```
+
+### Checking Codeflow Status
+1. `mstro codeflow-statuses --json`
+   Get overview of forward flow and backflow for the VMR (dotnet/dotnet, main branch).
+   Shows per-branch status including commit distance and subscription details.
+
+2. `mstro codeflow-prs --channel-name <channel> --json`
+   List all active codeflow PRs managed by Maestro, optionally filtered by channel.
+   Shows PR URLs, last update times, and subscription IDs.
+
+3. `mstro tracked-pr <subscription-id> --json`
+   Get the specific tracked PR for a subscription. Useful when investigating why
+   a subscription is stuck with an active PR.
+
+4. `mstro backflow-status <vmr-build-id> --json`
+   Check backflow status for a specific VMR build. Shows per-branch backflow status
+   including commit distance and subscription details.
+
+**Example:** Check VMR codeflow health:
+```bash
+mstro codeflow-statuses --json
+mstro codeflow-prs --json | jq '.[] | select(.Url != null)'
+mstro backflow-status <vmr-build-id> --json
+```
+
+### Channel & Build Discovery
+1. `mstro channels --json`
+   List all Maestro channels. Use this to discover available channels for filtering
+   other commands.
+
+2. `mstro channel <id-or-name> --json`
+   Get details for a specific channel by integer ID or string name (case-insensitive).
+   Shows channel classification and metadata.
+
+3. `mstro default-channels --repository <repo-url> --json`
+   List default channel mappings showing which channels are auto-assigned when builds
+   are published from specific repo/branch combinations.
+
+4. `mstro build-freshness <channel-short-name> --json`
+   Check build freshness by resolving aka.ms redirect URLs and inspecting Last-Modified
+   headers. Channel short name examples: '10.0.1xx', '9.0.1xx'.
+
+**Example:** Explore channel configuration:
+```bash
+mstro channels --json | jq '.[] | select(.Name | contains(""10.0""))'
+mstro channel "".NET 10.0.1xx SDK"" --json
+mstro default-channels --repository https://github.com/dotnet/runtime --json
+mstro build-freshness 10.0.1xx --json
+```
+
+### Triggering Actions
+1. `mstro trigger-subscription <subscription-id> --build-id <build-id>`
+   Trigger a subscription to process a specific build. Requires authentication
+   (MAESTRO_BAR_TOKEN or cached darc credentials).
+
+   Alternative: Auto-resolve latest build by source repository and channel:
+   `mstro trigger-subscription <subscription-id> --source-repository <repo-url> --channel-name <channel>`
+
+2. `mstro trigger-subscription <subscription-id> --build-id <build-id> --force`
+   Force-trigger a subscription, which overwrites the existing PR branch with fresh
+   VMR content. Use this for stale backflow PR remediation.
+
+3. `mstro trigger-daily-update`
+   Trigger all daily-update subscriptions to run. This is a non-destructive action
+   that initiates processing of all subscriptions configured for daily updates.
+
+**Example:** Trigger a stale subscription:
+```bash
+# Option 1: Specify build ID directly
+mstro trigger-subscription <guid> --build-id 302353
+
+# Option 2: Auto-resolve latest build
+mstro trigger-subscription <guid> --source-repository https://github.com/dotnet/runtime --channel-name "".NET 10.0.1xx SDK""
+
+# Option 3: Force-trigger to overwrite stale PR
+mstro trigger-subscription <guid> --build-id 302353 --force
+```
+
+### Cache Management
+- `mstro cache status` — Show cache statistics and location
+- `mstro cache clear` — Clear all cached data (shared across all mstro instances)
+
+**Notes:**
+- Cache is shared across processes at `~/.mstro/cache.db` (SQLite WAL mode)
+- Cache is shared between CLI and MCP server instances
+- All commands support `--no-cache` to bypass cache for fresh data
+- Clearing the cache does NOT clear action dedup cooldowns (2-minute window for triggers)
+
+## Notes
+- All query commands support `--json` for structured output
+- All commands support `--no-cache` to bypass the cache
+- Cache is shared across processes at `~/.mstro/cache.db` (SQLite WAL mode)
+- Install: `dotnet tool install -g lewing.maestro.mcp`
+- Authentication: Set MAESTRO_BAR_TOKEN or run `darc authenticate` once
+- For command-specific help: `mstro <command> --help`
+";
+
+        Console.WriteLine(guide);
+    }
+
     [Command("cache")]
-    [Description("Cache management commands")]
+    [Description("Cache management commands. Actions: 'clear' to clear all cached Maestro data (shared across all mstro instances), 'status' to show cache status.")]
     public async Task Cache([Argument] string action)
     {
         if (action == "clear")
