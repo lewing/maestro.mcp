@@ -26,7 +26,7 @@ builder.Services.AddSingleton(new MaestroToolOptions
 builder.Services
     .AddMcpServer(options =>
     {
-        options.ServerInfo = new() { Name = "maestro", Version = "0.13.0" };
+        options.ServerInfo = new() { Name = "maestro", Version = "0.15.0" };
     })
     .WithHttpTransport()
     .WithToolsFromAssembly(typeof(MaestroMcpTools).Assembly);

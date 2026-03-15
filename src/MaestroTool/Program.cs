@@ -92,7 +92,7 @@ public class Commands
         builder.Services
             .AddMcpServer(options =>
             {
-                options.ServerInfo = new() { Name = "maestro", Version = "0.13.0" };
+                options.ServerInfo = new() { Name = "maestro", Version = "0.15.0" };
             })
             .WithStdioServerTransport()
             .WithToolsFromAssembly(typeof(MaestroMcpTools).Assembly);
@@ -828,11 +828,23 @@ public class Commands
         bool includeDisabled = false,
         bool json = false,
         bool schema = false,
-        bool noCache = false)
+        bool noCache = false,
+        int timeoutSeconds = 120)
     {
         if (TryPrintSchema<FlowGraph>(schema)) return;
 
-        var graph = await _service.GetFlowGraphAsync(days, channelId, includeArcade, includeBuildTimes, includeDisabled, null, noCache);
+        FlowGraph graph;
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+            graph = await _service.GetFlowGraphAsync(days, channelId, includeArcade, includeBuildTimes, includeDisabled, null, noCache, cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine($"Error: Flow graph request timed out after {timeoutSeconds}s.");
+            Console.Error.WriteLine($"Try reducing scope: --days 3, --include-arcade false, --include-build-times false, or --timeout-seconds 300");
+            return;
+        }
 
         if (json)
         {

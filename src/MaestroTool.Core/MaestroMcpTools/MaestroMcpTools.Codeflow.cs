@@ -172,7 +172,31 @@ public partial class MaestroMcpTools
         [Description("Bypass cache and fetch fresh data")] bool noCache = false,
         CancellationToken cancellationToken = default)
     {
-        var graph = await _service.GetFlowGraphAsync(days, channelId, includeArcade, includeBuildTimes, includeDisabledSubscriptions, null, noCache, cancellationToken);
+        FlowGraph graph;
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cts.CancelAfter(TimeSpan.FromMinutes(2));
+            graph = await _service.GetFlowGraphAsync(days, channelId, includeArcade, includeBuildTimes, includeDisabledSubscriptions, null, noCache, cts.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return $"⏱️ Flow graph request timed out after 2 minutes.\n\n" +
+                   $"The flow graph for channel {channelId} with {days} days of data is too large to compute in time.\n\n" +
+                   $"**Suggestions to reduce scope:**\n" +
+                   $"- Reduce the time window: days=3 (currently {days})\n" +
+                   $"- Exclude Arcade dependencies: includeArcade=false\n" +
+                   $"- Skip build time metrics: includeBuildTimes=false";
+        }
+        catch (Exception ex) when (ex is TaskCanceledException or HttpRequestException or TimeoutException)
+        {
+            if (cancellationToken.IsCancellationRequested) throw;
+            return $"⚠️ Flow graph request failed: {ex.Message}\n\n" +
+                   $"**Suggestions to reduce scope:**\n" +
+                   $"- Reduce the time window: days=3 (currently {days})\n" +
+                   $"- Exclude Arcade dependencies: includeArcade=false\n" +
+                   $"- Skip build time metrics: includeBuildTimes=false";
+        }
 
         var sb = new StringBuilder();
         sb.AppendLine($"**Flow Graph for Channel #{channelId}** (last {days} days)");
