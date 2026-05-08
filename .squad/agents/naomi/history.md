@@ -139,3 +139,21 @@
 - `AllowedValuesAttribute` for channel names could improve agent UX (but channel list changes over time)
 - `CallToolResult` with structured output schemas if we need richer tool responses
 - Role/identity propagation patterns from v1.3.0 docs if we add multi-tenant scenarios
+
+### MCP SDK Upgrade Execution (2026-05-08)
+
+**Applied upgrade:**
+- ModelContextProtocol v1.0.0 → v1.3.0 (all 3 projects)
+- ModelContextProtocol.AspNetCore v1.0.0 → v1.3.0 (MaestroTool.Mcp)
+
+**Results:**
+- Build: Clean — 0 warnings, 0 errors (6.19s Release build)
+- Tests: 179/179 passed (21.25s) — test count increased from 167 to 179 since last verification
+- No new obsolete-API warnings from v1.2.0 changes (we don't use `RequestContext` 2-arg constructor or EnableLegacySse)
+- No code changes required — upgrade was transparent
+
+**Verification notes:**
+- No breaking changes affecting our stdio/HTTP transport usage
+- No impact on `[McpServerTool]` attribute-based tool definitions
+- Legacy SSE deprecation (v1.2.0) doesn't affect us — we use Streamable HTTP transport
+- Test suite expanded naturally (new cache tests added in prior work)

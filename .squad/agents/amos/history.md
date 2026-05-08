@@ -97,3 +97,7 @@
 - Schema cycle protection validation: visited-type set + max recursion depth of 5
 - Placeholder consistency: `<string>`, `0`, `false`, `<datetime>`, `<Value1|Value2|...>`, `<circular>`
 - JavaScriptEncoder validation ensures placeholders remain human-readable in output
+
+## 2026-05-08: SDK Version Baseline Shifted
+
+Naomi completed upgrade of ModelContextProtocol from v1.0.0 → v1.3.0. Build clean (0 warnings), all 179 tests pass. SDK version baseline is now v1.3.0 across all projects. See decisions.md for upgrade details and benefits.

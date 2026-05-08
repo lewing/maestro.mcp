@@ -64,3 +64,7 @@ The README is production-ready and suitable for both internal developers and ext
 
 📌 Team update (2026-05-08): MCP SDK upgrade decision — Naomi reviewed v1.0.0 → v1.3.0 changes. Recommendation: upgrade now (clean path, no code changes, 3 .csproj files). Will require dependency updates and test suite validation.
 
+
+## 2026-05-08: SDK Version Baseline Shifted
+
+Naomi completed upgrade of ModelContextProtocol from v1.0.0 → v1.3.0. Build clean (0 warnings), all 179 tests pass. SDK version baseline is now v1.3.0 across all projects. See decisions.md for upgrade details and benefits.

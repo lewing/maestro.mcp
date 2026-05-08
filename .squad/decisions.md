@@ -5184,3 +5184,62 @@ Clean upgrade path with no breaking changes to our codebase. No code modificatio
 1. **AllowedValuesAttribute for channel names** (Medium effort) — v1.1.0 introduced auto-completion. We have several tools with `channelName` parameter that could benefit.
 2. **Document HTTP transport compliance** (Small effort) — Add note to README that our HTTP server uses modern Streamable HTTP.
 
+
+---
+
+# MCP SDK Upgrade Applied (v1.0.0 → v1.3.0)
+
+**Date:** 2026-05-08  
+**Decider:** Naomi (Backend Developer)  
+**Context:** Executed upgrade from ModelContextProtocol v1.0.0 → v1.3.0 based on prior review
+
+## Decision
+
+Applied ModelContextProtocol package upgrade to v1.3.0 across all 3 projects:
+- `MaestroTool.Core`: ModelContextProtocol v1.0.0 → v1.3.0
+- `MaestroTool`: ModelContextProtocol v1.0.0 → v1.3.0
+- `MaestroTool.Mcp`: ModelContextProtocol.AspNetCore v1.0.0 → v1.3.0
+
+## Verification Results
+
+**Build:** ✅ Clean (Release mode)
+- 0 warnings
+- 0 errors
+- Build time: 6.19s
+
+**Tests:** ✅ All passing
+- 179/179 tests passed
+- Test time: 21.25s
+- No new failures introduced
+
+**Warnings:** ✅ None
+- No obsolete-API warnings from v1.2.0 changes
+- We don't use deprecated `RequestContext` 2-arg constructor
+- Legacy SSE deprecation doesn't affect us (we use Streamable HTTP)
+
+## Code Changes Required
+
+**None** — upgrade was completely transparent to our codebase.
+
+## Benefits Gained
+
+From v1.1.0:
+- Auto-completion support via `AllowedValuesAttribute` (available for future use)
+- In-flight message handler cleanup fixes (improves reliability)
+
+From v1.2.0:
+- DI scope lifetime fix for task-augmented tools (improves tool execution stability)
+- Streamable HTTP transport fixes (directly benefits our HTTP MCP server)
+
+From v1.3.0:
+- Public `ClientTransportClosedException` with structured diagnostics (better error handling)
+- Process crash fix for stderr callbacks (improves reliability)
+- Stateless HTTP fix for `listChanged` capability (correct tool discovery behavior)
+
+## Recommendation
+
+**Continue monitoring SDK releases** — this upgrade demonstrated a clean upgrade path with zero friction. Future upgrades should be straightforward given our minimal surface area (20 tools, no custom transport logic, no manual `RequestContext` construction).
+
+---
+
+**Related:** See `.squad/agents/naomi/history.md` § "MCP SDK Version Review" for initial upgrade review and compatibility analysis.
