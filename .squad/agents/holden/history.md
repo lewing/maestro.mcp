@@ -98,3 +98,6 @@
 - Naomi implemented per architecture; all 179 tests passing
 
 **Related decision:** Reflection-based CLI Schema Output (naomi-schema-implementation.md) — implementation details and file changes
+
+📌 Team update (2026-05-08): MCP SDK v1.3.0 upgrade approved — Naomi comprehensive review confirms no breaking changes, clean upgrade path. 3 .csproj files need version bump (ModelContextProtocol v1.0.0 → v1.3.0). Reliability wins include DI scope fixes, memory leak prevention, improved diagnostics.
+

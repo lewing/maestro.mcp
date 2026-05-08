@@ -5120,3 +5120,67 @@ Implement schema generation as a shared reflection-based concern in `src/Maestro
 - Naomi's implementation uses reflection over existing return types (PCS models and custom records)
 - Consolidates schema generation logic in single `SchemaGenerator.cs` file
 - Supports all 17 query commands with consistent field naming (PascalCase)
+
+## MCP SDK Upgrade Recommendation — v1.0.0 → v1.3.0
+
+**Author:** Naomi (Backend Dev)  
+**Date:** 2026-05-08  
+**Status:** Recommendation (awaiting implementation)
+
+### Context
+
+ModelContextProtocol v1.0.0 is 3 minor versions behind the latest stable v1.3.0 (published ~20 hours ago). Changes between v1.0.0 and v1.3.0 include reliability fixes, memory leak patches, and improved diagnostics.
+
+### Decision
+
+**✅ Upgrade to v1.3.0 now.**
+
+Clean upgrade path with no breaking changes to our codebase. No code modifications required, only .csproj dependency version bumps.
+
+### Key Findings
+
+**v1.1.0 (2 months ago):**
+- Auto-populated completion handlers for prompt/resource parameters
+- Fixed server-initiated ping handling (SSE/HTTP stability)
+- Fixed server capabilities initialization
+- Fixed in-flight message handler cleanup (prevents memory leaks)
+- Impact on our code: None — we don't use prompts/resources yet
+
+**v1.2.0 (1 month ago):**
+- Legacy SSE endpoints disabled by default (we use Streamable HTTP; unaffected)
+- `RequestContext` 2-arg constructor marked obsolete (we don't construct RequestContext manually)
+- DI scope lifetime fix for task-augmented tools
+- OutputSchema support independent of return type
+- Fixed `WithMeta` + `WithProgress` causing tool invocation failures
+- Impact on our code: None for breaking changes; DI scope fix could benefit future long-running tools
+
+**v1.3.0 (20 hours ago):**
+- Made `ClientTransportClosedException` public with structured details (diagnostics improvement)
+- Fixed process crash when testing `StandardErrorLines` callbacks
+- Fixed stateless HTTP transport advertising `listChanged` incorrectly
+- Impact on our code: Exception handling is a UX win if we add client-side diagnostics
+
+### Breaking Changes Assessment
+
+**None for our codebase.**
+- We use Streamable HTTP (modern), not legacy SSE
+- We don't construct `RequestContext` instances manually
+- We don't have client-side transport error handling yet
+
+### Files to Update
+
+- `src/MaestroTool.Core/MaestroTool.Core.csproj` — Update `ModelContextProtocol` v1.0.0 → v1.3.0
+- `src/MaestroTool/MaestroTool.csproj` — Update `ModelContextProtocol` v1.0.0 → v1.3.0
+- `src/MaestroTool.Mcp/MaestroTool.Mcp.csproj` — Update `ModelContextProtocol.AspNetCore` v1.0.0 → v1.3.0
+
+### Verification Plan
+
+- Run all 167 tests (`dotnet test`)
+- Test stdio mode: `mstro mcp`
+- Test HTTP mode: `dotnet run --project src/MaestroTool.Mcp`
+
+### Future Considerations
+
+1. **AllowedValuesAttribute for channel names** (Medium effort) — v1.1.0 introduced auto-completion. We have several tools with `channelName` parameter that could benefit.
+2. **Document HTTP transport compliance** (Small effort) — Add note to README that our HTTP server uses modern Streamable HTTP.
+

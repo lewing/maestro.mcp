@@ -201,3 +201,29 @@
 - Decision files merged: holden-schema-architecture.md, naomi-schema-implementation.md
 
 **Related decision:** CLI Schema as Intentional Contracts (holden-schema-architecture.md) — schema generation from shared CLI contract types in Core, not raw BAR client models
+
+### MCP SDK Version Review (2026-05-08)
+
+**Current state:**
+- We're on ModelContextProtocol v1.0.0 (both base package and AspNetCore)
+- Latest stable is v1.3.0 (released ~20 hours ago)
+- We're 3 minor versions behind
+
+**Key insights from upgrade review:**
+- Clean upgrade path — no breaking changes affect our code
+- v1.1.0: Auto-completion via `AllowedValuesAttribute`, in-flight message handler cleanup fixes
+- v1.2.0: Legacy SSE disabled by default (doesn't affect us — we use Streamable HTTP), DI scope lifetime fix for task-augmented tools, `RequestContext` 2-arg constructor obsoleted
+- v1.3.0: Public `ClientTransportClosedException` with structured diagnostics, process crash fix for stderr callbacks, stateless HTTP fix for `listChanged` capability
+
+**Our usage patterns:**
+- Stdio transport: `.WithStdioServerTransport()` in Program.cs (CLI `mcp` command)
+- HTTP transport: `.WithHttpTransport()` in MaestroTool.Mcp/Program.cs (ASP.NET Core host)
+- Tool surface: 20 tools via `[McpServerTool]` attributes, organized in 5 partial class files
+- No use of: `CallToolResult`, `WithMeta`, `WithProgress`, `AllowedValuesAttribute`, prompts, resources, custom output schemas, manual `RequestContext` construction
+
+**Decision:** Recommend upgrade to v1.3.0 with high confidence — gains reliability fixes, no code changes needed, all 167 tests should pass without modification.
+
+**Future opportunities:**
+- `AllowedValuesAttribute` for channel names could improve agent UX (but channel list changes over time)
+- `CallToolResult` with structured output schemas if we need richer tool responses
+- Role/identity propagation patterns from v1.3.0 docs if we add multi-tenant scenarios

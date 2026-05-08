@@ -61,3 +61,6 @@ The README is production-ready and suitable for both internal developers and ext
 - **All 135 tests passed** before release
 
 📌 Team update (2026-03-13): Restructure review approved — The core MCP tools restructure has been approved by Holden. All tools now organized into domain partials (Channels, Subscriptions, Builds, Codeflow, Utilities) with clean API preservation. — decided by Holden
+
+📌 Team update (2026-05-08): MCP SDK upgrade decision — Naomi reviewed v1.0.0 → v1.3.0 changes. Recommendation: upgrade now (clean path, no code changes, 3 .csproj files). Will require dependency updates and test suite validation.
+
