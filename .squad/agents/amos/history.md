@@ -114,3 +114,65 @@ Naomi completed upgrade of ModelContextProtocol from v1.0.0 → v1.3.0. Build cl
 - **Future:** If Central Package Management (Directory.Packages.props) is approved, these pins migrate there.
 
 **Rationale:** Test.Sdk 18.x ships Microsoft.Testing.Platform but maintains VSTest compatibility. Wildcard pins are a risk and should be eliminated.
+
+## 2026-05-21: Shipped — PR #18 (Test.Sdk bump + wildcard pin elimination)
+
+**PR:** https://github.com/lewing/maestro.mcp/pull/18  
+**Branch:** `squad/test-infra-pin-and-sdk-bump`  
+**Test result:** 179/179 passed ✅
+
+**Versions pinned in `MaestroTool.Tests.csproj`:**
+- `Microsoft.NET.Test.Sdk` 17.* → **18.5.1** (bumped)
+- `xunit` 2.* → **2.9.3** (was already resolving to this)
+- `xunit.runner.visualstudio` 3.* → **3.1.5** (was already resolving to this)
+- `NSubstitute` 5.* → **5.3.0** (was already resolving to this)
+
+Holden's pin-exact-versions condition honored. No pre-release packages introduced. `dotnet test --logger trx` CI integration confirmed.
+
+---
+
+## 2026-05-21: Test Infrastructure — Test.Sdk Bump + Wildcard Pin Elimination
+
+**Task:** Upgrade Microsoft.NET.Test.Sdk 17.x → 18.5.1 and pin all wildcard version specifications in test projects to explicit semantic versions.
+
+**Deliverable:** PR #18 (`squad/test-infra-pin-and-sdk-bump`)
+
+**Key changes:**
+- Microsoft.NET.Test.Sdk 17.* → 18.5.1 (explicit pin; backward-compatible with VSTest)
+- xunit 2.* → 2.9.3 (explicit pin; removes risk of silent MAJOR bump)
+- xunit.runner.visualstudio 3.* → 3.1.5 (explicit pin)
+- NSubstitute 5.* → 5.3.0 (explicit pin; remains stable, pre-release 6.0.0-rc.1 held)
+
+**Rationale (Holden approval, Decision 2):**
+- Test.Sdk 18.x ships Microsoft.Testing.Platform but maintains VSTest backward compatibility
+- Wildcard pins are latent risk (easy to accidentally cross MAJOR boundary)
+- Central Package Management (Directory.Packages.props) proposal pending — these pins will migrate there when adopted
+
+**Verification:** All 179 tests pass; VSTest output produces valid TRX format; no new analyzer warnings from Test.Sdk 18.x bump.
+
+**Test framework compatibility:** xunit 2.9.3 + NSubstitute 5.3.0 + VSTest 18.5.1 combination validated; no breaking changes in mainstream test patterns.
+
+## 2026-05-21: PR #18 Merge Conflicts Resolved
+
+**Task:** Resolve merge conflicts on PR #18 after PRs #15, #16, and #17 merged ahead.
+
+**Conflicting files:**
+- `src/MaestroTool.Core/MaestroTool.Core.csproj` (dependency version conflicts)
+- `src/MaestroTool/MaestroTool.csproj` (dependency version conflicts)
+
+**Conflict details:**
+My branch (PR #18, Test.Sdk bump) had older dependency versions from the base. PRs #15 (Alex - Extensions patches), #16 (Alex - RollForward), and #17 (Naomi - Sqlite + Extensions) merged ahead with newer versions.
+
+**Resolution strategy:**
+Per Holden's policy: pin exact versions, take HIGHER stable versions. Resolved conflicts by accepting incoming versions from PRs #15 and #17:
+- Microsoft.Data.Sqlite: 9.0.0 → **10.0.8** (from PR #17, Naomi's Sqlite bump)
+- Microsoft.DotNet.ProductConstructionService.Client: 1.1.0-beta.26161.4 → **1.1.0-beta.26271.2** (from PR #15, Alex's PCS refresh)
+- Microsoft.Extensions.DependencyInjection: 10.0.3 → **10.0.8** (from PR #15, Alex's patch bump)
+- Microsoft.Extensions.Hosting: 10.0.0 → **10.0.8** (from PR #15, Alex's patch bump)
+
+**Verification:**
+- `dotnet restore` — clean
+- `dotnet test` — **179/179 tests passed** ✅
+- `gh pr view 18` — mergeStateStatus: **CLEAN**, mergeable: **MERGEABLE** ✅
+
+**Outcome:** PR #18 is now conflict-free and ready to merge. All test infrastructure changes (Test.Sdk 18.5.1 + pinned xunit/NSubstitute versions) validated with latest dependency versions from team PRs.
