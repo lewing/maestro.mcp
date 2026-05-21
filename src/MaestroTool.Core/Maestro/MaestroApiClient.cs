@@ -36,7 +36,7 @@ public class MaestroApiClient : IMaestroApiClient
             try
             {
                 Console.Error.WriteLine("[maestro-mcp] Auth: using MAESTRO_BAR_TOKEN");
-                return (PcsApiFactory.GetAuthenticated(DefaultBaseUri, barToken, managedIdentityId: null, disableInteractiveAuth: true), AuthLevel.Pat);
+                return (PcsApiFactory.GetAuthenticated(DefaultBaseUri, barToken, managedIdentityId: null, disableInteractiveAuth: true, loggerFactory: null), AuthLevel.Pat);
             }
             catch (Exception ex)
             {
@@ -61,7 +61,8 @@ public class MaestroApiClient : IMaestroApiClient
                     DefaultBaseUri,
                     accessToken: null!,
                     managedIdentityId: null,
-                    disableInteractiveAuth: true);
+                    disableInteractiveAuth: true,
+                    loggerFactory: null);
 
                 Console.Error.WriteLine("[maestro-mcp] Auth: using Entra ID (cached darc credentials)");
                 return (api, AuthLevel.EntraId);
@@ -100,10 +101,13 @@ public class MaestroApiClient : IMaestroApiClient
         CancellationToken cancellationToken = default)
     {
         return _api.Subscriptions.ListSubscriptionsAsync(
-            sourceRepository: sourceRepository,
-            targetRepository: targetRepository,
-            channelId: channelId,
             enabled: enabled,
+            channelId: channelId,
+            sourceDirectory: null,
+            sourceEnabled: null,
+            sourceRepository: sourceRepository,
+            targetDirectory: null,
+            targetRepository: targetRepository,
             cancellationToken: cancellationToken);
     }
 
@@ -161,7 +165,7 @@ public class MaestroApiClient : IMaestroApiClient
 
     public Task<List<Channel>> ListChannelsAsync(CancellationToken cancellationToken = default)
     {
-        return _api.Channels.ListChannelsAsync(cancellationToken: cancellationToken);
+        return _api.Channels.ListChannelsAsync(classification: null, cancellationToken: cancellationToken);
     }
 
     public Task<List<DefaultChannel>> ListDefaultChannelsAsync(
@@ -171,9 +175,10 @@ public class MaestroApiClient : IMaestroApiClient
         CancellationToken cancellationToken = default)
     {
         return _api.DefaultChannels.ListAsync(
-            repository: repository,
             branch: branch,
+            enabled: null,
             channelId: channelId,
+            repository: repository,
             cancellationToken: cancellationToken);
     }
 
