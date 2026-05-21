@@ -127,3 +127,72 @@ The C# ModelContextProtocol SDK v1.3.0 **does support dynamic parameter completi
 - **Schema (2025-11-25):** https://github.com/modelcontextprotocol/specification/blob/main/schema/2025-11-25/schema.ts
 
 **Next Action:** Holden to decide whether to implement Option 2 (enhanced validation errors) for better agent UX.
+
+---
+
+## Dependency Bump Review — 2026-05-21
+
+**Author:** Holden (Lead/Architect)
+**Date:** 2026-05-21
+**Status:** Decided
+**Triggered by:** Alex dependency audit (2026-05-21)
+
+---
+
+### Decision 1: Microsoft.Data.Sqlite 9.0.0 → 10.0.8
+
+**Verdict:** Approve
+
+**Reasoning:** Our CacheService.cs uses only core ADO.NET-pattern APIs: `SqliteConnection`, `SqliteCommand`, `SqliteParameter` (via `AddWithValue`), `SqliteException`, `SqliteConnection.ClearAllPools()`, and `ExecuteReaderAsync`/`ExecuteScalarAsync`/`ExecuteNonQueryAsync`. These APIs have been stable across every major Sqlite version since v2. Running Sqlite 9 on a net10.0 TFM is a version skew that works today but creates unnecessary divergence — 10.x is the natural companion to net10.0 and aligns with the broader .NET 10 ecosystem.
+
+**Risk level:** Low — no API surface we use has changed between 9 and 10; this is a straightforward major bump.
+
+**Assignment:** Naomi — she owns the cache layer and restructured the Core project. Single PR is fine; pair it with the safe patch bumps (Recommendation 3) to reduce PR churn.
+
+**Verification required:**
+- `dotnet build` clean (0 warnings)
+- Full test suite pass (179+ tests)
+- Manual smoke test: run `mstro` with a cold cache, confirm cache.db creates and operates normally
+
+---
+
+### Decision 2: Microsoft.NET.Test.Sdk 17.x → 18.5.1
+
+**Verdict:** Approve with conditions
+
+**Reasoning:** Test.Sdk 18.x ships the Microsoft.Testing.Platform but maintains full backward compatibility with VSTest-based runners. Our test project uses xunit 2.x with xunit.runner.visualstudio 3.x and NSubstitute 5.x — all of which are compatible with Test.Sdk 18. The wildcard version pin (`17.*`) is already risky and should be locked to an explicit version as part of this bump. No xunit or NSubstitute upgrades are required — those stay on their current stable versions.
+
+**Conditions:**
+1. Pin version explicitly: `<PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.5.1" />` — no wildcards.
+2. While at it, pin xunit and NSubstitute to explicit versions too (e.g., `2.9.3`, `5.3.0`) — the wildcard pins are a latent risk Alex flagged.
+3. If Alex's Central Package Management (Directory.Packages.props) proposal is approved later, these pins migrate there.
+
+**Risk level:** Low — backward-compatible major bump; our test patterns (xunit + NSubstitute) are mainstream.
+
+**Assignment:** Amos — he owns test infrastructure. Separate PR from the Sqlite/patch bump PR so test infra changes are isolated and easy to revert if CI behaves differently.
+
+**Verification required:**
+- `dotnet test` — all 179+ tests pass
+- Verify `dotnet test --logger trx` still produces valid output (CI integration)
+- Confirm no new analyzer warnings from the SDK bump
+
+---
+
+### Decision 3: 🟢 Safe bumps — Alex ships directly
+
+**Verdict:** No lead approval needed for safe patch bumps.
+
+The following do not need my review:
+- Microsoft.Extensions.DependencyInjection 10.0.3 → 10.0.8 (patch)
+- Microsoft.Extensions.Hosting 10.0.0 → 10.0.8 (patch)
+- PCS Client beta refresh (1.1.0-beta.26161.4 → 1.1.0-beta.26271.2)
+- global.json pin to 10.0.300
+- GitHub Actions standardization (checkout→v6, github-script→v9)
+
+**Standing policy:** Patch bumps within the same major.minor, pre-release refreshes on packages we already track as pre-release, and GitHub Actions major bumps that are documented as drop-in compatible — Alex can ship these directly with a passing test suite. No lead gate required.
+
+---
+
+### Decision 4: 🔴 Pre-release holds — confirmed
+
+NSubstitute 6.0.0-rc.1 and xunit.runner.visualstudio 4.0.0-pre.4 stay on hold until stable releases. No action needed.

@@ -64,6 +64,8 @@
 
 ## Key Patterns & Learnings (Summarized)
 
+**MCP Dynamic Completions Research (2026-05-08):** The C# ModelContextProtocol SDK v1.3.0 **DOES** support dynamic parameter completion via `WithCompleteHandler()`, but **ONLY for Prompts and Resources** — NOT for Tools. MCP spec defines `completion/complete` JSON-RPC method accepting `PromptReference` or `ResourceTemplateReference` only. Static completion via `[AllowedValues]` attribute also supported. Tool parameters cannot have dynamic completion in current spec (no `ToolReference` type exists). Workaround: expose a discovery tool (e.g., `maestro_list_channels`) that agents call before main tool, or return structured error with valid options when validation fails.
+
 **CLI-as-Skill (2026-03-13):** Lightweight skill file (`copilot-skill.md`) in NuGet, Squad skill file documenting CLI vs MCP preferences, `guide` command with workflow-organized markdown. Portable pattern for other dual-mode tools (helix.mcp, etc.).
 
 **Reflection-Based Schema Generation (2026-03-13):** `SchemaGenerator.cs` reflects return types into JSON skeletons with placeholders (`<string>`, `0`, `<datetime>`, etc.). `--schema` flag on all query commands, cycles guarded at depth 5, uses `JavaScriptEncoder.UnsafeRelaxedJsonEscaping`.
@@ -157,3 +159,15 @@
 - No impact on `[McpServerTool]` attribute-based tool definitions
 - Legacy SSE deprecation (v1.2.0) doesn't affect us — we use Streamable HTTP transport
 - Test suite expanded naturally (new cache tests added in prior work)
+
+## 2026-05-21: Assigned — Microsoft.Data.Sqlite 9.0.0 → 10.0.8
+
+**Holden review approved** (2026-05-21). Naomi owns the Sqlite bump; pair it with safe patch upgrades to reduce PR churn.
+
+**Details:**
+- **Package:** Microsoft.Data.Sqlite 9.0.0 → 10.0.8 (MAJOR bump)
+- **Risk level:** Low — our CacheService.cs uses only stable ADO.NET APIs (SqliteConnection, SqliteCommand, etc.)
+- **Verification:** Clean build (0 warnings), 179+ tests pass, manual cache smoke test (cache.db creation/operation)
+- **Bundled with:** Extensions.DependencyInjection 10.0.3→10.0.8, Extensions.Hosting 10.0.0→10.0.8, PCS Client beta refresh
+
+**Rationale:** Sqlite 10.x aligns with net10.0 TFM and avoids unnecessary version skew with the broader .NET ecosystem.

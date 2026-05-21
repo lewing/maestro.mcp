@@ -68,3 +68,55 @@ The README is production-ready and suitable for both internal developers and ext
 ## 2026-05-08: SDK Version Baseline Shifted
 
 Naomi completed upgrade of ModelContextProtocol from v1.0.0 → v1.3.0. Build clean (0 warnings), all 179 tests pass. SDK version baseline is now v1.3.0 across all projects. See decisions.md for upgrade details and benefits.
+
+## 2026-05-21: Full Dependency Audit
+
+Requested by Larry Ewing. Audited NuGet packages, .NET SDK, GitHub Actions, and NuGet feeds.
+
+### Key Findings
+
+**NuGet Packages — Safe Patch Bumps Available:**
+- `Microsoft.Extensions.DependencyInjection` 10.0.3 → 10.0.8 (patch)
+- `Microsoft.Extensions.Hosting` 10.0.0 → 10.0.8 (patch)
+- `Microsoft.DotNet.ProductConstructionService.Client` 1.1.0-beta.26161.4 → 1.1.0-beta.26271.2 (pre-release patch, internal feed)
+
+**NuGet Packages — Attention Required:**
+- `Microsoft.Data.Sqlite` 9.0.0 → 10.0.8 (MAJOR 9→10; aligns with net10.0 target; Holden review recommended)
+- `Microsoft.NET.Test.Sdk` 17.x → 18.5.1 (MAJOR; test infra change; validate test pipeline before bumping)
+- `ModelContextProtocol` 1.3.0 — no update available (already current)
+- `NSubstitute` 5.3.0 → 6.0.0-rc.1 (MAJOR pre-release, wait for stable)
+- `xunit.runner.visualstudio` 3.1.5 → 4.0.0-pre.4 (MAJOR pre-release, wait for stable)
+
+**SDK — No global.json present:**
+- Installed SDK: 10.0.202. Latest on .NET 10 channel: 10.0.300.
+- No global.json to pin the version — risk of environment drift between developer machines and CI.
+- Recommend adding global.json pinned to 10.0.300.
+
+**GitHub Actions:**
+- `actions/checkout@v4` used in multiple workflows → latest is v6 (2 major versions behind)
+- `actions/github-script@v7` → latest v9 (2 major versions behind); v8 reference also present
+- `actions/setup-dotnet@v5` → at v5.2.0 (patch, fine)
+- `NuGet/login@v1` → at v1.2.0 (patch within v1, fine)
+- Mixed versions of same actions within the workflow set is a maintenance smell.
+
+**NuGet Feeds:**
+- `nuget.org` (public)
+- `dotnet-eng` at Azure DevOps dnceng/public (internal, required for PCS client)
+- No Central Package Management in use (no Directory.Packages.props)
+
+### Conventions Learned
+- No global.json exists — version pinning is only via TargetFramework. For reproducibility, a global.json should be added.
+- No Central Package Management — each .csproj manages its own package versions with wildcard or explicit pins.
+- Wildcard version pins (e.g., `17.*`, `5.*`, `3.*`) are used in test projects; this can silently pick up MAJOR bumps if the wildcard spans majors — currently safe but worth monitoring.
+- The `dotnet-eng` internal feed is required at build time for the PCS client; any CI environment must have access to this Azure Artifacts feed.
+
+## 2026-05-21: Dependency Bump Review — Safe-Bump Standing Policy
+
+**Holden review of Alex's dependency audit completed** (2026-05-21). Decisions recorded in `.squad/decisions.md`.
+
+**Key outcome:** Confirmed standing policy that Alex can ship safe patch/Actions/global.json bumps without approval:
+- Patch bumps within same major.minor (e.g., 10.0.3 → 10.0.8)
+- Pre-release refreshes on already-tracked pre-release packages (e.g., PCS Client beta → beta)
+- GitHub Actions major bumps documented as drop-in compatible (e.g., checkout v4 → v6)
+
+**No approval gate required** for safe bumps as long as full test suite (179+ tests) passes. Naomi and Amos assigned to handle major/minor dependency PRs.

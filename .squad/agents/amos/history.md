@@ -101,3 +101,16 @@
 ## 2026-05-08: SDK Version Baseline Shifted
 
 Naomi completed upgrade of ModelContextProtocol from v1.0.0 → v1.3.0. Build clean (0 warnings), all 179 tests pass. SDK version baseline is now v1.3.0 across all projects. See decisions.md for upgrade details and benefits.
+
+## 2026-05-21: Assigned — Microsoft.NET.Test.Sdk 17.x → 18.5.1
+
+**Holden review approved with conditions** (2026-05-21). Amos owns the Test.Sdk bump; separate PR from Naomi's Sqlite bump for isolated test infra validation.
+
+**Details:**
+- **Package:** Microsoft.NET.Test.Sdk 17.x → 18.5.1 (MAJOR bump)
+- **Risk level:** Low — backward-compatible; our test patterns (xunit 2.x + NSubstitute 5.x + xunit.runner.visualstudio 3.x) are compatible
+- **Conditions:** Pin Test.Sdk explicitly to 18.5.1 (no wildcards). Also pin xunit and NSubstitute to explicit versions (e.g., 2.9.3, 5.3.0) to avoid latent risks from wildcard pins.
+- **Verification:** All 179+ tests pass, `dotnet test --logger trx` CI integration confirmed, no new analyzer warnings
+- **Future:** If Central Package Management (Directory.Packages.props) is approved, these pins migrate there.
+
+**Rationale:** Test.Sdk 18.x ships Microsoft.Testing.Platform but maintains VSTest compatibility. Wildcard pins are a risk and should be eliminated.
