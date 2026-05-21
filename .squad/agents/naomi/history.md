@@ -17,6 +17,32 @@
 - `src/MaestroTool/Program.cs` — CLI commands
 - `src/MaestroTool.Tests/` — Unit tests (xUnit, NSubstitute)
 
+## 2026-05-21: PR #20 — Parallelize subscription_health GitHub fan-out
+
+**PR:** https://github.com/lewing/maestro.mcp/pull/20  
+**Branch:** `squad/parallelize-subscription-health`  
+**Date:** 2026-05-21
+
+**Shipped:**
+- Converted serial `foreach` in `GetSubscriptionHealthAsync` to `Task.WhenAll` with `SemaphoreSlim(5)` for concurrent execution
+- Extracted per-subscription logic into `CheckSubscriptionHealthAsync` helper method
+- Added `SemaphoreSlim(5, 5)` field to `MaestroService` to limit concurrent GitHub API calls
+
+**Performance impact:**
+- Before: N subscriptions × ~1s each = ~N seconds wall time (serial)
+- After: max(subscriptions) × ~1s with 5 concurrent = ~(N/5) seconds (parallel)
+- Typical fan-out (5 subscriptions): 5s → ~1s
+
+**Behavior preservation:**
+- Error handling: Exceptions captured per-subscription, included in results
+- Output order: Results maintain input subscription order (Task.WhenAll preserves order)
+- Skip behavior: Subscriptions with no channel assigned filtered before parallel execution
+
+**Test result:** 179/179 passed ✅  
+**Build:** 0 errors, 0 warnings ✅
+
+**Context:** Holden's verdict in `.squad/log/2026-05-21T18-04-13-holden-pagination-verdict.md` identified the serial fan-out as the real performance bottleneck, recommending parallelization over progress notifications.
+
 **Recent deliverables (2026-03-13, Session 2):**
 - Created `src/MaestroTool/copilot-skill.md` — Lightweight skill file shipped in NuGet package (~6KB)
 - Created `.ai-team/skills/maestro-cli/SKILL.md` — Squad skill documentation for CLI-as-skill pattern
