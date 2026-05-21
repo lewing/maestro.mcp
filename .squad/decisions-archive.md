@@ -1,0 +1,5273 @@
+# Decisions Archive
+
+**Note:** decisions.md has exceeded 20KB (currently 236K). This archive file is created to prepare for moving entries older than 30 days.
+
+**As of:** 2026-05-08  
+**Archiving Threshold:** Entries before 2026-04-08  
+**Entries to Archive:** Approximately 36 entries from 2025 and early 2026
+
+## Pending Archival
+
+The following decision sections are candidates for archival (entries from 2025 and Feb-Mar 2026):
+- Auth cascade for MaestroApiClient (2025-07-14)
+- Bug Fix: [McpServerToolType] attribute (2025-07-14)
+- Documentation: README.md (2025-07-15)
+- Decision: GetBuildFreshnessAsync testing (2025-07-14)
+- STRIDE Threat Model assessments (2025-07-15)
+- Backend Threat Model Deep Dive (2025-07-15)
+- Security Test Gap Analysis (2025-07-15)
+- Action tools implementation (2026-02-18)
+- SQLite Cache decisions (2026-02-18 to 2026-02-19)
+- Various security fixes and test coverage decisions (2026-02-19 to 2026-02-22)
+- P1 channel resolution decision (2026-03-11)
+- Code restructuring decision (2026-03-13)
+
+**Action:** Proper archival would extract these sections from decisions.md and consolidate here while maintaining links and references. Current decisions.md should retain only entries from 2026-04-08 onward for readability.
+
+**Note to team:** This archival task is deferred pending architectural decision on how to maintain historical decision context without impacting primary decisions document readability.
+
+---
+
+# Archived Decisions (Older than 2026-05-14)
+
+## Auth cascade for MaestroApiClient
+
+**Author:** Naomi (Backend Dev)  
+**Date:** 2025-07-14  
+**Status:** Implemented
+
+### Context
+
+Users who have already run `darc authenticate` have a cached MSAL token and auth record on disk (`~/.darc/.auth-record-<appId>`). The MCP server should reuse these credentials silently without requiring users to set environment variables.
+
+### Decision
+
+Implement a 3-tier auth cascade in `MaestroApiClient.CreateApi()`:
+
+1. **MAESTRO_BAR_TOKEN** env var → `PcsApiFactory.GetAuthenticated(token, null, disableInteractiveAuth: true)`
+2. **Entra ID cached credentials** → Only if `~/.darc/.auth-record-54c17f3d-7325-4eca-9db7-f090bfc765a8` exists, call `PcsApiFactory.GetAuthenticated(null, null, disableInteractiveAuth: false)`. This uses `InteractiveBrowserCredential` with the MSAL token cache named "maestro" and the auth record, providing silent token acquisition.
+3. **Anonymous fallback** → `PcsApiFactory.GetAnonymous()` for read-only access.
+
+### Key design choices
+
+- **Guard on auth record file existence**: Before attempting Entra auth, we check if `~/.darc/.auth-record-<appId>` exists. Without this guard, `AppCredential.CreateUserCredential` would call `credential.Authenticate()` which opens a browser — unacceptable for an MCP server running as a subprocess.
+- **`disableInteractiveAuth: false`**: Required so `AppCredentialResolver` takes the `InteractiveBrowserCredential` path (step 4 in the resolver) rather than `AzureCliCredential` (step 3). The browser popup is prevented by the auth record + MSAL cache being present.
+- **No direct Azure.Identity dependency needed**: The PCS client NuGet transitively provides Azure.Identity. Our code only uses `PcsApiFactory` and `Path`/`File` for the auth record check.
+- **Stderr logging**: Auth method is logged to `Console.Error` so it doesn't interfere with MCP stdio transport.
+- **Try/catch on Entra path**: If credential creation fails for any reason (corrupt auth record, etc.), we fall back to anonymous gracefully.
+
+### Files changed
+
+- `src/MaestroTool.Core/MaestroApiClient.cs` — Auth cascade implementation
+
+## Bug Fix: [McpServerToolType] attribute required on MaestroMcpTools
+
+**Author:** Naomi (Backend Dev)
+**Date:** 2025-07-14
+**Status:** Fixed
+
+### Problem
+
+The MCP server started successfully but reported 0 tools. `tools/call` requests returned error `-32601: Method 'tools/call' is not available`. The server was effectively useless.
+
+### Root Cause
+
+`MaestroMcpTools` was missing the `[McpServerToolType]` class-level attribute. The `WithToolsFromAssembly()` registration in `Program.cs` uses this attribute to discover classes containing instance-method tools (methods decorated with `[McpServerTool]`). Without it, the assembly scan finds nothing.
+
+### Fix
+
+Added `[McpServerToolType]` to the `MaestroMcpTools` class declaration, matching the pattern in the Helix reference implementation (`HelixMcpTools.cs`).
+
+### Impact
+
+All 8 MCP tools now register and work end-to-end against real maestro.dot.net data.
+
+### Files Changed
+
+- `src/MaestroTool.Core/MaestroMcpTools.cs` — Added `[McpServerToolType]` attribute
+
+## Documentation: README.md created for maestro.mcp
+
+**Author:** Alex (DevOps / Infrastructure)  
+**Date:** 2025-07-15  
+**Status:** Complete
+
+### Context
+
+The maestro.mcp project required comprehensive documentation for both internal developers and external MCP client integrators. The README needed to cover authentication, tool references, architecture, and operational guidance.
+
+### Decision
+
+Created a production-ready README.md following this structure:
+
+1. **Problem statement** — Clear opening describing what the server does and its role in .NET build infrastructure.
+2. **Prerequisites** — .NET 10 SDK, authentication options (darc or PAT).
+3. **Getting started** — Build, test, and run instructions.
+4. **Configuration** — Copy-pasteable mcp-config.json snippet for Copilot clients.
+5. **Authentication** — Full 3-tier cascade explanation with example of each tier.
+6. **Tools reference** — Table of 8 tools with parameters for quick lookup.
+7. **Architecture** — 4-layer model (data, cache, service, MCP) with class/responsibility mapping.
+8. **Cache strategy** — TTL table with justifications (trade-offs between freshness and load).
+9. **Testing** — How to run tests and scope (35 unit tests, xUnit, NSubstitute).
+10. **Contributing** — Guidance for future maintainers.
+
+### Key Design Choices
+
+- **Authentication emphasis**: The 3-tier cascade is explained in plain English before any file references. This is critical because auth is non-obvious (cached darc tokens, MSAL integration).
+- **Tools as a table**: Scannable reference format, not prose. MCP client integrators need to find parameter names quickly.
+- **Architecture as story**: Each layer (data → cache → service → MCP) is explained by the problem it solves, not by listing every method.
+- **Cache TTLs justified**: We explain why each TTL is set, not just the numbers. This helps reviewers understand trade-offs.
+- **Copy-pasteable config**: The mcp-config.json example uses a placeholder path with clear instructions to replace it.
+
+### Files Created
+
+- `README.md` — 5980 bytes, production-ready documentation.
+
+### Rationale
+
+Clear documentation is force-multiplier for MCP servers. External integrators (Copilot CLI users, other teams) should understand configuration, auth, and available tools without reading code. Internal developers should see the architecture and cache strategy without digging through source files.
+
+## Decision: GetBuildFreshnessAsync is untestable without refactoring
+
+**Author:** Amos (Tester)  
+**Date:** 2025-07-14  
+**Status:** Observation / Recommendation
+
+### Context
+
+`MaestroService.GetBuildFreshnessAsync` creates `HttpClient` and `HttpClientHandler` inline with `new`. This makes it impossible to mock the HTTP layer for unit testing without introducing `IHttpClientFactory` or similar injection.
+
+### Recommendation
+
+If we want test coverage on build freshness logic:
+1. Inject `IHttpClientFactory` into `MaestroService`, or
+2. Extract the HTTP-fetching part into a separate abstraction (e.g., `IAkaMsResolver`), or
+3. Accept it as an integration-only test target.
+
+Not blocking — the method is cached and simple. But it's the one gap in `MaestroService` coverage.
+
+## STRIDE Threat Model: Full Assessment and Recommended Mitigations
+
+**Author:** Holden (Lead / Architect)  
+**Date:** 2025-07-15  
+**Status:** Proposal — mitigations pending team discussion
+
+### Key Findings (Critical/High only)
+
+1. **[CRITICAL] SSRF via aka.ms redirect in GetBuildFreshnessAsync** — The `channel` parameter is used in URL path construction without validation, enabling path traversal (`../../` sequences). Redirects from aka.ms are not validated before making HEAD requests, creating SSRF vector to internal metadata services or cloud credential endpoints.
+
+2. **[HIGH] HTTP transport has no auth** — `MaestroTool.Mcp/Program.cs` exposes all tools on `localhost:5000` with zero authentication. Any local process gets full access including trigger actions.
+
+3. **[HIGH] Action dedup bypass via cache clear** — Calling `maestro_clear_cache` before `maestro_trigger_subscription` defeats the 2-minute cooldown. The dedup and the data cache share the same `CacheService` instance.
+
+4. **[HIGH] No auth-level gating on write tools** — `TriggerSubscription` and `TriggerDailyUpdate` are registered regardless of auth level. Anonymous sessions can call them; they'll fail at the PCS API with HTTP 401.
+
+5. **[HIGH] Entra auth record file permissions not validated** — `~/.darc/` may have permissive permissions on shared systems. Auth record contains refresh token; if exfiltrated, attacker gets indefinite access. MSAL cache is shared with darc CLI.
+
+6. **[MEDIUM] Unbounded cache growth** — `ConcurrentDictionary` has no max-entry limit. Varied query parameters from multiple clients could grow memory indefinitely.
+
+7. **[MEDIUM] noCache parameter enables cache bypass DoS** — Every read tool exposes `noCache = false`. When true, bypasses cache and hits PCS directly. Rate-limiting absent.
+
+8. **[MEDIUM] TriggerDailyUpdate has ecosystem-wide blast radius** — Triggers ALL daily subscriptions across .NET ecosystem, potentially creating hundreds of PRs. Not gated behind destructive flag.
+
+### Recommended Mitigations
+
+| Finding | Mitigation | Priority | Effort |
+|---------|-----------|----------|--------|
+| SSRF via aka.ms | Validate `channel` parameter (alphanumeric, dots, hyphens only); validate redirect URLs to known Microsoft domains | P0 | Medium |
+| HTTP no auth | Add auth middleware with API key or bearer token; document HTTP mode is for local dev only | P1 | Medium |
+| Dedup bypass | Separate action dedup storage from data cache; `maestro_clear_cache` clears data only | P0 | Small |
+| No tool-level auth gating | Check auth level before allowing trigger tools; return "Authentication required" message | P0 | Small |
+| Entra auth record permissions | Document `~/.darc/` should be `700`; log warning if permissions too open | P1 | Small |
+| Unbounded cache | Add max-entry count to `CacheService` with LRU eviction (10,000 entries suggested) | P1 | Small |
+| noCache abuse | Add rate limiting to noCache parameter (minimum interval between bypasses per key) | P2 | Small |
+| TriggerDailyUpdate blast radius | Gate behind `EnableDestructiveActions` flag or require explicit confirmation | P2 | Small |
+
+### Files Affected (for mitigations)
+
+- `src/MaestroTool.Core/MaestroService.cs` — Validate `channel` parameter in `GetBuildFreshnessAsync`
+- `src/MaestroTool.Core/CacheService.cs` — Separate action store, add LRU cap
+- `src/MaestroTool.Core/MaestroMcpTools.cs` — Auth-level check on trigger tools
+- `src/MaestroTool.Core/MaestroApiClient.cs` — Expose `AuthLevel` enum
+- `src/MaestroTool.Mcp/Program.cs` — Auth middleware (deferred to v0.3)
+
+### Decision
+
+Record all findings. Address P0 mitigations (dedup separation, tool-level auth gating, SSRF validation) in next sprint. Defer HTTP auth middleware to v0.3 when HTTP deployment is actively planned.
+
+## Backend Threat Model Deep Dive
+
+**Author:** Naomi (Backend Dev)  
+**Date:** 2025-07-15  
+**Status:** Merged into STRIDE assessment
+
+Comprehensive analysis of auth cascade, cache layer threats, API client surface, and data sensitivity. 14 specific findings documented with severity levels and blast radius analysis. Key observations:
+
+- **Auth cascade:** PAT in environment variable is accepted risk; Entra ID auth record needs permission validation; anonymous fallback silent (low risk for read-only).
+- **Cache layer:** Memory exhaustion via unique key flooding (unbounded); noCache abuse DoS potential; action dedup bypass via cache clear; key predictability acceptable for single-user mode.
+- **API client:** SSRF via aka.ms critical (path traversal + unvalidated redirects); trigger action blast radius medium (ecosystem-wide for daily updates); injection vectors handled by PCS client.
+- **Data sensitivity:** Subscription topology is operationally sensitive; PAT and Entra tokens held in-process only; no PII flows through server.
+
+## Security Test Gap Analysis
+
+**Author:** Amos (Tester)  
+**Date:** 2025-07-15  
+**Status:** Findings documented — 26 test specs recommended
+
+### Summary
+
+Audited 48 existing tests. Found zero tests at MCP tool layer and zero security-focused tests. Entire suite at service layer only.
+
+### Gap categories and priorities
+
+| Priority | Category | Specs | Risk |
+|----------|----------|-------|------|
+| **P1** | Auth cascade untestable (static methods) | 5 | Auth bypass, silent degradation to anonymous |
+| **P2** | No MCP tool layer tests | 12 | Input validation, error messages, formatting |
+| **P2** | Integer boundaries on buildId | 3 | Negative IDs passed unchecked |
+| **P3** | Cache memory growth | 2 | Unbounded memory under sustained load |
+| **P3** | Cache concurrency race | 1 | Duplicate API calls (perf, not security) |
+| **P3** | Dedup edge cases | 3 | Trigger bypass after cache clear |
+
+### Critical findings requiring code changes
+
+1. **Auth cascade untestable** — `MaestroApiClient.CreateApi()` uses statics; recommend `IApiFactory` interface.
+2. **No rate limiting on noCache** — Calls can hammer Maestro API; add minimum interval between bypasses.
+3. **Cache has no max-size bound** — `ConcurrentDictionary` grows indefinitely; expired entries never proactively evicted.
+4. **No input validation on buildId** — Negative integers pass through; opaque API exception instead of friendly response.
+
+### Recommended action
+
+Extract `IApiFactory` interface for auth cascade in v0.2.1. Refactoring unblocks all 5 P1 auth tests. High-priority for security hardening.
+
+## 2026-02-18: Action tools implementation for v0.2.0
+
+**By:** Naomi (Backend Dev)
+
+**What:** Implemented non-destructive action tools (`maestro_trigger_subscription`, `maestro_trigger_daily_update`) with deduplication, cache invalidation, and future-proofed config for destructive actions.
+
+**Why:** Users need the ability to trigger subscriptions and daily updates programmatically via MCP tools. Action deduplication prevents accidental duplicate triggers (2-minute cooldown). Cache invalidation ensures subsequent read queries don't return stale data after mutations. The `MaestroToolOptions` config class prepares the codebase for future destructive tools (delete, update) that will require explicit opt-in via env var.
+
+**Key Technical Details:**
+
+- **PCS Client Method Signature Discovery**: `ISubscriptions.TriggerSubscriptionAsync` has signature `(int barBuildId, bool isCoherencyUpdate, Guid subscriptionId, CancellationToken)`. The bool parameter controls coherency mode; passing `true` enables standard trigger behavior.
+
+- **Action Deduplication Pattern**: `CacheService.GetRecentAction(key)` returns timestamp if action was executed within cooldown period; `RecordAction(key, cooldown)` stores execution timestamp. Dedup keys follow pattern `action:trigger-sub:{subscriptionId}:{buildId}` for subscription triggers and `action:trigger-daily-update` for daily updates.
+
+- **Cache Invalidation Strategy**: Action methods in `MaestroService` call API client, then invalidate related read caches. `TriggerSubscriptionAsync` invalidates `sub:{subscriptionId}` and prefix `subs:*`. `TriggerDailyUpdateAsync` invalidates all subscription caches (`subs:*`). This prevents stale data from being served after mutations.
+
+- **Config for Future Destructive Actions**: `MaestroToolOptions.EnableDestructiveActions` (default: false) is registered in DI and read from `MAESTRO_ENABLE_DESTRUCTIVE_ACTIONS` env var. v0.2.0 does not expose destructive tools yet — this is prep work for future delete/update operations.
+
+- **Tool Design**: Both action tools return user-friendly confirmation messages with relevant context (subscription details, build ID). The 2-minute cooldown prevents accidental re-triggers while still allowing intentional retries after a reasonable delay.
+
+**Files Changed:**
+- Created `src/MaestroTool.Core/MaestroToolOptions.cs` (config class)
+- Updated `src/MaestroTool/Program.cs` (register options, version bump to 0.2.0)
+- Updated `src/MaestroTool.Mcp/Program.cs` (register options, version bump to 0.2.0)
+- Updated `src/MaestroTool.Core/IMaestroApiClient.cs` (add action methods)
+- Updated `src/MaestroTool.Core/MaestroApiClient.cs` (implement action methods)
+- Updated `src/MaestroTool.Core/CacheService.cs` (add `GetRecentAction`, `RecordAction`)
+- Updated `src/MaestroTool.Core/MaestroService.cs` (add service layer action methods with cache invalidation)
+- Updated `src/MaestroTool.Core/MaestroMcpTools.cs` (add `maestro_trigger_subscription`, `maestro_trigger_daily_update` tools, inject options and cache service)
+
+**Impact:** Maestro MCP server now supports programmatic triggering of subscription processing and daily updates. Version bumped to 0.2.0. All changes compile successfully with dotnet build.
+
+## 2025-07-15: v0.2.0 Test Coverage Patterns
+
+**Author:** Amos (Tester)  
+**Date:** 2025-07-15  
+**Status:** Complete
+
+### Context
+
+Added 13 unit tests for v0.2.0 features (action dedup, noCache, triggers, options). Total test count is now 48, all passing.
+
+### Key patterns established
+
+1. **Action dedup tests** use the same short-TTL + `Task.Delay` approach as existing cache expiry tests. No need for time abstraction — 50ms cooldown with 100ms delay is reliable.
+
+2. **noCache bypass tests** use NSubstitute's `.Returns(firstValue, secondValue)` to verify the API is called again after invalidation. Two methods tested (subscriptions + channels) to prove the pattern works across the service.
+
+3. **Trigger cache invalidation** is verified indirectly: populate cache → trigger → read again → assert `Received(2)` on the API mock. This proves the trigger methods properly invalidate related cache keys.
+
+4. **New test file** `MaestroToolOptionsTests.cs` for options defaults. Kept separate because it doesn't need the MaestroService test fixture.
+
+### Files changed
+
+- `src/MaestroTool.Tests/CacheServiceTests.cs` — 4 new action dedup tests
+- `src/MaestroTool.Tests/MaestroServiceTests.cs` — 8 new tests (4 noCache + 4 trigger)
+- `src/MaestroTool.Tests/MaestroToolOptionsTests.cs` — 1 new test (new file)
+
+## 2026-02-18: User directive — defer tool rename decision
+
+**By:** Larry Ewing (via Copilot)
+
+**What:** Considered renaming tools from `maestro_` prefix to `pcs_` to save tokens, but decided to wait — premium will likely have API suggestions. Do not rename tools yet.
+
+**Why:** User request — waiting for external collaborator feedback before making naming changes
+
+## 2026-02-18: Action tools policy
+
+**By:** Larry Ewing (via Copilot)
+
+**What:** Action tools should be added to the MCP server. Destructive actions (delete, disable) must be disabled by default and gated behind a config flag. Non-destructive actions (trigger, retry) can be enabled by default. The team should identify which PCS API methods are destructive vs non-destructive as a backlog item.
+
+**Why:** User directive — safety by default for mutation operations
+
+## STRIDE Threat Model: SQLite Cache Migration
+
+**Author:** Holden (Lead / Architect)  
+**Date:** 2026-02-18  
+**Status:** Findings documented — P1 items prioritized for immediate implementation
+
+### Scope
+
+Analysis of threats **new to the SQLite migration**. Cache data now persisted to disk at `~/.mstro/cache.db` (previously in-memory `ConcurrentDictionary`). Multiple processes can read/write the same database via WAL mode.
+
+### Findings Summary (13 Total)
+
+| # | STRIDE | Severity | Threat | Status |
+|---|--------|----------|--------|--------|
+| S1 | Spoofing | **HIGH** | Cache poisoning via same-user process | P2 (backlog) |
+| T1 | Tampering | **HIGH** | Direct database modification by external process | P2 (backlog) |
+| T2 | Tampering | **MEDIUM** | Action dedup manipulation | P2 (backlog) |
+| T3 | Tampering | **LOW** | WAL/journal file manipulation during recovery | P3 (accepted) |
+| R1 | Repudiation | **MEDIUM** | No cross-process write attribution | P2 (backlog) |
+| I1 | Information Disclosure | **HIGH** | Sensitive operational data persisted in plaintext | P2 (backlog) |
+| I2 | Information Disclosure | **MEDIUM** | Database file permissions not explicitly set | **P1 (implemented)** |
+| I3 | Information Disclosure | **LOW** | Data remnants in WAL/journal after Clear() | P3 (accepted) |
+| D1 | Denial of Service | **MEDIUM** | Database write-lock DoS from external process | P3 (edge case) |
+| D2 | Denial of Service | **MEDIUM** | Persistent database corruption across restarts | **P1 (implemented)** |
+| D3 | Denial of Service | **LOW** | Fire-and-forget cleanup failure accumulation | P3 (capacity-capped) |
+| E1 | Elevation of Privilege | **MEDIUM** | Cross-process auth boundary violation via shared cache | P3 (accepted) |
+| E2 | Elevation of Privilege | **LOW** | Auth level not persisted with cache entries | P3 (design gap) |
+
+### Key Recommendations
+
+- **P1 (Ship now):** File permissions (I2), Corruption recovery (D2) — small effort, high impact
+- **P2 (Next sprint):** HMAC integrity (S1/T1), Action dedup integrity (T2), Write attribution (R1) — medium effort, prevents tampering
+- **P3 (Backlog):** Write-lock DoS (D1), Auth boundary (E1/E2), WAL remnants (I3/T3), Cleanup accumulation (D3) — edge cases or accepted risks
+
+### Accepted Risks
+
+- **Same-user process tampering** (S1/T1): Requires prior machine compromise. Machine owner can already read PCS data via darc.
+- **Cross-process auth boundary** (E1): Anonymous PCS read access is intentional. Cache sharing is a performance feature.
+- **WAL data remnants** (I3): Acceptable for developer workstations. No PII in cache; subscription topology is not classified.
+
+### Decision
+
+Implement P1 items immediately (I2 + D2). Record all findings. Defer P2 HMAC work to next sprint as separate initiative.
+
+## Decision: SQLite-backed CacheService for Cross-Process Sharing
+
+**Author:** Naomi (Backend Dev)  
+**Date:** 2026-02-18  
+**Status:** Implemented
+
+### Summary
+
+Migrated `CacheService` from in-memory `ConcurrentDictionary` to SQLite-backed storage at `~/.mstro/cache.db`. Enables cross-process cache sharing, reducing redundant PCS API calls when multiple MCP clients run simultaneously.
+
+### Technical Implementation
+
+- **Database location:** `~/.mstro/cache.db` (created automatically)
+- **WAL mode:** Enables concurrent reads across processes
+- **Busy timeout:** 5 seconds for write contention handling
+- **Tables:** `cache` (key, value, expiry) and `actions` (key, value, expiry) — separate so `Clear()` preserves dedup records
+- **Serialization:** `System.Text.Json` for all cached values
+- **Thread safety:** `SemaphoreSlim` lock around factory calls prevents duplicate execution
+- **Capacity cap:** 10,000 entries; entire cache cleared when exceeded
+
+### Design Choices
+
+- **Separate `actions` table:** Dedup records live separately so `maestro_clear_cache` doesn't reset trigger cooldowns (prevents abuse)
+- **Connection-per-operation:** No application-level pooling; SQLite's `Cache=Shared` mode handles reuse
+- **Double-check locking:** After acquiring semaphore, re-check cache before calling factory (prevents race condition)
+- **Error handling:** SQLite failures logged to stderr; graceful degradation to API calls
+
+### Trade-offs
+
+**Pros:** Cross-process sharing, persistent cache, true concurrent reads, scales to multiple MCP clients  
+**Cons:** Slightly slower than in-memory, JSON serialization adds CPU/memory cost, requires test refactoring
+
+### Files Changed
+
+- `src/MaestroTool.Core/MaestroTool.Core.csproj` — Added `Microsoft.Data.Sqlite` package
+- `src/MaestroTool.Core/CacheService.cs` — Complete rewrite with SQLite backend
+- `src/MaestroTool.Core/MaestroMcpTools.cs` — Updated `maestro_clear_cache` description
+
+### Rationale
+
+Cross-process cache sharing is essential for multi-client MCP deployment. Performance trade-off is negligible compared to PCS API latency (150ms–1.6s). Persistent cache improves cold-start performance.
+
+## Decision: P1 Security Fixes for SQLite Cache
+
+**Author:** Naomi (Backend Dev)  
+**Date:** 2026-02-19  
+**Status:** Implemented — All 73 tests passing
+
+### Context
+
+Holden's STRIDE threat model identified two P1 (MEDIUM severity) vulnerabilities in SQLite cache implementation:
+
+1. **I2 (Info Disclosure):** `~/.mstro/cache.db` created with default permissions could be world-readable on shared Linux/macOS systems
+2. **D2 (Denial of Service):** Corrupted SQLite files cause persistent startup failures with no auto-recovery
+
+### Fixes Implemented
+
+#### Fix 1: Directory Permission Hardening (I2)
+
+After creating `~/.mstro/` directory, explicitly set owner-only permissions:
+- **Linux/macOS:** `File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute)` → `700` permissions
+- **Windows:** No action (profile directories already restricted)
+
+Applied in two places:
+1. `GetDefaultDbPath()` — production path
+2. `internal CacheService(string dbPath)` constructor — test paths
+
+#### Fix 2: Corruption Auto-Recovery (D2)
+
+At startup in `InitializeDatabase()`, after opening connection:
+
+1. Run `PRAGMA integrity_check`
+2. If result is NOT `"ok"`:
+   - Log to stderr: `[maestro-mcp] Cache database corrupted, recreating...`
+   - Close and delete corrupted DB file
+   - Delete WAL/SHM sidecar files
+   - Re-open clean database
+3. If `SqliteException` thrown during `Open()` (corrupted header), same flow triggered
+
+### Impact
+
+- **Security:** Mitigated MEDIUM-severity info disclosure on shared machines and persistent DoS from corruption
+- **UX:** Cache self-heals on corruption; no manual intervention needed
+- **Performance:** Negligible overhead (one `PRAGMA` query at startup)
+- **Tests:** All 73 tests passing (67 existing + 6 new security tests)
+
+### Files Changed
+
+- `src/MaestroTool.Core/CacheService.cs` — ~40 lines added (surgical permission + recovery logic)
+
+### Rationale
+
+**Defense-in-depth:** Both fixes are low-cost insurance. Cache is non-critical (rebuilt from PCS API) — safe to delete and recreate on corruption. File permissions prevent accidental exposure on shared dev machines.
+
+**User principle:** "Fail gracefully, don't brick the tool."
+
+## Decision: Security Test Coverage for SQLite Cache Hardening
+
+**Author:** Amos (Tester)  
+**Date:** 2026-02-19  
+**Status:** Complete — 6 new tests, all passing
+
+### Context
+
+Naomi implemented 2 P1 security fixes (file permissions I2, corruption recovery D2). Wrote comprehensive tests to validate fixes and prevent regressions.
+
+### Test Inventory
+
+| Fix | Test Name | Coverage |
+|-----|-----------|----------|
+| Fix 1: Permission hardening | `CreateCacheDir_SetsUnixPermissions` | Verifies `0o700` on Unix systems |
+| Fix 2: Corruption detection | `InitializeDatabase_DetectsCorruption_ViaIntegrityCheck` | PRAGMA check catches corruption |
+| Fix 2: Corruption recovery | `InitializeDatabase_CorruptedDb_DeletesAndRecreates` | File deletion + fresh DB |
+| Fix 2: Sidecar cleanup | `InitializeDatabase_DeletesWalShmOnCorruption` | WAL/SHM cleanup after corruption |
+| Concurrent recovery | `InitializeDatabase_CorruptionRecovery_UnderConcurrentLoad` | Multiple processes recover safely |
+| Regression | `InitializeDatabase_NormalDatabase_Succeeds` | Clean DB unaffected by recovery code |
+
+### Key Testing Decisions
+
+1. **Permission tests Unix-only:** Guard with `if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())`; skip on Windows (expected behavior)
+2. **Corruption simulation:** Use in-memory SQLite to corrupt database in controlled way
+3. **No test changes to existing suite:** New tests are additive; existing 67 tests continue to pass
+
+### Files Changed
+
+- `src/MaestroTool.Tests/CacheServiceTests.cs` — 6 new security test methods
+
+## Session Summary: 2026-02-19 SQLite P1 Fixes
+
+**Lead:** Naomi (Backend Dev), Amos (Tester), Holden (Architect)  
+**Result:** ✅ All 73 tests passing, commit `eb1d5e0` pushed
+
+**Deliverables:**
+- Session log created: `.ai-team/log/2026-02-19-sqlite-p1-security.md`
+- P1 security fixes merged and tested
+- Windows connection pool issue resolved
+- Threat model findings documented and prioritized
+
+## Session Summary: 2026-02-19 Bugfix #2 & #3
+
+**Requested by:** Larry Ewing
+
+**Lead:** Naomi (Backend Dev), Amos (Tester)  
+**Result:** ✅ All 76 tests passing, tool installed locally, commit pushed
+
+### Bug #2: build_freshness SSRF Allowlist Expanded
+
+**Problem:** `GetBuildFreshnessAsync` rejected `ci.dot.net` as an unexpected redirect domain. The aka.ms shortlinks for .NET channels now resolve there instead of only `*.blob.core.windows.net`.
+
+**Fix:** Added two new entries to the SSRF domain allowlist in `MaestroService.cs`:
+- `ci.dot.net` — exact host match (new Microsoft .NET build artifact domain)
+- `*.azureedge.net` — suffix match (known Microsoft CDN for .NET builds, e.g. `dotnetbuilds.azureedge.net`)
+
+**Rationale:** Both are legitimate Microsoft-owned domains used for .NET SDK/runtime build artifacts. The allowlist remains tight — only known Microsoft infrastructure domains are permitted.
+
+### Bug #3: subscription_health Error Resilience
+
+**Problem:** `GetSubscriptionHealthAsync` iterated all subscriptions sequentially. If any single `GetLatestBuildAsync` call threw, the entire method failed with an unhandled exception. Repos like dotnet/sdk (59 subscriptions) were particularly vulnerable.
+
+**Fix:**
+1. Wrapped per-subscription logic in try/catch
+2. Added `string? Error = null` optional parameter to `SubscriptionHealthResult` record
+3. On exception: subscription added to results with error message, processing continues
+4. MCP tool displays `⚠️ Error:` line for failed subscriptions
+
+**Rationale:** Partial results are far more useful than a complete failure. One flaky API call shouldn't prevent the user from seeing health data for the other 58 subscriptions.
+
+### Test Coverage
+
+Added 3 regression tests for bug #3 error handling (Amos).
+
+### Files Changed
+- `src/MaestroTool.Core/MaestroService.cs` — Both fixes
+- `src/MaestroTool.Core/MaestroMcpTools.cs` — Error display in subscription_health tool
+
+## Issue #1 Triage: Codeflow Feature Requests
+
+**Date:** 2026-02-19  
+**By:** Holden (Lead / Architect)  
+**Issue:** https://github.com/lewing/maestro.mcp/issues/1  
+**Scope:** 9 feature requests for codeflow analysis workflows
+
+### Executive Summary
+
+Issue #1 contains 9 well-scoped feature requests for enhancing maestro.mcp's usability in codeflow analysis workflows. All features are **feasible** with the current PCS client NuGet surface, though 3 require deeper investigation or GitHub API integration.
+
+**Recommended roadmap:**
+1. **v0.2.1 (sprint 1):** #1 + #2 + #3 — High-impact read/write fundamentals
+2. **v0.3 (sprint 2):** #4 + #5 + #6 — Health & visualization composites  
+3. **v0.4+ (backlog):** #7 + #8 + #9 — Specialized, lower-frequency queries
+
+### v0.2.1 Priority Items
+
+#### Feature #2: `maestro_force_trigger_subscription` — Force-Trigger a Subscription
+- **Feasibility:** ✅ Implementable (small effort)
+- **Effort:** 4 hours
+- **Details:** Add boolean parameter for force-trigger mode; uses `isCoherencyUpdate` flag in PCS API
+
+#### Feature #3: Target Branch Filtering on `maestro_subscriptions`
+- **Feasibility:** ✅ Implementable (trivial)
+- **Effort:** 2 hours
+- **Details:** Add optional `targetBranch` filter parameter; filter client-side post-fetch
+
+#### Feature #8: Channel Name Shorthand Resolution
+- **Feasibility:** ✅ Implementable (trivial)
+- **Effort:** 1 hour
+- **Details:** Resolve short names (e.g., `net11`, `10.0.2xx`) to full Maestro channel names
+
+### v0.3 Priority Items (Medium Impact)
+
+#### Feature #1: `maestro_codeflow_prs` — List Codeflow PRs for a Repo
+- **Feasibility:** ✅ Implementable (medium effort)
+- **Effort:** 2-3 days
+- **Blockers:** GitHub API integration required
+- **Technical:** Query subscriptions, GitHub PR search, health checks
+
+#### Feature #5: `maestro_flow_graph` — Dependency Flow Visualization
+- **Feasibility:** ✅ Implementable (medium effort)
+- **Effort:** 2-3 days
+- **Details:** Show inbound/outbound flows; returns JSON or Mermaid syntax
+
+#### Feature #6: `maestro_repo_flow_status` — Combined Health Endpoint
+- **Feasibility:** ✅ Implementable (low effort, composition)
+- **Effort:** 1-2 days
+- **Details:** Composite endpoint reusing existing methods
+
+### v0.2.2 (Pending Investigation)
+
+#### Feature #4: `maestro_subscription_history` — Build Application History
+- **Status:** 🔍 **Blocked on PCS API discovery**
+- **Effort:** Unknown (depends on PCS support)
+
+#### Feature #9: `maestro_build_assets` — List Build Assets
+- **Status:** 🔍 **Blocked on PCS API discovery**
+- **Effort:** Unknown (depends on PCS support)
+
+### v0.4+ (Backlog)
+
+#### Feature #7: `maestro_vmr_source_manifest` — VMR Source Manifest Reader
+- **Feasibility:** ✅ Implementable (niche use case)
+- **Effort:** 1-2 days
+- **Details:** Read and parse source-manifest.json from VMR; low frequency
+
+### Risk Assessment
+
+| Risk | Likelihood | Impact | Mitigation |
+|------|-----------|--------|-----------|
+| PCS API missing `history`/`assets` | Medium | Blocks #4 + #9 | Naomi investigates immediately |
+| GitHub API rate limiting | Low | Blocks #1 + #5 | Cache PR results (5 min TTL) |
+| Test coverage gaps | Medium | Release bugs | Amos writes integration tests |
+| User expectations on "force trigger" semantics | Medium | Support burden | Document behavior clearly |
+
+### Design Decisions
+
+1. **`maestro_force_trigger_subscription` vs boolean parameter:** Recommend separate tool (clearer intent)
+2. **Channel shorthand strategy:** Hardcoded mappings in v0.2.1; environment override in v0.3 if requested
+3. **`maestro_flow_graph` output format:** JSON (structured); Mermaid syntax as optional string field
+4. **GitHub API client:** Recommend Octokit (widely used, easy integration)
+
+### Questions for Larry
+
+1. Does the current `maestro_trigger_subscription` already force-trigger?
+2. GitHub API client preference?
+3. Is #7 (source-manifest parsing) likely to be heavily used?
+
+### Summary
+
+**All 9 features are architecturally sound.** No fundamental blockers. Roadmap prioritizes high-impact, low-effort wins (v0.2.1) before composite/visualization features (v0.3).
+
+**Next steps:**
+1. Naomi investigates PCS API surface for history/assets (1–2 hours)
+2. Team aligns on GitHub client strategy
+3. Kickoff v0.2.1 implementation
+
+
+### 2026-02-19: isCoherencyUpdate trigger semantics investigation
+
+**By:** Holden (via Coordinator — agents timed out on arcade-services search)
+
+**What:** `isCoherencyUpdate` is a **vestigial client-side parameter** that has no effect on the server.
+
+**Investigation findings:**
+
+1. **Server-side API** (`ProductConstructionService.Api/Api/v2018_07_16/Controllers/SubscriptionsController.cs:108`):
+   ```csharp
+   public virtual async Task<IActionResult> TriggerSubscription(Guid id, [FromQuery(Name = "bar-build-id")] int buildId = 0)
+   ```
+   NO `isCoherencyUpdate` parameter. The REST endpoint accepts only `bar-build-id` as a query parameter.
+
+2. **Current PCS Client** (Generated/Subscriptions.cs):
+   ```csharp
+   Task<Subscription> TriggerSubscriptionAsync(int barBuildId, Guid id, CancellationToken)
+   ```
+   Two-parameter version (plus cancellation). The `isCoherencyUpdate` bool has been REMOVED from the current source.
+
+3. **Our NuGet package** (v1.1.0-beta.26118.5) still has a 3-parameter overload including `bool isCoherencyUpdate`. This parameter was never serialized to the REST request — the HTTP call sends only `bar-build-id` and `api-version`.
+
+4. **Darc's usage** (`DarcLib/BarApiClient.cs:317-324`):
+   - `TriggerSubscriptionAsync(Guid subscriptionId)` → calls with `barBuildId: default (0)`
+   - `TriggerSubscriptionAsync(Guid subscriptionId, int sourceBuildId)` → calls with specific build
+   - Neither passes `isCoherencyUpdate`. Darc never used this parameter.
+
+5. **`isCoherencyUpdate` in the codebase** is only referenced in `PullRequestBuilderTests.cs` as a property on a test data model (`IsCoherencyUpdate`). It's an internal DependencyFlow concept, NOT an API parameter.
+
+**Conclusion:** Our code at `MaestroApiClient.cs:154` passes `true` for a parameter that:
+- Is never sent to the server
+- Has been removed from the current PCS client
+- Will cause a compile error when we update the NuGet package
+
+**Recommendation:**
+- ❌ **No separate `maestro_force_trigger_subscription` tool** — the concept doesn't exist server-side
+- ✅ **Note for NuGet update**: When we update the PCS client package, remove the `true` parameter from `TriggerSubscriptionAsync` call
+- ✅ **Close `add-force-trigger-tool` todo** — feature request was based on a misunderstanding
+- The existing `maestro_trigger_subscription` already correctly supports the two trigger modes: latest build (buildId=0) and specific build (buildId=N)
+
+**Why:** Needed to determine correct default for our trigger tool and whether to add force-trigger variant. Answer: no change needed — tool works correctly as-is.
+
+
+# Decision: Codeflow PR Tracking API Surface (v0.4.0)
+
+**Author:** Naomi (Backend Dev)
+**Date:** 2026-02-19
+**Status:** Implemented
+
+## Context
+
+Adding codeflow PR tracking tools to the MCP server. The PCS client v1.1.0-beta.26118.5 exposes `IPullRequest`, `IBackflowStatus`, and subscription history APIs.
+
+## Key Discoveries & Decisions
+
+### 1. BackflowStatus requires vmrBuildId
+
+The `IBackflowStatus.GetBackflowStatusAsync(int vmrBuildId, CancellationToken)` API requires a VMR build ID — it is NOT a parameterless "get current status" call. The MCP tool `maestro_backflow_status` therefore requires the user to provide a `vmrBuildId` parameter. A future enhancement could auto-resolve the latest VMR build.
+
+### 2. Subscription history uses Azure Paging
+
+`ISubscriptions.GetSubscriptionHistoryAsync` returns `AsyncPageable<SubscriptionHistoryItem>`, not a simple list. Used `GetSubscriptionHistoryPageAsync(id, page, perPage, ct)` instead, which returns a single `Page<T>` with `.Values` — simpler for cache layer integration. First page only (default page size) for the initial implementation.
+
+### 3. RestApiException for 404 handling
+
+`GetTrackedPullRequestBySubscriptionIdAsync` throws `RestApiException` (HTTP 404) when no PR is tracked for a subscription. The MCP tool layer catches this and returns a friendly message. The service/cache layer does NOT catch it — the exception propagates to let the MCP tool handle presentation.
+
+### 4. No auth gating initially
+
+All 4 new APIs are read-only. Skipping auth gating (unlike trigger tools) until runtime testing confirms whether anonymous access works. If any return 401, auth gating will be added at the service layer following the existing `TriggerSubscriptionAsync` pattern.
+
+### 5. TrackedPullRequest has rich metadata
+
+The model includes Channel, TargetBranch, HeadBranch, SourceEnabled, LastUpdate/LastCheck/NextCheck timestamps, and a list of `PullRequestUpdate` items (each with SourceRepository, SubscriptionId, BuildId). This is exposed fully in the MCP tool output.
+
+## Files Changed
+
+- `src/MaestroTool.Core/IMaestroApiClient.cs` — 4 new interface methods
+- `src/MaestroTool.Core/MaestroApiClient.cs` — 4 implementations
+- `src/MaestroTool.Core/MaestroService.cs` — 4 cached service methods
+- `src/MaestroTool.Core/MaestroMcpTools.cs` — 4 new MCP tools
+
+
+### 2026-02-19: PCS API destructive method survey
+
+**By:** Naomi (via Coordinator — agents timed out on arcade-services search)
+
+**What:** Comprehensive categorization of all PCS client API methods by safety level.
+
+**Survey of `IProductConstructionServiceApi` interfaces (from current arcade-services source):**
+
+#### ISubscriptions
+| Method | Category | We Expose | Notes |
+|--------|----------|-----------|-------|
+| `ListSubscriptionsAsync` | 🟢 Read | ✅ Yes | Filter by source/target repo, channel, enabled |
+| `GetSubscriptionAsync` | 🟢 Read | ✅ Yes | By GUID |
+| `GetSubscriptionHistoryAsync/PageAsync` | 🟢 Read | ✅ Yes | Subscription update history |
+| `TriggerSubscriptionAsync` | 🟡 Non-destructive action | ✅ Yes | Triggers processing of a build; idempotent |
+| `TriggerDailyUpdateAsync` | 🟡 Non-destructive action | ✅ Yes | Triggers all daily-update subscriptions |
+| `CreateAsync` | 🔴 Destructive write | ❌ No | Creates a subscription |
+| `UpdateSubscriptionAsync` | 🔴 Destructive write | ❌ No | Modifies subscription config |
+| `DeleteSubscriptionAsync` | 🔴 Destructive write | ❌ No | Deletes a subscription |
+
+#### IBuilds
+| Method | Category | We Expose | Notes |
+|--------|----------|-----------|-------|
+| `ListBuildsAsync/PageAsync` | 🟢 Read | ❌ No (use GetLatest) | Paginated build listing |
+| `GetBuildAsync` | 🟢 Read | ✅ Yes | By BAR ID |
+| `GetBuildGraphAsync` | 🟢 Read | ❌ No | Dependency graph — could be useful for Feature #6 |
+| `GetLatestAsync` | 🟢 Read | ✅ Yes | Latest build for repo+channel |
+| `GetCommitAsync` | 🟢 Read | ❌ No | Commit info for a build |
+| `CreateAsync` | 🔴 Destructive write | ❌ No | Creates a build record (CI pipeline use) |
+| `UpdateAsync` | 🔴 Destructive write | ❌ No | Modifies build metadata |
+
+#### IChannels
+| Method | Category | We Expose | Notes |
+|--------|----------|-----------|-------|
+| `ListChannelsAsync` | 🟢 Read | ✅ Yes | All channels |
+| `GetChannelAsync` | 🟢 Read | ❌ No | Single channel by ID |
+| `ListRepositoriesAsync` | 🟢 Read | ❌ No | Repos subscribed to a channel |
+| `GetFlowGraphAsync` | 🟢 Read | ❌ No | Dependency flow graph — Feature #6 candidate |
+| `CreateChannelAsync` | 🔴 Destructive write | ❌ No | Creates a channel |
+| `DeleteChannelAsync` | 🔴 Destructive write | ❌ No | Deletes a channel |
+| `AddBuildToChannelAsync` | 🔴 Destructive write | ❌ No | Assigns build to channel |
+| `RemoveBuildFromChannelAsync` | 🔴 Destructive write | ❌ No | Removes build from channel |
+
+#### IDefaultChannels
+| Method | Category | We Expose | Notes |
+|--------|----------|-----------|-------|
+| `ListAsync` | 🟢 Read | ✅ Yes | Default channel mappings |
+| `GetAsync` | 🟢 Read | ❌ No | Single default channel |
+| `CreateAsync` | 🔴 Destructive write | ❌ No | Creates default channel mapping |
+| `UpdateAsync` | 🔴 Destructive write | ❌ No | Modifies mapping |
+| `DeleteAsync` | 🔴 Destructive write | ❌ No | Deletes mapping |
+
+#### IPullRequest
+| Method | Category | We Expose | Notes |
+|--------|----------|-----------|-------|
+| `GetTrackedPullRequestsAsync` | 🟢 Read | ✅ Yes | All tracked PRs |
+| `UntrackPullRequestAsync` | 🔴 Destructive write | ❌ No | DELETE — untracks a PR |
+
+*Note: `GetTrackedPullRequestBySubscriptionIdAsync` exists in our NuGet package (v1.1.0-beta.26118.5) but NOT in the current arcade-services source.*
+
+#### IBackflowStatus
+*Note: This interface exists in our NuGet package but NOT in the current arcade-services source. May have been added post-release or in a different branch.*
+| Method | Category | We Expose | Notes |
+|--------|----------|-----------|-------|
+| `GetBackflowStatusAsync` | 🟢 Read | ✅ Yes | Backflow status for a VMR build |
+
+#### IAssets
+| Method | Category | We Expose | Notes |
+|--------|----------|-----------|-------|
+| `ListAssetsAsync/PageAsync` | 🟢 Read | ❌ No | Could support Feature #9 (build assets) |
+| `GetAssetAsync` | 🟢 Read | ❌ No | Single asset by ID |
+| `GetDarcVersionAsync` | 🟢 Read | ❌ No | Darc version info |
+| `BulkAddLocationsAsync` | 🔴 Destructive write | ❌ No | Adds asset locations (CI use) |
+| `AddAssetLocationToAssetAsync` | 🔴 Destructive write | ❌ No | |
+| `RemoveAssetLocationFromAssetAsync` | 🔴 Destructive write | ❌ No | |
+
+#### IRepository
+| Method | Category | We Expose | Notes |
+|--------|----------|-----------|-------|
+| `ListRepositoriesAsync` | 🟢 Read | ❌ No | Tracked repos and branches |
+| `GetMergePoliciesAsync` | 🟢 Read | ❌ No | Merge policies for repo+branch |
+| `GetHistoryAsync/PageAsync` | 🟢 Read | ❌ No | Repository action history |
+| `SetMergePoliciesAsync` | 🔴 Destructive write | ❌ No | Modifies merge policies |
+
+#### Other Interfaces
+| Interface | Method | Category | Notes |
+|-----------|--------|----------|-------|
+| `IGoal` | `GetGoalTimesAsync` | 🟢 Read | Build time goals |
+| `IGoal` | `CreateAsync` | 🔴 Destructive write | Sets build time goals |
+| `IPipelines` | `ListAsync` | 🟢 Read | Release pipelines |
+| `IPipelines` | `CreatePipelineAsync` | 🔴 Destructive write | Creates release pipeline |
+| `IAzDo` | `GetBuildStatusAsync` | 🟢 Read | AzDO build status |
+| `IBuildTime` | `GetBuildTimesAsync` | 🟢 Read | Build time metrics |
+| `IStatus` | `GetPcsWorkItemProcessorStatusAsync` | 🟢 Read | PCS worker status |
+| `IStatus` | `StartPcsWorkItemProcessorsAsync` | 🟡 Non-destructive action | Admin: starts workers |
+| `IStatus` | `StopPcsWorkItemProcessorsAsync` | 🔴 Destructive (admin) | Admin: stops workers |
+
+#### Summary
+| Category | Count | We Expose |
+|----------|-------|-----------|
+| 🟢 Read-only | ~30 | 10 of ~30 |
+| 🟡 Non-destructive action | 3 | 2 of 3 (trigger, daily update; not start-workers) |
+| 🔴 Destructive write | ~18 | 0 of ~18 |
+
+#### Candidates for Future Exposure (read-only, useful)
+1. `GetBuildGraphAsync` — dependency graph (Feature #6)
+2. `GetFlowGraphAsync` — channel flow graph (Feature #6)
+3. `ListAssetsAsync` — build assets (Feature #9)
+4. `GetCommitAsync` — commit info for builds
+5. `ListRepositoriesAsync` (Channels) — repos per channel
+6. `GetMergePoliciesAsync` — merge policy inspection
+
+**Why:** Need to know which APIs are safe to expose as MCP tools and which need gating behind config flags.
+
+## 2026-02-19: Comprehensive PCS Client NuGet API Inspection
+
+**By:** Naomi (Backend Dev)
+
+**What:** Comprehensive inspection of `Microsoft.DotNet.ProductConstructionService.Client` NuGet package API surface using `dotnet-inspect` v0.4.4. Package version inspected: **1.1.0-beta.26118.5** (latest).
+
+**Why:** Need accurate understanding of our PCS client package API surface for maintenance and future feature work
+
+---
+
+## Package Overview
+
+- **Library:** Microsoft.DotNet.ProductConstructionService.Client.dll
+- **88 types** | **183 methods** | **307 properties**
+- **Latest version:** 1.1.0-beta.26118.5 (all versions are prerelease beta)
+- **Source:** [arcade-services on GitHub](https://github.com/dotnet/arcade-services)
+
+## Complete Interface List (17 interfaces)
+
+### IProductConstructionServiceApi — Root API Interface (17 members)
+Properties exposing all sub-interfaces:
+| Property | Type |
+|----------|------|
+| Assets | `IAssets` |
+| AzDo | `IAzDo` |
+| BackflowStatus | `IBackflowStatus` |
+| BuildTime | `IBuildTime` |
+| Builds | `IBuilds` |
+| Channels | `IChannels` |
+| DefaultChannels | `IDefaultChannels` |
+| FeatureFlags | `IFeatureFlags` |
+| Goal | `IGoal` |
+| Ingestion | `IConfigurationIngestion` |
+| Options | `ProductConstructionServiceApiOptions` |
+| Pipelines | `IPipelines` |
+| PullRequest | `IPullRequest` |
+| Repository | `IRepository` |
+| Status | `IStatus` |
+| Subscriptions | `ISubscriptions` |
+
+Methods: `IsAdmin(CancellationToken) → Task<bool>`
+
+---
+
+### ISubscriptions (8 members)
+| Method | Signature |
+|--------|-----------|
+| GetSubscriptionAsync | `Task<Subscription> GetSubscriptionAsync(Guid, CancellationToken)` |
+| GetSubscriptionHistoryAsync | `AsyncPageable<SubscriptionHistoryItem> GetSubscriptionHistoryAsync(Guid, CancellationToken)` |
+| GetSubscriptionHistoryPageAsync | `Task<Page<SubscriptionHistoryItem>> GetSubscriptionHistoryPageAsync(Guid, int?, int?, CancellationToken)` |
+| ListSubscriptionsAsync | `Task<List<Subscription>> ListSubscriptionsAsync(bool?, int?, string, bool?, string, string, string, CancellationToken)` |
+| TriggerDailyUpdateAsync | `Task TriggerDailyUpdateAsync(CancellationToken)` |
+| **TriggerSubscriptionAsync** (overload 1) | `Task<Subscription> TriggerSubscriptionAsync(Guid, CancellationToken)` |
+| **TriggerSubscriptionAsync** (overload 2) | `Task<Subscription> TriggerSubscriptionAsync(Guid, bool, CancellationToken)` |
+| **TriggerSubscriptionAsync** (overload 3) | `Task<Subscription> TriggerSubscriptionAsync(int, bool, Guid, CancellationToken)` |
+
+### IBuilds (9 members)
+| Method | Signature |
+|--------|-----------|
+| CreateAsync | `Task<Build> CreateAsync(BuildData, CancellationToken)` |
+| GetBuildAsync | `Task<Build> GetBuildAsync(int, CancellationToken)` |
+| GetBuildGraphAsync | `Task<BuildGraph> GetBuildGraphAsync(int, CancellationToken)` |
+| GetCommitAsync | `Task<Commit> GetCommitAsync(int, CancellationToken)` |
+| GetLatestAsync | `Task<Build> GetLatestAsync(string, string, int?, bool?, DateTimeOffset?, DateTimeOffset?, string, CancellationToken)` |
+| GetSourceManifestAsync | `Task<List<SourceManifestEntry>> GetSourceManifestAsync(int, CancellationToken)` |
+| ListBuildsAsync | `AsyncPageable<Build> ListBuildsAsync(string, int?, string, string, string, int?, bool?, DateTimeOffset?, DateTimeOffset?, string, CancellationToken)` |
+| ListBuildsPageAsync | `Task<Page<Build>> ListBuildsPageAsync(string, int?, string, string, string, int?, bool?, DateTimeOffset?, DateTimeOffset?, int?, int?, string, CancellationToken)` |
+| UpdateAsync | `Task<Build> UpdateAsync(BuildUpdate, int, CancellationToken)` |
+
+### IChannels (6 members)
+| Method | Signature |
+|--------|-----------|
+| AddBuildToChannelAsync | `Task AddBuildToChannelAsync(int, int, CancellationToken)` |
+| GetChannelAsync | `Task<Channel> GetChannelAsync(int, CancellationToken)` |
+| GetFlowGraphAsync | `Task<FlowGraph> GetFlowGraphAsync(int, int, bool, bool, bool, List<string>, CancellationToken)` |
+| ListChannelsAsync | `Task<List<Channel>> ListChannelsAsync(string, CancellationToken)` |
+| ListRepositoriesAsync | `Task<List<string>> ListRepositoriesAsync(int, int?, CancellationToken)` |
+| RemoveBuildFromChannelAsync | `Task RemoveBuildFromChannelAsync(int, int, CancellationToken)` |
+
+### IDefaultChannels (2 members)
+| Method | Signature |
+|--------|-----------|
+| GetAsync | `Task<DefaultChannel> GetAsync(int, CancellationToken)` |
+| ListAsync | `Task<List<DefaultChannel>> ListAsync(string, bool?, int?, string, CancellationToken)` |
+
+### IBackflowStatus (2 members)
+| Method | Signature |
+|--------|-----------|
+| GetBackflowStatusAsync | `Task<BackflowStatus> GetBackflowStatusAsync(int, CancellationToken)` |
+| TriggerBackflowStatusCalculationAsync | `Task TriggerBackflowStatusCalculationAsync(int, CancellationToken)` |
+
+### IPullRequest (3 members)
+| Method | Signature |
+|--------|-----------|
+| GetTrackedPullRequestBySubscriptionIdAsync | `Task<TrackedPullRequest> GetTrackedPullRequestBySubscriptionIdAsync(string, CancellationToken)` |
+| GetTrackedPullRequestsAsync | `Task<List<TrackedPullRequest>> GetTrackedPullRequestsAsync(CancellationToken)` |
+| UntrackPullRequestAsync | `Task UntrackPullRequestAsync(string, CancellationToken)` |
+
+### IAssets (7 members)
+| Method | Signature |
+|--------|-----------|
+| AddAssetLocationToAssetAsync | `Task<AssetLocation> AddAssetLocationToAssetAsync(int, LocationType, string, CancellationToken)` |
+| BulkAddLocationsAsync | `Task BulkAddLocationsAsync(List<AssetAndLocation>, CancellationToken)` |
+| GetAssetAsync | `Task<Asset> GetAssetAsync(int, CancellationToken)` |
+| GetDarcVersionAsync | `Task<string> GetDarcVersionAsync(CancellationToken)` |
+| ListAssetsAsync | `AsyncPageable<Asset> ListAssetsAsync(int?, bool?, string, bool?, string, CancellationToken)` |
+| ListAssetsPageAsync | `Task<Page<Asset>> ListAssetsPageAsync(int?, bool?, string, bool?, int?, int?, string, CancellationToken)` |
+| RemoveAssetLocationFromAssetAsync | `Task RemoveAssetLocationFromAssetAsync(int, int, CancellationToken)` |
+
+### IFeatureFlags (8 members)
+| Method | Signature |
+|--------|-----------|
+| GetAllFeatureFlagsAsync | `Task<FeatureFlagListResponse> GetAllFeatureFlagsAsync(CancellationToken)` |
+| GetAvailableFeatureFlagsAsync | `Task<AvailableFeatureFlagsResponse> GetAvailableFeatureFlagsAsync(CancellationToken)` |
+| GetFeatureFlagAsync | `Task<FeatureFlagValue> GetFeatureFlagAsync(string, Guid, CancellationToken)` |
+| GetFeatureFlagsAsync | `Task<FeatureFlagListResponse> GetFeatureFlagsAsync(Guid, CancellationToken)` |
+| GetSubscriptionsWithFlagAsync | `Task<FeatureFlagListResponse> GetSubscriptionsWithFlagAsync(string, CancellationToken)` |
+| RemoveFeatureFlagAsync | `Task<bool> RemoveFeatureFlagAsync(string, Guid, CancellationToken)` |
+| RemoveFlagFromAllSubscriptionsAsync | `Task<RemoveFlagFromAllResponse> RemoveFlagFromAllSubscriptionsAsync(string, CancellationToken)` |
+| SetFeatureFlagAsync | `Task<FeatureFlagResponse> SetFeatureFlagAsync(SetFeatureFlagRequest, CancellationToken)` |
+
+### IStatus (3 members)
+| Method | Signature |
+|--------|-----------|
+| GetPcsWorkItemProcessorStatusAsync | `Task<Dictionary<string, string>> GetPcsWorkItemProcessorStatusAsync(CancellationToken)` |
+| StartPcsWorkItemProcessorsAsync | `Task<Dictionary<string, string>> StartPcsWorkItemProcessorsAsync(CancellationToken)` |
+| StopPcsWorkItemProcessorsAsync | `Task<Dictionary<string, string>> StopPcsWorkItemProcessorsAsync(CancellationToken)` |
+
+### IRepository (2 members)
+| Method | Signature |
+|--------|-----------|
+| GetMergePoliciesAsync | `Task<List<MergePolicy>> GetMergePoliciesAsync(string, string, CancellationToken)` |
+| ListRepositoriesAsync | `Task<List<RepositoryBranch>> ListRepositoriesAsync(string, string, CancellationToken)` |
+
+### IPipelines (4 members)
+| Method | Signature |
+|--------|-----------|
+| CreatePipelineAsync | `Task<ReleasePipeline> CreatePipelineAsync(string, int, string, CancellationToken)` |
+| DeletePipelineAsync | `Task<ReleasePipeline> DeletePipelineAsync(int, CancellationToken)` |
+| GetPipelineAsync | `Task<ReleasePipeline> GetPipelineAsync(int, CancellationToken)` |
+| ListAsync | `Task<List<ReleasePipeline>> ListAsync(string, int?, string, CancellationToken)` |
+
+### IGoal (2 members)
+| Method | Signature |
+|--------|-----------|
+| CreateAsync | `Task<Goal> CreateAsync(GoalRequestJson, int, string, CancellationToken)` |
+| GetGoalTimesAsync | `Task<Goal> GetGoalTimesAsync(int, string, CancellationToken)` |
+
+### IAzDo (1 member)
+| Method | Signature |
+|--------|-----------|
+| GetBuildStatusAsync | `Task<List<AzDoBuild>> GetBuildStatusAsync(string, string, int, int, string, string, CancellationToken)` |
+
+### IBuildTime (1 member)
+| Method | Signature |
+|--------|-----------|
+| GetBuildTimesAsync | `Task<BuildTime> GetBuildTimesAsync(int, int, CancellationToken)` |
+
+### IConfigurationIngestion (2 members)
+| Method | Signature |
+|--------|-----------|
+| DeleteNamespaceAsync | `Task<bool> DeleteNamespaceAsync(string, bool, CancellationToken)` |
+| IngestNamespaceAsync | `Task<ConfigurationUpdates> IngestNamespaceAsync(string, bool, ClientYamlConfiguration, CancellationToken)` |
+
+---
+
+## TriggerSubscriptionAsync — Exact Signatures
+
+**Three overloads exist:**
+
+1. **Simple trigger (Guid only):**
+   ```csharp
+   Task<Subscription> TriggerSubscriptionAsync(Guid subscriptionId, CancellationToken ct)
+   ```
+
+2. **With isCoherencyUpdate bool:**
+   ```csharp
+   Task<Subscription> TriggerSubscriptionAsync(Guid subscriptionId, bool isCoherencyUpdate, CancellationToken ct)
+   ```
+
+3. **With build ID + isCoherencyUpdate + subscriptionId:**
+   ```csharp
+   Task<Subscription> TriggerSubscriptionAsync(int barBuildId, bool isCoherencyUpdate, Guid subscriptionId, CancellationToken ct)
+   ```
+
+**Key finding:** Yes, the `bool isCoherencyUpdate` parameter exists in overloads 2 and 3. Our codebase currently uses overload 3 (`int, bool, Guid`). Overload 1 (Guid-only) is the simplest form for basic trigger use.
+
+---
+
+## PcsApiFactory — Client Construction
+
+Static class with 4 factory methods:
+| Method | Params | Description |
+|--------|--------|-------------|
+| `GetAnonymous()` | none | Unauthenticated access to production PCS |
+| `GetAnonymous(string)` | baseUri | Unauthenticated access to custom endpoint |
+| `GetAuthenticated(string, string, bool)` | barToken, federatedToken, disableInteractiveAuth | Authenticated access to production |
+| `GetAuthenticated(string, string, string, bool)` | baseUri, barToken, federatedToken, disableInteractiveAuth | Authenticated access to custom endpoint |
+
+---
+
+## Model Classes (44 total)
+
+Key models: Build (26 members), Subscription (16 members), BuildData (18 members), TrackedPullRequest (12 members), FlowRef (12 members), FlowEdge (9 members), Channel (5 members), DefaultChannel (7 members), BackflowStatus (5 members), SubscriptionBackflowStatus (7 members), SubscriptionHistoryItem (7 members), SubscriptionPolicy (5 members), MergePolicy (3 members), Asset (7 members), AssetLocation (5 members)
+
+Enums: `ClientUpdateFrequency` (8 values), `LocationType` (4 values), `UpdateFrequency` (8 values)
+
+Helper: `ChannelCategorizer` (1 member) in `.Helpers` namespace
+
+---
+
+## APIs We're NOT Currently Using (Potential Value)
+
+1. **IFeatureFlags** (8 methods) — Per-subscription feature flag management. Could be valuable for toggling subscription behavior without code changes. We don't expose any feature flag operations.
+
+2. **IConfigurationIngestion** (2 methods) — YAML-based namespace configuration management. Could enable bulk subscription/channel management from config files.
+
+3. **IStatus** (3 methods) — PCS work item processor status/control (start/stop/get). Could be useful for operational dashboards or health monitoring beyond what we currently do.
+
+4. **IPipelines** (4 methods) — Release pipeline CRUD. Could be useful if we ever need to manage release pipelines programmatically.
+
+5. **IGoal** (2 methods) — Build time goal tracking per channel/definition. Could power SLA monitoring.
+
+6. **IAzDo** (1 method) — Azure DevOps build status lookup. Could augment our build freshness data.
+
+7. **IBuildTime** (1 method) — Build time statistics. Could power performance trend analysis.
+
+8. **IRepository** (2 methods) — Merge policies and repository branch listing. Could help with subscription configuration auditing.
+
+9. **IBuilds.GetCommitAsync** — Get commit info for a build. Not currently exposed.
+
+10. **IBuilds.GetSourceManifestAsync** — Source manifest entries for a build. Could help trace dependencies.
+
+11. **IBuilds.GetBuildGraphAsync** — Full dependency graph for a build. Extremely valuable for understanding transitive dependencies.
+
+12. **IChannels.GetFlowGraphAsync** — Flow graph between channels. Could visualize the full .NET dependency flow.
+
+13. **ISubscriptions overload 1** (`TriggerSubscriptionAsync(Guid, CancellationToken)`) — Simpler trigger without requiring barBuildId.
+
+---
+
+## Version Information
+
+- All published versions are **prerelease** under `1.1.0-beta.*`
+- Version scheme: `1.1.0-beta.YYDDD.N` (year-day.build-number)
+- Latest: **1.1.0-beta.26118.5** (2026, day 118, build 5)
+- No stable (non-prerelease) versions exist
+- Versions are published to the dotnet-public Azure DevOps feed
+
+---
+
+## Key Discrepancies: NuGet vs. arcade-services Source
+
+**Version Drift:** The arcade-services repository source code does not match the published NuGet package exactly:
+
+1. **IBackflowStatus interface** — Exists in v1.1.0-beta.26118.5 NuGet but NOT in current arcade-services source
+2. **GetTrackedPullRequestBySubscriptionIdAsync** — Exists in NuGet but NOT in current source
+3. **TriggerSubscriptionAsync overloads 2 & 3** — Both exist in NuGet; only overload 1 in source
+4. **IFeatureFlags interface** — Full 8-member interface in NuGet; not verified in source
+
+**Implication:** The NuGet package is ahead of public source code. When updating arcade-services source, check for recent releases to the NuGet feed that may contain newer APIs.
+
+
+
+---
+# Decision: Force trigger as optional parameter
+
+**Author:** Naomi (Backend Developer)
+**Date:** 2025-07-16
+**Scope:** `maestro_trigger_subscription` MCP tool
+
+## Decision
+Added `force` as an optional boolean parameter (`default: false`) to the existing `maestro_trigger_subscription` tool rather than creating a separate `maestro_force_trigger_subscription` tool.
+
+## Rationale
+- Keeps the tool surface area small — one tool, one concept (trigger), with a modifier flag.
+- The PCS client already has the `isCoherencyUpdate` boolean on `TriggerSubscriptionAsync`. When `force=true`, we pass `true` to `isCoherencyUpdate`, which overwrites the existing PR branch with fresh VMR content.
+- Dedup keys include the force flag, so `trigger(sub, build, force=false)` and `trigger(sub, build, force=true)` are tracked independently.
+
+## Impact
+- **All 4 layers modified:** `IMaestroApiClient`, `MaestroApiClient`, `MaestroService`, `MaestroMcpTools`
+- **Backward compatible:** `force` defaults to `false`, so existing callers are unaffected.
+- **Tests:** Build passes with 0 warnings, 0 errors. Existing tests that call `TriggerSubscriptionAsync` without `force` param will continue to work due to default value.
+
+
+---
+# Issue #4: VMR Commit Distance Fix — Technical Proposal
+
+**Author:** Naomi (Backend Developer)  
+**Date:** 2025-02-20  
+**Status:** Proposal for team review
+
+## Problem Summary
+
+`maestro_subscription_health` reports `BuildsBehind` using BAR build ID arithmetic (`latestBuild.Id - lastApplied.Id`). For VMR subscriptions (dotnet/dotnet → X), this gives wildly inflated numbers:
+- **BAR ID delta:** 566 builds behind (misleading)
+- **Actual VMR commit distance:** 33 commits behind (correct)
+
+This 17x error occurs because BAR IDs are globally sequential across ALL repos, not per-repo. The current calculation treats BAR ID differences as commit counts, which is fundamentally incorrect.
+
+The `maestro_backflow_status` API should provide accurate commit distance via `CommitDistance` field, but testing shows it **errors for all VMR builds** (302627, 302612, 302391), making it unreliable.
+
+## Recommended Approach
+
+**Option B: Direct GitHub Compare API Integration**
+
+Add a GitHub compare API client to compute real commit distance for VMR subscriptions. This mirrors the proven approach in `Get-CodeflowStatus.ps1`.
+
+### Why This Approach
+
+1. **Proven reliability:** `Get-CodeflowStatus.ps1` uses GitHub compare API successfully (100% eval accuracy vs 0% for MCP-only workflows)
+2. **No PCS dependency:** BackflowStatus API is erroring and cannot be relied upon
+3. **Public API, no auth needed:** GitHub compare API works anonymously for public repos (dotnet/dotnet)
+4. **Targeted fix:** Only applies to VMR-sourced subscriptions (dotnet/dotnet → X), doesn't affect other subscription types
+5. **Clean fallback:** If GitHub API fails, fall back to existing BAR ID arithmetic (visible to user as approximate)
+
+### Rejected Alternatives
+
+- **Option A (BackflowStatus API + fallback):** Unreliable. Errors on tested builds, would require fallback 100% of time.
+- **Option C (Hybrid):** Unnecessary complexity. BackflowStatus API is not functional enough to justify the extra layer.
+
+## Implementation Plan
+
+### 1. New GitHub API Client Interface
+
+**File:** `src/MaestroTool.Core/IGitHubApiClient.cs` (new)
+
+```csharp
+public interface IGitHubApiClient
+{
+    /// <summary>
+    /// Compare two commits and get the ahead/behind count.
+    /// </summary>
+    /// <param name="owner">Repository owner (e.g., "dotnet")</param>
+    /// <param name="repo">Repository name (e.g., "dotnet")</param>
+    /// <param name="baseSha">Base commit SHA</param>
+    /// <param name="headSha">Head commit SHA</param>
+    /// <returns>Ahead/behind count, or null if comparison fails</returns>
+    Task<GitHubCompareResult?> CompareCommitsAsync(
+        string owner,
+        string repo,
+        string baseSha,
+        string headSha,
+        CancellationToken cancellationToken = default);
+}
+
+public record GitHubCompareResult(int AheadBy, int BehindBy, string Status);
+```
+
+### 2. HttpClient-Based Implementation
+
+**File:** `src/MaestroTool.Core/GitHubApiClient.cs` (new)
+
+```csharp
+public class GitHubApiClient : IGitHubApiClient
+{
+    private readonly HttpClient _http;
+    
+    public GitHubApiClient(IHttpClientFactory factory)
+    {
+        _http = factory.CreateClient("GitHub");
+        _http.DefaultRequestHeaders.Add("User-Agent", "maestro-mcp");
+        _http.DefaultRequestHeaders.Add("Accept", "application/vnd.github.v3+json");
+    }
+    
+    public async Task<GitHubCompareResult?> CompareCommitsAsync(...)
+    {
+        // GET /repos/{owner}/{repo}/compare/{base}...{head}
+        // Parse JSON response: { ahead_by, behind_by, status }
+        // Return null on 404/500/timeout (graceful degradation)
+    }
+}
+```
+
+### 3. Service Layer Integration
+
+**File:** `src/MaestroTool.Core/MaestroService.cs` (modify `GetSubscriptionHealthAsync`)
+
+```csharp
+// Add constructor dependency
+private readonly IGitHubApiClient? _github;
+
+public MaestroService(IMaestroApiClient client, CacheService cache, IGitHubApiClient? github = null)
+{
+    _client = client;
+    _cache = cache;
+    _github = github; // Optional to keep tests simple
+}
+
+// In GetSubscriptionHealthAsync, after computing buildsBehind:
+int? commitsBehind = null;
+
+// Only for VMR subscriptions (dotnet/dotnet source)
+if (isStale && _github != null && IsVmrRepository(sub.SourceRepository))
+{
+    try
+    {
+        var lastAppliedBuild = await GetBuildAsync(lastApplied.Id, noCache, cancellationToken);
+        var latestBuildData = await GetBuildAsync(latestBuild.Id, noCache, cancellationToken);
+        
+        var compare = await _github.CompareCommitsAsync(
+            "dotnet", "dotnet",
+            lastAppliedBuild.Commit, // Base SHA
+            latestBuildData.Commit,  // Head SHA
+            cancellationToken);
+        
+        if (compare != null)
+        {
+            commitsBehind = compare.AheadBy; // Head is ahead of base
+        }
+    }
+    catch (Exception ex)
+    {
+        // Log to stderr, continue with BAR ID arithmetic
+        Console.Error.WriteLine($"[maestro-mcp] GitHub compare failed: {ex.Message}");
+    }
+}
+
+// Update result record to include commitsBehind
+```
+
+**Helper method:**
+```csharp
+private static bool IsVmrRepository(string repo)
+{
+    return repo.Contains("github.com/dotnet/dotnet", StringComparison.OrdinalIgnoreCase);
+}
+```
+
+### 4. Update SubscriptionHealthResult Record
+
+**File:** `src/MaestroTool.Core/MaestroService.cs` (line 331)
+
+```csharp
+public record SubscriptionHealthResult(
+    Guid SubscriptionId,
+    string SourceRepository,
+    string TargetRepository,
+    string TargetBranch,
+    string ChannelName,
+    bool IsStale,
+    int BuildsBehind,
+    int? CommitsBehind, // NEW FIELD
+    int? LastAppliedBuildId,
+    DateTimeOffset? LastAppliedDate,
+    int? LatestBuildId,
+    DateTimeOffset? LatestBuildDate,
+    string? Error = null
+);
+```
+
+### 5. MCP Tool Display Update
+
+**File:** `src/MaestroTool.Core/MaestroMcpTools.cs` (line 210)
+
+```csharp
+// Update display logic to prefer CommitsBehind when available
+var status = r.IsStale 
+    ? (r.CommitsBehind.HasValue 
+        ? $"⚠️ STALE ({r.CommitsBehind} commits behind)" 
+        : $"⚠️ STALE (~{r.BuildsBehind} builds behind)")
+    : "✅ Current";
+
+// Add note if BAR ID arithmetic was used
+if (r.IsStale && !r.CommitsBehind.HasValue)
+    sb.AppendLine($"  Note: Using BAR build count (approximate)");
+```
+
+### 6. DI Setup
+
+**File:** `src/MaestroTool.Mcp/Program.cs`
+
+```csharp
+// Add HttpClientFactory
+builder.Services.AddHttpClient();
+
+// Register GitHub client (optional, graceful degradation if not registered)
+builder.Services.AddSingleton<IGitHubApiClient, GitHubApiClient>();
+```
+
+## Dependencies
+
+- **Microsoft.Extensions.Http** (already in project via transitive deps from ASP.NET Core)
+- **System.Text.Json** (already in project)
+- No new package references required
+
+## Risks & Tradeoffs
+
+### Risks
+
+1. **GitHub API rate limits:** Anonymous access = 60 req/hour. For typical usage (single `subscription_health` call with ~10 VMR subscriptions), this is fine. Rate limit errors would fall back to BAR ID arithmetic.
+2. **Network failures:** GitHub API downtime would degrade to BAR ID arithmetic. Acceptable because tool remains functional.
+3. **Commit SHAs not found:** If either build's commit SHA is invalid/deleted, GitHub returns 404. Falls back to BAR ID arithmetic.
+
+### Tradeoffs
+
+- **Slightly slower first call:** Adds ~200-500ms per VMR subscription (GitHub API latency). Mitigated by:
+  - Caching (build lookups already cached at LongTtl)
+  - Only applies to VMR subscriptions (dotnet/dotnet → X)
+  - Parallel execution if multiple VMR subs exist
+- **More moving parts:** Introduces HTTP client dependency. Mitigated by:
+  - Using built-in `IHttpClientFactory` (standard .NET pattern)
+  - Optional dependency in service layer (doesn't break existing tests)
+  - Clear fallback behavior (BAR ID arithmetic, visible to user)
+
+## Testing Strategy
+
+1. **Unit tests for GitHubApiClient:**
+   - Mock HttpClient with HttpMessageHandler
+   - Test successful compare (ahead_by, behind_by, status)
+   - Test 404 (commit not found) → returns null
+   - Test 500/timeout → returns null
+
+2. **Integration test for GetSubscriptionHealthAsync:**
+   - Mock GitHub client to return specific commit distances
+   - Verify CommitsBehind field is populated for VMR subscriptions
+   - Verify BuildsBehind fallback for non-VMR subscriptions
+   - Verify graceful degradation when GitHub client is null
+
+3. **Manual smoke test:**
+   - Run `maestro_subscription_health` for dotnet/dotnet
+   - Verify commit distance matches `Get-CodeflowStatus.ps1` output
+   - Test with GitHub API unavailable (network disconnect) → verify BAR ID fallback
+
+## Scope of Change
+
+### Files Modified
+- `src/MaestroTool.Core/MaestroService.cs` (~30 lines: constructor, GetSubscriptionHealthAsync logic, IsVmrRepository helper, record update)
+- `src/MaestroTool.Core/MaestroMcpTools.cs` (~5 lines: display logic)
+- `src/MaestroTool.Mcp/Program.cs` (~2 lines: DI registration)
+
+### Files Added
+- `src/MaestroTool.Core/IGitHubApiClient.cs` (~15 lines)
+- `src/MaestroTool.Core/GitHubApiClient.cs` (~80 lines)
+- `src/MaestroTool.Tests/GitHubApiClientTests.cs` (~150 lines)
+- `src/MaestroTool.Tests/MaestroServiceCommitDistanceTests.cs` (~100 lines)
+
+**Total:** ~380 lines added/modified across 7 files
+
+## Questions for Team
+
+1. **Scope decision:** Should this fix also apply to `maestro_backflow_status` tool? (Currently only fixing `subscription_health`)
+2. **Display format:** Prefer "33 commits behind" or "33 VMR commits behind" to disambiguate from BAR builds?
+3. **Fallback messaging:** Should we surface GitHub API errors in the tool output or only log to stderr?
+4. **Future work:** Should we add GitHub auth support (via PAT) for higher rate limits, or is anonymous sufficient?
+
+## Commit Message Draft
+
+```
+Fix #4: Add VMR commit distance to subscription health
+
+Replace BAR build ID arithmetic with GitHub compare API for VMR
+subscriptions (dotnet/dotnet → X). For a dotnet/runtime backflow
+scenario, this changes from "566 builds behind" (misleading) to
+"33 commits behind" (accurate).
+
+- Add IGitHubApiClient + HttpClient-based implementation
+- Update GetSubscriptionHealthAsync to compute CommitsBehind for VMR
+- Update SubscriptionHealthResult record with CommitsBehind field
+- Update MCP tool display to prefer commit distance when available
+- Graceful fallback to BAR ID arithmetic if GitHub API unavailable
+- Add unit and integration tests
+
+Fixes: https://github.com/lewing/maestro.mcp/issues/4
+
+Co-authored-by: Copilot <[email scrubbed]>
+```
+
+## Timeline Estimate
+
+- **Implementation:** 3-4 hours
+- **Testing:** 2 hours
+- **Code review + iteration:** 1-2 hours
+- **Total:** 6-8 hours (1 work day)
+
+
+---
+
+# GitHub Commit Distance Test Coverage (Issue #4)
+
+**Date**: 2026-02-20  
+**Author**: Amos (Tester)  
+**Status**: Complete
+
+## Summary
+
+Wrote 7 comprehensive tests for the GitHub Compare API integration that adds real commit distance to VMR subscription health. All tests pass. Test coverage validates the feature's behavior across all edge cases.
+
+## Tests Added
+
+1. **VmrSubscription_WithGitHubClient_ReturnsCommitsBehind** — Happy path: VMR subscription with working GitHub client returns accurate commit distance (33 commits).
+
+2. **VmrSubscription_GitHubClientReturnsNull_FallsBackToBuildsBehind** — GitHub API failure: When Compare API returns null, `CommitsBehind` is null but `BuildsBehind` (approximate) still works.
+
+3. **NonVmrSubscription_CommitsBehindIsNull** — Non-VMR source repo (dotnet/runtime): Even with GitHub client available, `CommitsBehind` is null. Verifies GitHub client is never called for non-VMR repos.
+
+4. **NullGitHubClient_CommitsBehindIsNull** — Optional dependency: VMR subscription works without GitHub client. `BuildsBehind` still computed, `CommitsBehind` is null.
+
+5. **VmrSubscription_UpToDate_CommitsBehindIsNull** — Current subscriptions: When subscription is NOT stale, `CommitsBehind` is null (not computed). GitHub client never called.
+
+6. **GitHubCompareResult_RecordEquality** — Record validation: Ensures the new `GitHubCompareResult` record works correctly.
+
+7. **SubscriptionHealthResult_CommitsBehind_DefaultsToNull** — Backward compatibility: Existing code without `CommitsBehind` parameter still works (defaults to null).
+
+## Key Design Decisions Validated
+
+### VMR-Only Feature
+The GitHub Compare API is ONLY called when:
+1. Service has non-null `IGitHubApiClient`
+2. Source repository is VMR ("github.com/dotnet/dotnet")
+3. Subscription is stale (last applied ≠ latest)
+4. Both builds have non-empty commit SHAs
+
+This is correct — commit distance is most valuable for VMR backflow tracking, not general subscription health.
+
+### Graceful Degradation
+When GitHub API fails (returns null), the service doesn't throw or corrupt the health result. It simply leaves `CommitsBehind` as null and returns the approximate `BuildsBehind` (ID diff). This is good — the feature is additive, not breaking.
+
+### Backward Compatibility
+The `CommitsBehind` field is optional (`int? CommitsBehind = null`) on `SubscriptionHealthResult`. Existing code that constructs health results without this field continues to work. Tests confirm this.
+
+## Test Pattern Established
+
+### CreateBuild Helper Extension
+Extended `CreateBuild` to accept optional `commit` parameter (defaults to "abc123"). Build's `Commit` property is read-only and set via constructor, not `with` syntax.
+
+```csharp
+private static Build CreateBuild(int id = 100, string? gitHubRepo = null, DateTimeOffset? date = null, string? commit = null) =>
+    new(id, date ?? DateTimeOffset.UtcNow, staleness: 0, released: false, stable: true,
+        commit: commit ?? "abc123", channels: new List<Channel>(), assets: new List<Asset>(),
+        dependencies: new List<BuildRef>(), incoherencies: new List<BuildIncoherence>())
+    {
+        GitHubRepository = gitHubRepo ?? "https://github.com/dotnet/runtime"
+    };
+```
+
+### Mock GitHub Client Pattern
+```csharp
+var mockGitHub = Substitute.For<IGitHubApiClient>();
+mockGitHub.CompareCommitsAsync("dotnet", "dotnet", "abc123", "def456", Arg.Any<CancellationToken>())
+    .Returns(new GitHubCompareResult(AheadBy: 33, BehindBy: 0, Status: "ahead", TotalCommits: 33));
+
+var serviceWithGitHub = new MaestroService(_client, _cache, mockGitHub);
+```
+
+### Negative Assertions for Untaken Paths
+Tests verify GitHub client is NOT called for non-VMR subscriptions:
+```csharp
+await mockGitHub.DidNotReceive().CompareCommitsAsync(
+    Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+```
+
+## Edge Cases Covered
+
+✅ GitHub API returns valid result  
+✅ GitHub API returns null (failure)  
+✅ Non-VMR subscription (GitHub client not used)  
+✅ No GitHub client provided (null)  
+✅ Subscription is current (not stale)  
+✅ Record backward compatibility  
+
+## Future Test Considerations
+
+### NOT Tested (Requires Integration Testing)
+- **GitHubApiClient HTTP behavior**: The actual HTTP client implementation (`GitHubApiClient.CompareCommitsAsync`) is not unit tested. This is acceptable — HTTP clients are hard to unit test and better suited for integration tests.
+- **GitHub API rate limiting**: How the system behaves under rate limit errors (429 responses). This is not mocked in unit tests.
+- **Partial repository URLs**: Edge cases like "dotnet/dotnet" without "https://" or "github.com/dotnet/dotnet.git" with ".git" suffix. The `ParseGitHubUrl` helper handles these, but not explicitly tested.
+
+These gaps are acceptable for the feature's scope. The unit tests validate the business logic (when to call GitHub, how to handle results). Integration tests or manual testing can validate HTTP behavior.
+
+## Recommendation
+
+**APPROVED FOR MERGE** — Test coverage is comprehensive for the feature scope. All 104 tests pass. The GitHub commit distance feature is well-tested and ready for production.
+
+
+---
+
+### 2026-02-20: CLI architecture — ConsoleAppFramework integration
+
+**By:** Holden  
+**Date:** 2026-02-20  
+**Status:** Proposed
+
+**What:** Architecture for adding CLI commands following hlx pattern from helix.mcp  
+**Why:** Users want `mstro` to work as both CLI tool and MCP server. Current implementation is MCP-only.
+
+## Overview
+
+This document defines the architecture for adding ConsoleAppFramework CLI commands to `mstro`, transforming it from MCP-only to dual-mode (CLI + MCP). The design follows the established pattern from `helix.mcp` (hlx).
+
+## Key Design Decisions
+
+### 1. Program.cs Refactor
+
+**Current state (MCP-only):**
+```csharp
+var builder = Host.CreateApplicationBuilder(args);
+// Register services
+builder.Services.AddMcpServer(...).WithStdioServerTransport()...;
+await builder.Build().RunAsync();
+```
+
+**New state (dual-mode):**
+```csharp
+// DI setup (shared by both CLI and MCP)
+var services = new ServiceCollection();
+services.AddSingleton<IMaestroApiClient>(...);
+services.AddSingleton<CacheService>();
+services.AddSingleton<MaestroService>();
+services.AddSingleton<IGitHubApiClient>(...);
+services.AddSingleton(new MaestroToolOptions { ... });
+
+// Build provider for ConsoleAppFramework
+ConsoleApp.ServiceProvider = services.BuildServiceProvider();
+
+// Create app with Commands class
+var app = ConsoleApp.Create();
+app.Add<Commands>();
+
+// Default to MCP if no args
+app.Run(args.Length == 0 ? ["mcp"] : args);
+```
+
+**Rationale:**
+- `ConsoleApp.ServiceProvider` makes DI available to all commands via constructor injection
+- `args.Length == 0 ? ["mcp"] : args` ensures backwards compatibility — no args = MCP mode
+- The `[Command("mcp")]` handler in `Commands` creates a SEPARATE `Host.CreateApplicationBuilder()` for MCP hosting (not in the main ConsoleApp DI)
+
+### 2. Commands Class Design
+
+**Single class:** `Commands.cs` in `MaestroTool` project  
+**Pattern:** Like hlx, all commands in one class for simplicity
+
+**Constructor injection:**
+```csharp
+public class Commands
+{
+    private readonly MaestroService _service;
+    private readonly CacheService _cache;
+    
+    public Commands(MaestroService service, CacheService cache)
+    {
+        _service = service;
+        _cache = cache;
+    }
+    
+    [Command("mcp")]
+    public async Task McpAsync()
+    {
+        // Create SEPARATE Host.CreateApplicationBuilder for MCP
+        var builder = Host.CreateApplicationBuilder();
+        builder.Services.AddSingleton(_service);
+        builder.Services.AddSingleton(_cache);
+        builder.Services.AddMcpServer(...).WithStdioServerTransport()...;
+        await builder.Build().RunAsync();
+    }
+    
+    [Command("subscriptions")]
+    public async Task SubscriptionsAsync(
+        string? sourceRepository = null,
+        string? targetRepository = null,
+        ...)
+    {
+        // CLI implementation
+    }
+}
+```
+
+**Rationale:**
+- Single-class keeps navigation simple for 17 commands
+- Constructor injection reuses existing services
+- MCP command creates its own host to keep separation clean
+
+### 3. CLI Command Mapping
+
+Map each MCP tool name to CLI command (remove `maestro_` prefix, convert underscore to space):
+
+| MCP Tool Name                    | CLI Command                  | Notes |
+|----------------------------------|------------------------------|-------|
+| `maestro_subscriptions`          | `mstro subscriptions`        | |
+| `maestro_subscription`           | `mstro subscription`         | Requires subscription ID |
+| `maestro_latest_build`           | `mstro latest-build`         | Kebab-case for consistency |
+| `maestro_build`                  | `mstro build`                | |
+| `maestro_channels`               | `mstro channels`             | |
+| `maestro_default_channels`       | `mstro default-channels`     | |
+| `maestro_subscription_health`    | `mstro subscription-health`  | |
+| `maestro_build_freshness`        | `mstro build-freshness`      | |
+| `maestro_trigger_subscription`   | `mstro trigger-subscription` | Requires auth |
+| `maestro_trigger_daily_update`   | `mstro trigger-daily-update` | Requires auth |
+| `maestro_clear_cache`            | `mstro cache clear`          | Grouped under cache |
+| `maestro_codeflow_prs`           | `mstro codeflow-prs`         | |
+| `maestro_tracked_pr`             | `mstro tracked-pr`           | |
+| `maestro_backflow_status`        | `mstro backflow-status`      | |
+| `maestro_subscription_history`   | `mstro subscription-history` | |
+| `maestro_build_graph`            | `mstro build-graph`          | |
+| `maestro_flow_graph`             | `mstro flow-graph`           | |
+| (new)                            | `mstro cache status`         | Show cache stats |
+
+**Naming conventions:**
+- Use kebab-case for multi-word commands (matches hlx pattern: `hlx job-logs`)
+- Remove `maestro_` prefix (redundant in CLI context)
+- Group cache operations: `mstro cache clear`, `mstro cache status`
+
+### 4. Output Format Strategy
+
+**Human-readable by default:**
+```bash
+$ mstro subscriptions --target-repository https://github.com/dotnet/runtime
+Found 23 subscriptions to dotnet/runtime:
+  - dotnet/roslyn → runtime/main (.NET 10 RC1)
+  - dotnet/sdk → runtime/release/10.0-rc1 (.NET 10 RC1)
+  ...
+```
+
+**--json flag for structured output:**
+```bash
+$ mstro subscriptions --json
+[{"id": "...", "sourceRepository": "...", ...}]
+```
+
+**Implementation pattern:**
+```csharp
+[Command("subscriptions")]
+public async Task SubscriptionsAsync(
+    string? sourceRepository = null,
+    string? targetRepository = null,
+    bool json = false)
+{
+    var result = await _service.GetSubscriptionsAsync(sourceRepository, targetRepository);
+    
+    if (json)
+    {
+        Console.WriteLine(JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
+    }
+    else
+    {
+        Console.WriteLine($"Found {result.Count} subscription(s):");
+        foreach (var sub in result)
+        {
+            Console.WriteLine($"  - {sub.SourceRepository} → {sub.TargetRepository} ({sub.Channel?.Name})");
+        }
+    }
+}
+```
+
+**Rationale:**
+- Human output is scannable, matches user expectations for CLI tools
+- `--json` flag provides machine-parseable output for scripting
+- This matches hlx pattern exactly
+
+### 5. Cache Commands
+
+**Cache clear:**
+```bash
+$ mstro cache clear
+Cache cleared successfully
+```
+
+**Cache status:**
+```bash
+$ mstro cache status
+Cache location: ~/.mstro/cache.db
+Database size: 2.3 MB
+Entry count: 47 entries
+Oldest entry: 2026-02-18 14:23:01 UTC
+Newest entry: 2026-02-20 09:15:47 UTC
+```
+
+**Implementation:**
+- `cache clear` → calls `_cache.Clear()`
+- `cache status` → queries SQLite for row count, file size, min/max timestamps
+- Both follow hlx pattern of grouped cache commands
+
+### 6. MCP Default Mode
+
+**Behavior:**
+```bash
+$ mstro                # No args → MCP server mode
+$ mstro subscriptions  # Args provided → CLI mode
+```
+
+**Implementation:** `app.Run(args.Length == 0 ? ["mcp"] : args)`
+
+**Rationale:**
+- Backwards compatibility — existing MCP integrations don't break
+- Explicit `mstro mcp` also works for clarity
+- Users can choose CLI or MCP without environment variables
+
+### 7. Version Bump
+
+**Current:** 0.6.2  
+**Proposed:** 0.7.0
+
+**Rationale:**
+- CLI feature is a significant capability addition (minor version bump)
+- Not breaking changes to existing MCP surface (not 1.0.0)
+- Follows semantic versioning
+
+## Required Changes
+
+### Files to modify:
+1. **Program.cs** — Refactor to ConsoleAppFramework pattern
+2. **MaestroTool.csproj** — Add ConsoleAppFramework package, bump version to 0.7.0
+
+### Files to create:
+3. **Commands.cs** — New class with all 18 commands (17 MCP + cache status)
+
+### Dependencies to add:
+- `ConsoleAppFramework` (latest stable)
+
+## Implementation Notes
+
+### Parameter Mapping
+- MCP tool parameters → ConsoleAppFramework command parameters (same names)
+- Positional args: `[Argument]` attribute for required params
+- Named params: optional method parameters with defaults
+- Example:
+  ```csharp
+  [Command("subscription")]
+  public async Task SubscriptionAsync(
+      [Argument] string subscriptionId,  // Positional (required)
+      bool json = false,                 // Named (optional)
+      bool noCache = false)              // Named (optional)
+  ```
+
+### Error Handling
+- CLI commands should catch exceptions and print user-friendly messages
+- Example:
+  ```csharp
+  try {
+      var result = await _service.GetSubscriptionAsync(...);
+      // Display result
+  }
+  catch (Exception ex) {
+      Console.Error.WriteLine($"Error: {ex.Message}");
+      return 1; // Non-zero exit code
+  }
+  ```
+
+### Auth Validation
+- Destructive commands (trigger-subscription, trigger-daily-update) should check auth level before attempting
+- Example:
+  ```csharp
+  var client = _service._client; // Internal access or add AuthLevel property
+  if (client.AuthLevel == AuthLevel.Anonymous) {
+      Console.Error.WriteLine("Authentication required. Run 'darc authenticate' or set MAESTRO_BAR_TOKEN.");
+      return 1;
+  }
+  ```
+
+## Testing Strategy
+
+1. **Unit tests:** Add tests for Commands class methods (mock MaestroService)
+2. **Integration tests:** End-to-end CLI invocations with real service
+3. **MCP compatibility:** Ensure `mstro` (no args) still works as MCP server
+4. **Smoke test commands:**
+   - `mstro subscriptions --json`
+   - `mstro channels`
+   - `mstro cache status`
+   - `mstro mcp` (explicit)
+
+## Open Questions
+
+1. **Help text:** Should we add `[CommandHelp]` attributes to commands for better `--help` output?
+   - **Recommendation:** Yes, add brief descriptions matching MCP tool descriptions
+   
+2. **Color output:** Should human-readable output use ANSI colors (like `dotnet` CLI)?
+   - **Recommendation:** No for v0.7.0 — keep output simple, add in v0.8.0 if requested
+   
+3. **Progress indicators:** For long-running operations (flow-graph), show progress?
+   - **Recommendation:** No for v0.7.0 — most operations are fast (<2s)
+
+## References
+
+- Helix.mcp reference: https://github.com/lewing/helix.mcp
+- ConsoleAppFramework docs: https://github.com/Cysharp/ConsoleAppFramework
+
+
+---
+
+# Threat Model: GitHub Auth Cascade (v0.6.0)
+
+**Author:** Holden (Lead / Architect)  
+**Date:** 2025-07-16  
+**Scope:** `GitHubApiClient.cs` — 3-tier GitHub auth cascade and Compare API integration  
+**Framework:** STRIDE-informed analysis  
+**Context:** Read-only MCP tool server, calls GitHub Compare API for public repos (dotnet/dotnet). Runs as MCP subprocess hosted by Copilot CLI.
+
+---
+
+## Summary
+
+The GitHub auth cascade is **reasonably secure for its scope** — a single-purpose, read-only tool calling one public API endpoint. The most significant finding is the subprocess `WaitForExit()` with no timeout (Medium severity, fix now). The rest are low-severity items appropriate for a dev-local tool, with two "fix later" items worth addressing when time allows.
+
+**Findings:** 9 total — 0 Critical, 0 High, 2 Medium, 4 Low, 3 Info
+
+---
+
+## Findings
+
+### GH-T1: Subprocess Hang — `WaitForExit()` with No Timeout
+
+- **Category:** Denial of Service  
+- **Severity:** Medium  
+- **Description:** `process.WaitForExit()` on line 48 has no timeout. If `gh auth token` hangs (broken pipe, stuck credential helper, network timeout in gh's own auth flow), the entire MCP server startup blocks indefinitely. The static initializer makes this worse — the `HttpClient` is created during type loading, so a hang here freezes the first request and potentially all subsequent ones.
+- **Mitigation:** Add `process.WaitForExit(5000)` (5-second timeout). If it doesn't exit in time, kill the process and fall through to anonymous. Also consider `process.StartInfo.RedirectStandardError = true` to capture any error output for diagnostics.
+- **Priority:** **Fix now** — easy fix, prevents a real startup hang scenario.
+
+### GH-T2: PATH-Based Executable Resolution
+
+- **Category:** Tampering / Elevation of Privilege  
+- **Severity:** Low  
+- **Description:** `FileName = "gh"` resolves via the system PATH. A malicious `gh` binary earlier in PATH could intercept the call and harvest the intent (though the subprocess output — a token — flows back to *our* process, not the other way). In the reverse direction, a trojan `gh` could return a malicious token, but since we only use it as a Bearer token against `api.github.com`, the worst outcome is auth failure.
+- **Mitigation:** Accepted. This is the standard pattern for CLI tool integration. The attack requires prior machine compromise (modifying PATH or dropping a binary), at which point the attacker already has access to `gh auth token` directly. No action needed.
+- **Priority:** **Accept**
+
+### GH-T3: Token Not Logged — Confirmed Safe
+
+- **Category:** Information Disclosure  
+- **Severity:** Info  
+- **Description:** The code correctly logs only the *method* of authentication ("using GITHUB_TOKEN env var", "using gh CLI token") to stderr, never the token value itself. The token variable stays in local scope and is only assigned to `DefaultRequestHeaders.Authorization`. No string interpolation includes the token.
+- **Mitigation:** None needed — this is correct behavior.
+- **Priority:** **Accept** (already handled correctly)
+
+### GH-T4: Static HttpClient — Token Lifetime and Rotation
+
+- **Category:** Spoofing / Information Disclosure  
+- **Severity:** Medium  
+- **Description:** The `HttpClient` is created once in a static initializer and lives for the process lifetime. If the underlying token is rotated (GITHUB_TOKEN env var changes, `gh auth` re-authenticates), the MCP server continues using the stale token until restarted. This isn't a *leak* risk, but it means: (1) Token revocation doesn't take effect until restart. (2) If the initial auth fails and falls back to anonymous, the server stays anonymous forever — no retry.
+- **Mitigation:** For this tool's scope (short-lived MCP subprocess, restarted per session), this is acceptable. Document that token changes require server restart. For longer-lived deployments, consider a `DelegatingHandler` that refreshes the token lazily.
+- **Priority:** **Fix later** — document the restart requirement. Consider lazy refresh if the server becomes long-lived.
+
+### GH-T5: URL Construction — Limited SSRF Surface
+
+- **Category:** Spoofing / Server-Side Request Forgery  
+- **Severity:** Low  
+- **Description:** The Compare API URL is constructed via string interpolation: `$"https://api.github.com/repos/{owner}/{repo}/compare/{baseSha}...{headSha}"`. The parameters `owner`, `repo`, `baseSha`, `headSha` come from *internal* data — specifically `MaestroService.ParseGitHubUrl()` which parses stored repository URLs, and `Build.Commit` values from the Maestro/BAR API. These are **not user-supplied MCP tool parameters**. The `IsVmrRepository` guard further limits this to URLs containing `github.com/dotnet/dotnet`. A path-traversal attempt in a SHA (e.g., `../../other-endpoint`) would produce a 404 from GitHub's API routing, not an SSRF.
+- **Mitigation:** The existing guardrails (ParseGitHubUrl validates `github.com` host, IsVmrRepository restricts to dotnet/dotnet, parameters come from trusted BAR API data) are sufficient. For defense-in-depth, could add SHA format validation (`^[0-9a-f]{7,40}$`), but this is a minor hardening.
+- **Priority:** **Fix later** — add SHA regex validation as defense-in-depth.
+
+### GH-T6: Error Message Information Disclosure
+
+- **Category:** Information Disclosure  
+- **Severity:** Low  
+- **Description:** Error messages include `response.StatusCode` and `owner/repo` (line 76), and `ex.Message` for exceptions (line 93). The status code and owner/repo are not sensitive — they're public repo identifiers. The `ex.Message` could theoretically include internal details (e.g., DNS resolution failures revealing internal network topology), but since the only target is `api.github.com`, this is negligible.
+- **Mitigation:** Accepted. The error messages go to stderr (not to the MCP tool response — the method returns `null` on failure). The MaestroService caller handles `null` gracefully by omitting the `CommitsBehind` field.
+- **Priority:** **Accept**
+
+### GH-T7: Token Scope — Broader Than Needed
+
+- **Category:** Elevation of Privilege  
+- **Severity:** Low  
+- **Description:** `GITHUB_TOKEN` and `gh auth token` typically return tokens with broader scopes than read-only public repo access (e.g., `repo`, `write:packages`). This tool only needs `public_repo` read access (or no token at all for public repos). If the token leaked, it could be used for more than compare API calls.
+- **Mitigation:** Accepted for now. We can't control the user's token scope — this is inherent to reusing ambient credentials. The token is handled safely (not logged, not persisted, not forwarded). Document that users can create a fine-grained PAT with only `public_repo:read` if they want minimal scope.
+- **Priority:** **Accept** — document recommendation for fine-grained PATs in README.
+
+### GH-T8: Rate Limiting / DoS via MCP
+
+- **Category:** Denial of Service  
+- **Severity:** Info  
+- **Description:** The Compare API is called inside `GetSubscriptionHealthAsync`, which iterates subscriptions. A target repository with many subscriptions could trigger many GitHub API calls. However: (1) The `IsVmrRepository` guard limits calls to dotnet/dotnet subscriptions only. (2) Results are cached via `CacheService` (5-minute TTL on subscription health). (3) GitHub's own rate limits (5000 req/hr authenticated, 60 req/hr anonymous) provide natural throttling. (4) The MCP server is single-user (subprocess per Copilot session).
+- **Mitigation:** None needed. The existing caching and GitHub rate limits are sufficient. The LLM caller has no incentive to DoS its own tool.
+- **Priority:** **Accept**
+
+### GH-T9: MCP Trust Boundary — Subprocess Output Not Sanitized
+
+- **Category:** Tampering  
+- **Severity:** Info  
+- **Description:** The `gh auth token` subprocess output is `.Trim()`-ed and used as a Bearer token. If a compromised `gh` binary returned output with embedded newlines or HTTP header injection characters, the `AuthenticationHeaderValue` constructor would reject malformed values (it validates the token parameter). The `ReadToEnd().Trim()` pattern is safe for single-line token output.
+- **Mitigation:** None needed. `AuthenticationHeaderValue` provides validation. The `.Trim()` handles trailing newlines from stdout.
+- **Priority:** **Accept**
+
+---
+
+## Architecture Assessment
+
+### What's Done Right
+
+1. **Token never logged** — Only auth method names go to stderr.
+2. **Graceful degradation** — Each auth tier falls through to the next on failure. Catch-all around subprocess prevents crashes.
+3. **Scoped API surface** — Only one endpoint (`/repos/{o}/{r}/compare/{b}...{h}`), read-only, public repos only.
+4. **Input source is trusted** — owner/repo/SHA come from BAR API responses, not from MCP tool parameters.
+5. **stderr for diagnostics** — Auth logging goes to stderr, which is the correct channel for MCP servers (doesn't pollute tool responses).
+
+### What Should Be Improved
+
+| Priority | Finding | Action |
+|----------|---------|--------|
+| **Fix now** | GH-T1: `WaitForExit()` no timeout | Add 5-second timeout, kill on hang |
+| **Fix later** | GH-T4: Static token, no rotation | Document restart requirement |
+| **Fix later** | GH-T5: SHA format validation | Add `^[0-9a-f]{7,40}$` regex |
+| **Accept** | GH-T2, T3, T6, T7, T8, T9 | Current implementation is appropriate |
+
+---
+
+## Decision
+
+The GitHub auth cascade is **approved for v0.6.0** with one P1 fix required:
+
+- **GH-T1 (subprocess timeout)** should be fixed before the next release. Assign to Naomi.
+- **GH-T4 and GH-T5** go on the backlog as P2 hardening items.
+- All other findings are accepted — the risk profile is appropriate for a single-user, read-only, dev-local MCP tool.
+
+**Decided by:** Holden  
+**Participants:** Holden (analysis), Larry (requested)
+
+
+---
+
+### 2026-02-20: CLI Implementation — ConsoleAppFramework Integration Complete
+
+**By:** Naomi  
+**Date:** 2026-02-20  
+**Status:** Implemented
+
+**What:** Implemented CLI commands for mstro using ConsoleAppFramework following hlx pattern  
+**Why:** Users want `mstro` to work as both CLI tool and MCP server
+
+## Implementation Summary
+
+Successfully refactored `mstro` from MCP-only to dual-mode (CLI + MCP) following the architecture designed by Holden.
+
+### Changes Made
+
+1. **MaestroTool.csproj**
+   - Added `ConsoleAppFramework` v5.* package reference
+   - Bumped version from 0.6.2 → 0.7.0
+
+2. **Program.cs Refactor**
+   - Replaced Host-based setup with `ConsoleApp.Create()` pattern
+   - Shared DI registrations between CLI and MCP modes
+   - Added `ConsoleApp.ServiceProvider = services.BuildServiceProvider()`
+   - Default behavior: no args → MCP mode, args provided → CLI mode
+   - MCP command creates separate Host for MCP server isolation
+
+3. **Commands Class** (all in Program.cs like hlx)
+   - 18 CLI commands implemented (17 MCP tools + cache status)
+   - Constructor injection: `MaestroService`, `CacheService`
+   - Human-readable output by default with `--json` flag for structured output
+   - Common parameters: `json`, `noCache` on all commands
+   - Positional arguments use `[Argument]` attribute
+   - Optional parameters map automatically to `--option-name` flags
+
+### Command Mapping
+
+| CLI Command | Service Method | Notes |
+|-------------|---------------|-------|
+| `mstro` (no args) | — | Starts MCP server (backwards compatible) |
+| `mstro mcp` | — | Explicit MCP mode |
+| `mstro subscriptions` | `GetSubscriptionsAsync` | Filters: source, target, channel, branch |
+| `mstro subscription <id>` | `GetSubscriptionAsync` | Includes health check |
+| `mstro latest-build <repo>` | `GetLatestBuildAsync` | Optional channel filter |
+| `mstro build <id>` | `GetBuildAsync` | — |
+| `mstro channels` | `GetChannelsAsync` | — |
+| `mstro default-channels` | `GetDefaultChannelsAsync` | Filters: repo, branch |
+| `mstro subscription-health <repo>` | `GetSubscriptionHealthAsync` | Shows commits/builds behind |
+| `mstro build-freshness <channel>` | `GetBuildFreshnessAsync` | aka.ms URL resolution |
+| `mstro trigger-subscription <id> <build>` | `TriggerSubscriptionAsync` | Requires auth, optional --force |
+| `mstro trigger-daily-update` | `TriggerDailyUpdateAsync` | Requires auth |
+| `mstro codeflow-prs` | `GetTrackedPullRequestsAsync` | Optional channel filter |
+| `mstro tracked-pr <id>` | `GetTrackedPullRequestBySubscriptionIdAsync` | — |
+| `mstro backflow-status <vmr-build-id>` | `GetBackflowStatusAsync` | — |
+| `mstro subscription-history <id>` | `GetSubscriptionHistoryAsync` | Shows last 20 entries |
+| `mstro build-graph <id>` | `GetBuildGraphAsync` | — |
+| `mstro flow-graph <channel-id>` | `GetFlowGraphAsync` | Optional: days, includeArcade, etc. |
+| `mstro cache clear` | `CacheService.Clear()` | — |
+| `mstro cache status` | — | Shows cache location/stats |
+
+### Output Format Pattern
+
+**Human-readable (default):**
+```
+$ mstro channels
+Found 159 channel(s):
+
+- .NET 10 (ID: 4567)
+- .NET 10 RC1 (ID: 4568)
+...
+```
+
+**JSON (--json flag):**
+```
+$ mstro channels --json
+[
+  {
+    "id": 4567,
+    "name": ".NET 10",
+    ...
+  }
+]
+```
+
+### Parameter Patterns
+
+- **Positional:** `[Argument] string subscriptionId` → `mstro subscription abc-123`
+- **Optional:** `string? channelName = null` → `mstro subscriptions --channel-name ".NET 10"`
+- **Boolean:** `bool json = false` → `mstro subscriptions --json`
+- **No [Option] attributes needed** — ConsoleAppFramework v5 auto-maps parameters
+
+### Error Handling
+
+- Auth failures exit with code 1 and `🔒` error prefix
+- Invalid input exits with code 1 and user-friendly message to stderr
+- Service exceptions propagate (not caught at command level)
+- Progress messages go to stderr to keep stdout clean for JSON output
+
+### Key Learnings
+
+1. **ConsoleAppFramework v5 API change:** Earlier versions (v4) used `[Option]` attributes, but v5 auto-maps parameters by name. Parameters automatically become `--kebab-case` flags.
+
+2. **Separate DI for MCP:** The MCP command creates its own `Host.CreateApplicationBuilder()` with separate service registrations. This keeps MCP server lifecycle isolated from CLI command execution.
+
+3. **Backwards compatibility:** `args.Length == 0 ? ["mcp"] : args` ensures existing MCP integrations don't break.
+
+4. **IGitHubApiClient wiring:** Required explicit factory pattern in DI registration to ensure 3rd constructor parameter is injected into `MaestroService`.
+
+5. **Build verification:** 0 warnings, 0 errors. ConsoleAppFramework works with .NET 10 without issues.
+
+### Testing Plan
+
+1. **Manual smoke test:** Run each command with sample data
+2. **MCP compatibility:** Verify `mstro` (no args) still works as MCP server
+3. **JSON output:** Verify `--json` flag returns valid JSON on all commands
+4. **Auth gating:** Verify trigger commands fail gracefully when unauthenticated
+
+### Next Steps
+
+1. Update README.md with CLI usage examples
+2. Add unit tests for Commands class (mock MaestroService)
+3. Consider adding `--help` text for parameters (ConsoleAppFramework supports `[Description]` on params)
+4. Consider adding color output for human-readable mode (v0.8.0 feature)
+
+## Files Modified
+
+- `src/MaestroTool/MaestroTool.csproj` — Added ConsoleAppFramework, bumped version
+- `src/MaestroTool/Program.cs` — Refactored to dual-mode, added Commands class
+
+## Build Status
+
+✅ `dotnet build` succeeded — 0 warnings, 0 errors
+
+
+---
+
+# Decision: Fetch Full Build for Commit SHA When Null
+
+**Date:** 2025-02-20  
+**Author:** Naomi (Backend Developer)  
+**Status:** Implemented
+
+## Problem
+
+User feedback reported that `maestro_subscription_health` was still showing "591 builds behind" instead of "commits behind" for VMR subscriptions, even after the GitHub Compare API integration was added in v0.6.0.
+
+Root cause: The PCS subscription API returns embedded/summary `Build` objects in the `LastAppliedBuild` property. These embedded builds often have the `Commit` field as null/empty because the PCS API doesn't always serialize all fields for embedded objects. As a result, the GitHub Compare API code was being silently skipped due to the null check gating condition.
+
+## Decision
+
+When computing subscription health for VMR subscriptions:
+
+1. **Check if commit SHAs are null/empty BEFORE attempting GitHub compare**
+2. **Fetch full build objects using `GetBuildAsync(buildId)` when commit is missing**
+3. **Add defensive checks**: Only fetch if build ID > 0
+4. **Graceful fallback**: If full build fetch also returns null commit, fall back to builds-behind (BAR ID arithmetic)
+5. **Add diagnostic logging** to make debugging easier:
+   - `[maestro-mcp] Fetching full build {buildId} for commit SHA`
+   - `[maestro-mcp] Comparing commits {sha1}...{sha2} in {owner}/{repo}`
+
+## Implementation
+
+Modified `MaestroService.GetSubscriptionHealthAsync()` (lines 133-168):
+
+```csharp
+// For VMR subscriptions, use GitHub compare API for accurate commit distance
+if (_gitHubClient != null && IsVmrRepository(sub.SourceRepository))
+{
+    var parsedRepo = ParseGitHubUrl(sub.SourceRepository);
+    if (parsedRepo.HasValue)
+    {
+        // Fetch full build objects if commit SHAs are missing
+        var lastAppliedCommit = lastApplied.Commit;
+        var latestBuildCommit = latestBuild.Commit;
+
+        if (string.IsNullOrEmpty(lastAppliedCommit) && lastApplied.Id > 0)
+        {
+            Console.Error.WriteLine($"[maestro-mcp] Fetching full build {lastApplied.Id} for commit SHA");
+            var fullLastApplied = await GetBuildAsync(lastApplied.Id, noCache, cancellationToken);
+            lastAppliedCommit = fullLastApplied?.Commit;
+        }
+
+        if (string.IsNullOrEmpty(latestBuildCommit) && latestBuild.Id > 0)
+        {
+            Console.Error.WriteLine($"[maestro-mcp] Fetching full build {latestBuild.Id} for commit SHA");
+            var fullLatestBuild = await GetBuildAsync(latestBuild.Id, noCache, cancellationToken);
+            latestBuildCommit = fullLatestBuild?.Commit;
+        }
+
+        if (!string.IsNullOrEmpty(lastAppliedCommit) && !string.IsNullOrEmpty(latestBuildCommit))
+        {
+            var (owner, repo) = parsedRepo.Value;
+            Console.Error.WriteLine($"[maestro-mcp] Comparing commits {lastAppliedCommit}...{latestBuildCommit} in {owner}/{repo}");
+            var compareResult = await _gitHubClient.CompareCommitsAsync(
+                owner, repo, lastAppliedCommit, latestBuildCommit, cancellationToken);
+            
+            if (compareResult != null)
+            {
+                commitsBehind = compareResult.AheadBy;
+            }
+        }
+    }
+}
+```
+
+## Testing
+
+Added 3 comprehensive tests to verify the fix:
+
+1. **`SubscriptionHealth_FetchesFullBuildWhenLastAppliedCommitIsNull`**  
+   Tests that when `LastAppliedBuild.Commit` is null/empty, the service fetches the full build via `GetBuildAsync()` and successfully retrieves the commit SHA for GitHub compare.
+
+2. **`SubscriptionHealth_FetchesFullBuildWhenLatestBuildCommitIsNull`**  
+   Tests that when `latestBuild.Commit` is null/empty, the service fetches the full build and successfully uses it for GitHub compare.
+
+3. **`SubscriptionHealth_FallsBackToBuildsBehindWhenBothCommitsAreNull`**  
+   Tests that when BOTH builds have null commits (even after full build fetch), the service gracefully falls back to builds-behind without crashing.
+
+**Test discovery note:** The `CreateBuild` helper defaults `commit` parameter to `"abc123"` when `null` is passed. Tests must use empty string `""` to simulate missing commits.
+
+## Impact
+
+- **Minimal code changes**: Only modified the VMR commit distance calculation block in one method
+- **No breaking changes**: Graceful fallback preserves existing behavior when commits unavailable
+- **Performance**: Adds 0-2 additional PCS API calls per VMR subscription when commits are missing. Mitigated by cache layer (LongTtl for builds)
+- **User experience**: VMR subscriptions now correctly show "33 commits behind" instead of "591 builds behind"
+
+## Alternatives Considered
+
+1. **Always fetch full builds for all subscriptions**  
+   Rejected: Wasteful for non-VMR subscriptions and when commits are already populated
+
+2. **Use BackflowStatus API CommitDistance field**  
+   Rejected: Testing showed BackflowStatus API is unreliable (errors on multiple VMR builds)
+
+3. **Store full builds in subscription cache**  
+   Rejected: More complex, harder to maintain, unclear ownership of data transformation
+
+## Files Modified
+
+- `src/MaestroTool.Core/MaestroService.cs` — added full build fetch logic
+- `src/MaestroTool.Tests/MaestroServiceTests.cs` — added 3 new tests
+
+## Related
+
+- Issue #5: maestro_subscription_health reporting wrong commit count
+- Issue #4: Initial GitHub Compare API integration (v0.6.0)
+
+
+---
+
+### 2025-02-20: GitHub Commit Distance Implementation (Issue #4)
+**By:** Naomi
+**What:** Implemented `IGitHubApiClient` with 3-tier auth cascade (GITHUB_TOKEN env var → gh CLI → anonymous) to provide accurate commit distances for VMR subscriptions via GitHub's Compare API. Updated `maestro_subscription_health` tool to show "33 commits behind" for VMR subs instead of wildly inaccurate BAR build ID arithmetic ("~566 builds behind").
+**Why:** BAR build IDs are globally sequential across all repos (not per-repo), causing 17x error for VMR subscriptions. GitHub Compare API provides ground truth commit distance. Graceful degradation ensures feature works in all environments (anonymous 60 req/hr sufficient for typical use). Optional dependency injection pattern allows MaestroService to work with or without GitHub client.
+
+
+---
+
+### 2026-02-20: AzDO API client auth and interface design
+**By:** Holden (with input from Naomi, Amos)
+
+**What:**
+1. **Separate IAzDoApiClient interface** with Task<int?> GetCommitCountAsync(org, project, repo, baseSha, headSha, ct) — parallel to IGitHubApiClient, not unified.
+2. **Auth cascade**: AZDO_TOKEN env var → z account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 → anonymous. Token acquisition extracted into IAzDoTokenProvider for testability.
+3. **URL parsing**: ParseAzDoUrl returns (org, project, repo)?, handles both dev.azure.com/{org}/{project}/_git/{repo} and {org}.visualstudio.com/{project}/_git/{repo} legacy format.
+4. **Commit cap**: $top=1000, no pagination. Array length = commit count, capped at 1000.
+5. **Integration**: IAzDoApiClient? as optional 4th param to MaestroService constructor. Sibling lse if branch in GetSubscriptionHealthAsync.
+6. **Degradation**: Return 
+ull on any failure, log actionable stderr message. Existing null-handling in SubscriptionHealthResult covers fallback.
+
+**Why:**
+- Separate interface avoids lowest-common-denominator abstraction between APIs with different capabilities (GitHub compare is richer than AzDO commit listing).
+- Auth cascade mirrors the proven GitHubApiClient pattern. IAzDoTokenProvider extraction is the key addition — it isolates subprocess calls for testability and prevents CI flake from missing z CLI.
+- Optional constructor param guarantees backward compatibility: all existing tests and 3-arg call sites continue to work unchanged.
+- 1000-cap eliminates pagination complexity for an informational metric. If you're 1000+ commits behind, the exact number doesn't matter.
+- int? return type aligns directly with the existing CommitsBehind field on SubscriptionHealthResult, requiring no model changes.
+
+---
+
+### 2026-02-20: dotnet-replay Scoping Analysis (Issues #11, #12, #13)
+**By:** Holden (Lead Architect)
+**Status:** Complete — three issues scoped, ready for roadmap planning
+
+**What:** Architectural feasibility assessment for three dotnet-replay feature requests:
+- **Issue #11 (diff mode):** Medium effort (5–7 days) — Compare two eval runs side-by-side with turn alignment and tool call diffs
+- **Issue #12 (grep/search):** Small-Medium effort (3–4 days) — Search multiple transcripts with pattern matching and context
+- **Issue #13 (batch stats):** Small effort (2–3 days) — Aggregate stats across transcript batches with grouping and filtering
+
+**Why:**
+All three features are **architecturally feasible** and align well with dotnet-replay's existing codebase design (single-file .NET 10 app with pluggable format detection, modular rendering pipeline, comprehensive test coverage).
+
+**Recommended build order:** #13 → #12 → #11 (ascending complexity; #13 establishes glob utilities, #12 builds on them, #11 is fully standalone but most algorithmic)
+
+**Key architectural notes:**
+- Single-file design maintained — each feature is command dispatch + private functions reusing existing helpers
+- New test files in separate xUnit project (follow existing SummaryOutputTests.cs, EdgeCaseTests.cs pattern)
+- Shared utilities: glob expansion, turn extraction, format detection, JSON output (already exist or minimal additions)
+- No breaking changes to existing functionality or API surface
+
+---
+
+### 2026-02-20: dotnet-replay Stats Command Test Strategy
+**By:** Amos
+**Status:** Proposed
+
+**What:** Integration test strategy for the stats command (issue #13):
+- **Process-based integration tests**, not unit tests (dotnet-replay is single-file app with no public API surface)
+- **Programmatic JSON fixture generation** in 	estdata/stats/ with unique GUID-based filenames (no shared state, safe for parallel xUnit execution)
+- **25 tests** covering: basic aggregation (5), grouping (3), filtering (3), JSON output (covered in aggregation), edge cases (7), CI thresholds (3)
+- **Exit code testing** via RunStatsWithExitCode() helper for --fail-threshold CI integration
+- **No test cleanup** — GUID-based filenames prevent collisions; CI can clean 	estdata/ between runs
+
+**Why:**
+- Integration testing pattern matches existing dotnet-replay tests (SummaryOutputTests.cs, EdgeCaseTests.cs)
+- Programmatic fixtures are more maintainable than ~25 static JSON files
+- Graceful degradation on malformed input: skip unparseable files with warnings, process valid files
+- Unique GUID filenames safe for parallel test execution in xUnit
+
+**Implementation blockers:**
+The test file (StatsOutputTests.cs) is written but won't compile until Naomi implements:
+1. ExpandGlob() helper for glob pattern expansion (e.g., esults/*.json)
+2. ExtractStats() to parse Waza JSON and extract model/result/duration
+3. OutputStatsReport() to format and display aggregated stats
+4. FileStats class/record to hold per-file statistics
+5. Command-line arg parsing for: stats, --group-by, --filter-model, --filter-task, --fail-threshold
+
+---
+
+### 2026-02-22: Always pass base URI to PcsApiFactory
+**By:** Naomi (Backend Developer)
+**Date:** 2026-02-22
+**Status:** Implemented in v0.8.4
+**Issue:** #8
+
+**Context:** PcsApiFactory.GetAnonymous() (parameterless) crashes with UriFormatException because ProductConstructionServiceApiOptions is constructed without a base URI.
+
+**Decision:** Always use the aseUri overloads of PcsApiFactory:
+- PcsApiFactory.GetAnonymous(DefaultBaseUri) instead of PcsApiFactory.GetAnonymous()
+- PcsApiFactory.GetAuthenticated(DefaultBaseUri, ...) instead of PcsApiFactory.GetAuthenticated(...)
+
+The default base URI is https://maestro.dot.net, defined as a private const in MaestroApiClient.
+
+**Rationale:** The parameterless overloads rely on ProductConstructionServiceApiOptions having a default URI baked in, but it doesn't — it expects the caller to provide one. All three auth paths (BAR token, Entra ID, anonymous) must explicitly pass the URI.
+
+**Impact:**
+- MaestroApiClient.cs: 3 call sites updated
+- No API surface change — IMaestroApiClient is unchanged
+- Fixes the crash that prevented the MCP server from starting without auth credentials
+
+---
+
+### 2025-02-20: Extend commit distance to all GitHub-hosted repos
+**By:** Naomi (Backend Dev)
+**Date:** 2025-02-20
+**Status:** Implemented
+**Issue:** #6
+
+**Context:** The subscription_health tool computed accurate commit distance (via GitHub Compare API) only for VMR subscriptions (github.com/dotnet/dotnet). All other GitHub-hosted source repos fell back to BAR build ID arithmetic, which uses globally sequential IDs across all repos and wildly overstates staleness.
+
+**Decision:** Changed the gate in GetSubscriptionHealthAsync from IsVmrRepository() to a new IsGitHubRepository() helper.
+- IsGitHubRepository delegates to the existing ParseGitHubUrl which already handles any github.com URL
+- Kept IsVmrRepository — it may be useful for VMR-specific logic in the future
+- No changes needed to display logic — both MCP tools and CLI already handle CommitsBehind generically
+
+**Impact:** All GitHub-hosted source repos now get accurate "N commits behind" instead of inflated "~N builds behind". Non-GitHub repos (e.g., Azure DevOps) continue using BAR ID arithmetic as before.
+
+**Files changed:**
+- src/MaestroTool.Core/MaestroService.cs — gate change, new helper, comment update
+- src/MaestroTool/MaestroTool.csproj — version 0.7.0 → 0.7.1
+- src/MaestroTool/Program.cs — version string 0.7.0 → 0.7.1
+
+
+---
+
+### 2025-02-22: ModelContextProtocol SDK Upgrade to 1.0.0 Stable
+
+**By:** Naomi
+
+**What:** Upgraded ModelContextProtocol packages from 0.8.0-preview.1 to 1.0.0 stable across all projects (MaestroTool, MaestroTool.Mcp, MaestroTool.Core). Bumped project version from 0.10.0 to 0.11.0.
+
+**Why:** The MCP SDK reached 1.0.0 stable release, providing production-ready API stability guarantees. While 1.0.0 introduced several breaking changes (filter configuration split, collection interface changes, sealed McpClientHandlers, required Tool.Name), none affected this project's usage pattern. Our implementation only uses server-side APIs with `[McpServerToolType]` attribute on classes and `[McpServerTool(Name = "...")]` on methods, which remained stable. Upgrading now ensures we're on the supported release track with no deprecated preview dependencies.
+
+**Impact:**
+- All package references updated to `ModelContextProtocol 1.0.0` and `ModelContextProtocol.AspNetCore 1.0.0`
+- Build succeeds with 0 warnings, 0 errors
+- No code changes required — our MCP usage pattern is fully compatible
+- Server version strings updated to 0.11.0 in both MaestroTool/Program.cs and MaestroTool.Mcp/Program.cs
+- Test failures (124/135) are due to unrelated `/tmp` file permission issue with SetUnixFileMode, not MCP upgrade
+
+**Files Changed:**
+- src/MaestroTool/MaestroTool.csproj
+- src/MaestroTool.Mcp/MaestroTool.Mcp.csproj
+- src/MaestroTool.Core/MaestroTool.Core.csproj
+- src/MaestroTool/Program.cs (server version string)
+- src/MaestroTool.Mcp/Program.cs (server version string)
+
+
+---
+
+# MCP SDK 1.0 Feature Evaluation
+
+**Author:** Holden  
+**Date:** 2026-02-20  
+**Status:** Analysis  
+**SDK Version:** Currently on 1.0.0 (already upgraded from 0.8.0-preview.1)
+
+## Executive Summary
+
+The project is **already on SDK 1.0.0**. This analysis evaluates new features from the 0.8 → 1.0 upgrade path for practical benefit to maestro.mcp's architecture and use case (MCP server for Maestro/BAR dependency flow data).
+
+**Verdict:** Most new features don't apply or aren't worth adopting at this time. The SDK upgrade we've already done brings stability and bug fixes. The only feature worth future consideration is **structured tool output**, but not urgently.
+
+---
+
+## Feature Assessment
+
+### 1. Structured Tool Output (StructuredContent)
+
+**What it is:**  
+Tools can return strongly-typed objects instead of strings. The SDK auto-generates JSON schemas, enabling LLMs and clients to consume data programmatically with validation.
+
+**Current state:**  
+All 20 tools return `Task<string>` with formatted markdown text.
+
+**Should we adopt?**
+
+**PROBABLY NOT, at least not yet.** Here's why:
+
+**Cons:**
+- **Markdown is working well.** LLMs parse our current output without issues. The data is semi-structured (headers, lists, tables) and human-readable.
+- **Breaking change for consumers.** Skills and clients that consume our tools expect markdown-formatted strings. Switching to structured output would disrupt existing workflows.
+- **Not a pain point.** We haven't seen bugs or limitations caused by string returns. The data is cacheable, parseable, and readable.
+- **Additional modeling work.** We'd need to define 20+ DTOs matching our current output structures. The PCS client models don't map cleanly to our tool outputs (e.g., `GetSubscriptionHealth` returns a synthetic view combining subscription + build + commit data).
+
+**Pros:**
+- **Machine-readable output.** If clients need to parse results programmatically (e.g., pipe to jq, process in scripts), structured JSON is better.
+- **Schema validation.** Type safety at the protocol boundary could catch bugs, but our tools already validate inputs/outputs internally.
+- **Future-proofing.** If MCP clients evolve to expect structured data, we'd be ready.
+
+**Recommendation:**  
+**Backlog (P3).** Not urgent. Revisit if:
+1. Consumers request JSON output for automation
+2. We add tools where tabular data is hard to format as text (e.g., large graphs, matrices)
+3. MCP ecosystem shifts toward structured-first tools
+
+If we do adopt, start with **1-2 high-value tools** (e.g., `maestro_subscriptions`, `maestro_builds`) as an experiment. Offer both formats via a tool parameter (`format: "text" | "json"`).
+
+---
+
+### 2. Tool Annotations (ReadOnlyHint, DestructiveHint, OpenWorldHint)
+
+**What it is:**  
+Metadata hints on tools to help LLMs/clients understand behavior:
+- `ReadOnlyHint`: Tool only reads, doesn't modify state
+- `DestructiveHint`: Tool performs irreversible operations
+- `OpenWorldHint`: Tool interacts with external/unpredictable systems
+
+**Current state:**  
+No annotations. LLM infers behavior from tool names and descriptions.
+
+**Should we adopt?**
+
+**NO.** Not useful for this project.
+
+**Why:**
+- **Read/write distinction is obvious.** Our tool naming already disambiguates: `maestro_subscriptions` (read), `maestro_trigger_subscription` (write). Descriptions clarify further.
+- **No destructive operations.** Both action tools (`maestro_trigger_subscription`, `maestro_trigger_daily_update`) are **non-destructive** — they initiate subscription processing, not deletions. No irreversible harm.
+- **All tools interact with external systems.** Every tool calls the Maestro API (open world). Setting `OpenWorldHint: true` on all 20 tools adds no information.
+- **Annotations don't enforce behavior.** The SDK docs say these are "advisory only" — no security or access control. Our threat model already addresses auth at the PCS API layer, not MCP layer.
+
+**Edge case:**  
+`maestro_clear_cache` is the only tool with side effects (clears in-memory + SQLite cache). But it's not destructive (data is re-fetchable) and unlikely to be mis-invoked. Adding `ReadOnlyHint: false` wouldn't change anything.
+
+**Recommendation:**  
+**REJECT.** Annotations would be redundant metadata with no practical benefit. Keep tool names and descriptions as the source of truth.
+
+---
+
+### 3. Resource Links from Tools (ResourceLinkBlock)
+
+**What it is:**  
+Tools can return `ResourceLinkBlock` objects in their result content, providing MCP-native links to related resources (e.g., "here's a PR, and here's a link to its commits").
+
+**Current state:**  
+Tools return markdown with inline URLs. Example from `maestro_codeflow_prs`:
+```markdown
+**https://github.com/dotnet/dotnet/pull/12345**
+  Channel: .NET 10.0.1xx SDK | Target Branch: release/10.0.1xx
+```
+
+**Should we adopt?**
+
+**NO.** Not a good fit.
+
+**Why:**
+- **We don't expose MCP resources.** Our server has 0 resources (`resources/list` returns empty). All data comes from tools, not resources. Resource links are meant to bridge tools → resources within the same MCP server.
+- **GitHub URLs aren't MCP resources.** When we return PR URLs (e.g., `https://github.com/dotnet/dotnet/pull/12345`), those are external links, not MCP resource URIs. LLMs already know how to parse markdown links.
+- **No follow-up workflows.** Resource links enable patterns like: "Tool X returns link to resource Y, client fetches Y via `resources/read`." We don't have resource endpoints to link to.
+- **Adding resources would be architectural churn.** We'd need to redesign the caching/service layer to support resource URIs, with unclear benefit over the current tool-only model.
+
+**Possible future use case:**  
+If we ever expose **large, paginated, or streaming data** as MCP resources (e.g., `resource://maestro/builds?channel=10.0.1xx&offset=100`), tools could return `ResourceLinkBlock` to point at those. But that's not on the roadmap.
+
+**Recommendation:**  
+**REJECT.** Stick with markdown-formatted URLs. They're universal, portable, and work across all MCP clients.
+
+---
+
+### 4. Extensions / New Server Capabilities
+
+**What it is:**  
+SDK supports declaring extended server capabilities via `McpServerOptions.Capabilities`. New protocol features like:
+- `2025-11-25` protocol version support
+- Elicitation (dynamic prompting for missing info)
+- User-defined `JsonSerializerOptions`
+
+**Current state:**  
+Server uses default SDK capabilities registration (tools only, no prompts/resources/logging).
+
+**Should we adopt?**
+
+**PARTIALLY — already done.** The SDK upgrade brings protocol compliance automatically.
+
+**What we get for free:**
+- ✅ **Stable API with SemVer guarantees** — no more breaking changes
+- ✅ **Improved transport reliability** — better reconnection handling (5 retries instead of 2)
+- ✅ **OAuth backward compatibility** — future-proofing for auth changes
+- ✅ **Bug fixes** — base64 deserialization, JSON handling
+
+**What we don't need:**
+- ❌ **Elicitation** — our tools have all required parameters, no dynamic info gathering needed
+- ❌ **Custom JsonSerializerOptions** — default serialization works fine for PCS models
+- ❌ **SSE event stream storage** — we use stdio transport, not HTTP streaming
+- ❌ **MCP task support** — no long-running async operations in our tool set
+
+**Recommendation:**  
+**ACCEPT what we have.** The default capabilities are sufficient. No changes needed to `Program.cs` or `McpServerOptions`.
+
+---
+
+## Additional SDK Features Not Evaluated
+
+These were mentioned in changelogs but aren't relevant to tool design:
+
+### 0.8 Features
+- **Message-level filters** — internal SDK plumbing, no API surface for servers
+- **Distributed cache-backed event stream store** — we use SQLite, not distributed cache
+- **Trace-level logging** — useful for debugging, but we already have stderr diagnostics
+
+### 0.9 Features
+- **Streamable HTTP resumability** — HTTP server mode isn't primary use case
+- **Missing ResourceLinkBlock properties (Title, Icons)** — we don't use resources
+
+### 1.0 RC/Stable
+- **Increased MaxReconnectionAttempts** — automatic, no action needed
+
+---
+
+## Threat Model Implications
+
+No new security concerns from SDK upgrade. Key observations:
+
+1. **Tool annotations don't provide security.** The SDK docs explicitly state they're advisory. Auth enforcement remains at the PCS API layer (correct design).
+2. **Structured output doesn't change trust boundaries.** Whether tools return strings or objects, the data source (PCS API) and caching layer (SQLite) are unchanged.
+3. **Resource links would require new auth logic.** If we ever add resources, we'd need to gate `resources/read` by the same auth cascade (PAT → Entra → anonymous). Current threat model (STRIDE analysis in history.md) already covers this pattern for tools.
+
+---
+
+## Action Items
+
+### Immediate (P1)
+- ✅ **None.** SDK 1.0 upgrade is complete. No code changes needed.
+
+### Future Consideration (P2-P3)
+- **P3: Experiment with structured output** — Pick 1-2 high-value tools, add a `format` parameter to return JSON instead of markdown. Solicit feedback from consuming skills.
+- **P3: Document SDK features in README** — Mention we're on 1.0, note string-based tool outputs as a design choice.
+
+### Rejected
+- ❌ Tool annotations (ReadOnlyHint, DestructiveHint, OpenWorldHint)
+- ❌ Resource links (ResourceLinkBlock)
+- ❌ Elicitation support
+- ❌ Custom JsonSerializerOptions
+
+---
+
+## Conclusion
+
+The MCP SDK 1.0 upgrade brings **stability and bug fixes** without requiring architecture changes. New features like structured output, tool annotations, and resource links are either:
+1. Not applicable to our tool design (annotations, resources)
+2. Not worth the migration cost vs. current markdown-based approach (structured output)
+
+**Recommendation: No immediate action.** The SDK upgrade is a success. Focus future work on functional features (Issue #1 backlog) rather than protocol-level enhancements.
+
+---
+
+## References
+
+- [MCP C# SDK Documentation](https://modelcontextprotocol.github.io/csharp-sdk/)
+- [MCP C# SDK GitHub](https://github.com/modelcontextprotocol/csharp-sdk)
+- [SDK 1.0 Release Notes](https://github.com/modelcontextprotocol/csharp-sdk/releases/tag/v1.0.0)
+- [Tool Annotations API Docs](https://modelcontextprotocol.github.io/csharp-sdk/api/ModelContextProtocol.Protocol.ToolAnnotations.html)
+# MCP Tool Annotations Decision
+
+**Date:** 2025-03-01  
+**Author:** Naomi (Backend Developer)  
+**Status:** Implemented
+
+## Context
+
+The MCP SDK 1.0 introduced `ReadOnly` and `Destructive` boolean properties for the `[McpServerTool]` attribute. These metadata hints allow MCP clients to:
+- Auto-approve safe, read-only tools without user confirmation
+- Require explicit confirmation for destructive operations
+- Provide better UX by categorizing tool behavior
+
+## Decision
+
+All 19 `[McpServerTool]` attributes in `MaestroMcpTools.cs` were annotated based on their behavior:
+
+### Read-Only Tools (16 tools marked with `ReadOnly = true`)
+Query tools that fetch and return data without side effects:
+- `maestro_subscriptions`, `maestro_subscription`, `maestro_latest_build`, `maestro_build`, `maestro_builds`
+- `maestro_channel`, `maestro_channels`, `maestro_default_channels`
+- `maestro_subscription_health`, `maestro_build_freshness`
+- `maestro_codeflow_prs`, `maestro_codeflow_pr`, `maestro_backflow_status`
+- `maestro_subscription_history`, `maestro_build_graph`, `maestro_flow_graph`
+
+### Mutating (Non-Destructive) Tools (2 tools left at defaults)
+Tools that trigger server-side actions but don't destroy data:
+- `maestro_trigger_subscription` — triggers a Maestro subscription update
+- `maestro_trigger_daily_update` — triggers the daily update workflow
+
+These were left with default values (`ReadOnly = false`, `Destructive = false`) to indicate they have side effects but aren't destructive.
+
+### Destructive Tools (1 tool marked with `Destructive = true`)
+- `maestro_clear_cache` — wipes the local SQLite cache, permanently discarding cached data
+
+## Rationale
+
+This classification allows MCP clients to:
+1. **Auto-approve read-only queries** — Most tools (16/19) are safe queries that can run without confirmation
+2. **Prompt for trigger actions** — Subscription/update triggers have side effects but aren't destructive
+3. **Require confirmation for cache clearing** — The only destructive operation that loses data
+
+## Verification
+
+- ✅ Build succeeded (12.5s)
+- ✅ All 135 tests passed
+- ✅ Committed as `834b9d5`
+
+## Future Considerations
+
+As new tools are added, they should be classified using this same rubric:
+- **ReadOnly=true**: Pure queries with no side effects
+- **Defaults**: Mutating operations that don't destroy data
+- **Destructive=true**: Operations that permanently delete or destroy data
+
+---
+
+# Naming Convention Review for Issue #9
+
+**Date**: 2026-02-20  
+**Reviewer**: Holden (Lead/Architect)  
+**Issue**: #9 "Inconsistent tool naming conventions"
+
+## Executive Summary
+
+Issue #9 proposes standardizing MCP tool naming conventions. After reviewing all 17 current tools, **the inconsistencies are real but the proposed convention is only partially beneficial**. The current naming follows an implicit pattern that's reasonably predictable once understood. The highest-ROI improvement is **adding missing symmetrical tools** (`maestro_builds`, `maestro_channel`), not renaming existing ones.
+
+**Recommendation**: Accept the proposal's diagnostic value, but implement via **additive changes only** (no breaking renames). Add 2-3 missing tools for symmetry, document the naming pattern, and establish a convention for future tools.
+
+---
+
+## Current State Analysis
+
+### Tool Inventory (17 tools)
+
+**Query tools (bare nouns):**
+- `maestro_subscriptions` (list) / `maestro_subscription` (get) ✅ symmetric
+- `maestro_channels` (list) / ❌ no `maestro_channel` (get)
+- `maestro_latest_build` (query) / `maestro_build` (get) / ❌ no `maestro_builds` (list)
+- `maestro_default_channels` (list only, no get) ✅ OK
+- `maestro_subscription_health` (detail)
+- `maestro_subscription_history` (detail)
+- `maestro_build_freshness` (detail)
+- `maestro_build_graph` (detail)
+- `maestro_flow_graph` (detail)
+- `maestro_backflow_status` (detail)
+- `maestro_codeflow_prs` (list) / `maestro_tracked_pr` (get) ⚠️ asymmetric noun
+
+**Action tools (verb prefixes):**
+- `maestro_trigger_subscription`
+- `maestro_trigger_daily_update`
+- `maestro_clear_cache`
+
+**CLI commands** (for comparison, use hyphens instead of underscores):
+- `subscriptions`, `subscription`, `latest-build`, `build`, `channels`, `default-channels`, `subscription-health`, `build-freshness`, `trigger-subscription`, `trigger-daily-update`, `codeflow-prs`, `tracked-pr`, `backflow-status`, `subscription-history`, `build-graph`, `flow-graph`, `cache`
+
+---
+
+## Issue Analysis
+
+### 1. Plural/Singular Asymmetry ⚠️ Real Issue
+
+**Finding**: 2 of 4 resource pairs are asymmetric:
+- Builds: `maestro_latest_build` + `maestro_build` exist, but no `maestro_builds` (list)
+- Channels: `maestro_channels` exists, but no `maestro_channel` (get by ID)
+
+**Impact**: Medium. Agents expect list/get pairs. The missing tools force workarounds (e.g., filtering `maestro_channels` client-side to find a specific channel).
+
+**ROI**: HIGH. Adding `maestro_builds` and `maestro_channel` is non-breaking and immediately useful.
+
+### 2. Codeflow Terminology Inconsistency ⚠️ Real Issue
+
+**Finding**: `maestro_codeflow_prs` (list) uses "codeflow", but `maestro_tracked_pr` (get) uses "tracked". Both operate on Maestro-managed PRs.
+
+**Impact**: Low-Medium. Confusing terminology, but both are technically accurate:
+- "codeflow PR" = GitHub PR created by dependency flow
+- "tracked PR" = Maestro's subscription tracking record
+
+**ROI**: LOW. Renaming would break existing skills. The semantic difference may be intentional (tracking ≠ PR itself).
+
+### 3. Verb Prefix Pattern ✅ Not An Issue
+
+**Finding**: Actions use `trigger_`/`clear_` prefixes, queries use bare nouns.
+
+**Assessment**: This is a GOOD implicit convention, not a bug. It disambiguates read-only queries from state-changing actions. The proposed `maestro_get_build` would be redundant — agents already understand `maestro_build` = get, `maestro_trigger_subscription` = action.
+
+**ROI**: NEGATIVE. Adding `get_` prefixes would make names longer without improving clarity.
+
+### 4. Compound Word Length ✅ Not An Issue
+
+**Finding**: Most tools are 2 words, `trigger_daily_update` is 3 words.
+
+**Assessment**: Acceptable. "daily update" is a domain term (the PCS nightly job). Shortening to `trigger_daily` would lose meaning.
+
+---
+
+## Proposed Convention Evaluation
+
+```
+maestro_{verb}_{resource}        # actions: maestro_trigger_subscription
+maestro_{resource}               # get one: maestro_subscription
+maestro_{resources}              # list:    maestro_subscriptions
+maestro_{resource}_{aspect}      # detail:  maestro_subscription_health
+```
+
+**Strengths**:
+- Codifies the current implicit pattern
+- Clear action/query distinction
+- Predictable for agent reasoning
+
+**Weaknesses**:
+- `maestro_latest_build` doesn't fit (should be `maestro_build_latest`?)
+- Doesn't address the codeflow/tracked terminology split
+- Over-formalizes what's already working
+
+**Verdict**: The convention is mostly **descriptive** (what we already do) rather than **prescriptive** (new rules). Value is in documentation, not enforcement.
+
+---
+
+## Recommendations
+
+### P1: Non-Breaking Additions (Immediate)
+
+1. **Add `maestro_builds`** (list builds with filters — repo, channel, date range)
+   - Fills the symmetry gap with `maestro_build` (get by ID)
+   - Useful for "find recent builds" queries
+   - Effort: ~4-6 hours (API call + formatting)
+
+2. **Add `maestro_channel`** (get channel by ID)
+   - Fills the symmetry gap with `maestro_channels` (list)
+   - Useful for "what's channel ID 42?" queries
+   - Effort: ~2-3 hours (API call exists in service layer)
+
+### P2: Documentation (Next Sprint)
+
+3. **Document the naming pattern** in README or `MaestroMcpTools.cs` header:
+   ```
+   Naming convention:
+   - Actions: maestro_{verb}_{resource} (e.g., maestro_trigger_subscription)
+   - Queries (get): maestro_{resource} (e.g., maestro_subscription)
+   - Queries (list): maestro_{resources} (e.g., maestro_subscriptions)
+   - Queries (detail): maestro_{resource}_{aspect} (e.g., maestro_subscription_health)
+   ```
+
+### P3: Consider for Future (Backlog)
+
+4. **Alias `maestro_tracked_pr` → `maestro_codeflow_pr`** (deprecation period)
+   - Makes terminology consistent with `maestro_codeflow_prs`
+   - Requires MCP SDK support for tool aliases (TBD if SDK supports this)
+   - Low priority — existing name is defensible
+
+### ❌ Not Recommended
+
+- **Renaming existing tools**: Breaking change for all consuming skills. The current names are learnable and not fundamentally broken.
+- **Adding `maestro_get_*` prefixes**: Redundant. The implicit "bare noun = get" pattern is already clear.
+- **Renaming `maestro_latest_build`**: "Latest" is a common query pattern (cf. REST APIs with `/latest` endpoints). Not worth the churn.
+
+---
+
+## Migration Path (If We Did Break Things)
+
+If we WERE to make breaking changes (not recommended):
+
+1. **Phase 1 (v0.8)**: Add aliases for new names, keep old names working
+2. **Phase 2 (v0.9)**: Deprecation warnings in tool descriptions
+3. **Phase 3 (v1.0)**: Remove old names
+
+**Estimated disruption**: 6-12 months for ecosystem to migrate. Not worth it for marginal clarity gains.
+
+---
+
+## Conclusion
+
+Issue #9 provides valuable clarity on our naming patterns. The best action is **additive**: fill the 2 symmetry gaps (`maestro_builds`, `maestro_channel`), document the pattern, and move on. Breaking changes aren't justified by the marginal improvement.
+
+**Decision**: Accept the analysis, implement P1 items, defer P3 to backlog, reject breaking renames.
+
+---
+
+# Decision: Release v0.12.0
+
+**Date:** 2026-03-01
+**Author:** Alex (DevOps/Infrastructure)
+**Status:** Executed
+
+## Context
+
+The project had accumulated three significant changes since the last released tag (v0.10.0):
+1. MCP SDK upgrade to stable 1.0.0
+2. Linux/WSL permissions fix in CacheService
+3. Tool annotations for MCP client auto-approval
+
+Version 0.11.0 was set during the SDK upgrade but never tagged/released.
+
+## Decision
+
+Cut release v0.12.0 (skipping a v0.11.0 tag) to bundle all three changes into a single release. This avoids confusion between the internal 0.11.0 version that was never published and ensures a clean release history.
+
+## Consequences
+
+- v0.12.0 tag and commit pushed to `origin/master`
+- Version string updated in `.csproj`, both `Program.cs` entry points
+- 135 tests verified passing before release
+
+---
+
+# Decision: Interactive Terminal Detection for Default Command
+
+**Date:** 2025-07-15
+**Author:** Naomi (Backend Developer)
+**Status:** Implemented
+
+## Context
+When `mstro` is run with no arguments, it previously always defaulted to starting the MCP server (`["mcp"]`). This was problematic for users who typed `mstro` in a terminal — the MCP server would start on stdio and hang, with no visible output or help.
+
+## Decision
+Use `Console.IsInputRedirected` to detect whether the process was launched by an MCP host (stdin piped) or interactively by a user (stdin is a TTY):
+
+- **Stdin redirected** (MCP host) → default to `["mcp"]` (start MCP server)
+- **Stdin NOT redirected** (terminal) → default to `["--help"]` (show usage)
+
+## Rationale
+- MCP hosts (VS Code, Copilot CLI) always pipe stdin to the subprocess, so `Console.IsInputRedirected` reliably detects this case.
+- Interactive users expect help text, not a silent stdio server.
+- This is a standard .NET pattern — no platform-specific code needed.
+# Decision: Direct HTTP call for /api/codeflows endpoint
+
+**Date:** 2026-07
+**Author:** Naomi (Backend Developer)
+**Status:** Implemented
+
+## Context
+
+The Maestro team added a `/api/codeflows` endpoint returning `List<CodeflowStatus>` with forward flow and backflow subscription statuses. The PCS client NuGet (v1.1.0-beta.26155.1) has the models (`CodeflowStatus`, `CodeflowSubscriptionStatus`) but the `Codeflow` property is NOT wired up on `IProductConstructionServiceApi`. PR dotnet/arcade-services#6057 is filed to fix this.
+
+## Decision
+
+Implement a direct HTTP call via `System.Net.Http.HttpClient` in `MaestroApiClient`, bypassing the PCS client's generated API surface. Auth is replicated by:
+- **BAR token:** stored from constructor, used as Bearer header
+- **Entra ID:** `InteractiveBrowserCredential` created from the darc auth record (`~/.darc/.auth-record-{appId}`) with MSAL cache "maestro" and `DisableAutomaticAuthentication = true`
+- **Anonymous:** no auth header (API may return 401)
+
+Deserialization uses `Newtonsoft.Json` since PCS models use Newtonsoft serialization attributes.
+
+## Alternatives Considered
+
+1. **Wait for upstream PR** — Not viable; users need the endpoint now.
+2. **Extract HttpPipeline from PCS client** — `IProductConstructionServiceApi` doesn't expose the internal pipeline.
+3. **Use `DefaultAzureCredential`** — Won't find the maestro-specific MSAL cache by name.
+
+## Migration Path
+
+When dotnet/arcade-services#6057 merges and a new PCS client version is published:
+1. Replace `GetCodeflowStatusesAsync` body in `MaestroApiClient` with `_api.Codeflow.GetCodeflowStatusesAsync()`
+2. Remove `_barToken`, `_entraCredential`, `GetAccessTokenAsync()`, `CreateEntraCredential()`
+3. Remove `Newtonsoft.Json` and `Azure.Identity` using directives from `MaestroApiClient.cs`
+4. Service, MCP tool, and CLI layers remain unchanged
+
+## Impact
+
+- New MCP tool: `maestro_codeflow_statuses` (tool #20)
+- New CLI command: `codeflow-statuses`
+- 140 tests pass, 0 errors
+# Cross-Validation Strategies for Subscription Health
+
+### 2026-03-11: Cross-validation strategies for subscription health
+**By:** Holden  
+**What:** Architecture analysis of cross-validation approaches to detect when Maestro's subscription bookkeeping diverges from ground truth  
+**Why:** Session 55857d51 exposed that Maestro's `LastAppliedBuildId` can get stuck when exceptions bypass state clearing in `PullRequestUpdater.cs`, and the `Success` field is never set to `true`. Both `maestro_subscription_health` and `maestro_codeflow_statuses` are vulnerable to reporting stale data.
+
+---
+
+## Problem Statement
+
+**Current vulnerability:** Maestro's subscription bookkeeping can be wrong in two ways:
+1. **`LastAppliedBuildId` gets stuck** — When `GetLastCodeflownBuild()` throws on null `BarId` after merge, `ClearAllStateAsync()` never runs, so the subscription record stays frozen at an old build.
+2. **`Success` field is never true** — Subscription history shows all attempts as failures even when PRs actually merged.
+
+**Impact:** Our tools report subscriptions as "behind" when they're actually current, or as "failing" when they're succeeding.
+
+---
+
+## Cross-Validation Strategies
+
+### Strategy 1: PR Ground Truth Cross-Check
+
+**What it validates:**  
+Detects when Maestro reports subscription failures but PRs are actually merging successfully on the target repo.
+
+**Data sources:**
+- **Maestro API:** `GetSubscriptionHistoryAsync()` — recent failure records
+- **GitHub API:** `SearchPullRequests()` or `ListPullRequests()` with filters:
+  - `head:refs/heads/darc-{source-branch}-to-{target-branch}`
+  - `is:merged`
+  - `repo:dotnet/dotnet`
+  - Date range: last 7–30 days
+
+**Where it fits:**  
+Enhance `maestro_subscription_health` (Tool #3) with new field: `prMergeActivity` showing recent merged PRs vs. recorded failures.
+
+**Cost:**
+- 1 GitHub search API call per subscription
+- Rate limit: 30 requests/min (authenticated), 10/min (anonymous)
+- For 50 subscriptions: ~2 minutes worst-case
+
+**Reliability:**
+- High: GitHub merged status is authoritative
+- False negatives possible if PR naming convention changes
+- Mitigate: also search by commit SHAs from builds
+
+**Implementation sketch:**
+```
+In GetSubscriptionHealthAsync():
+1. For each subscription showing "stale" or with recent failures in history
+2. Call GitHub search: `is:pr is:merged repo:{target} head:{darc-branch-pattern}`
+3. Compare merged PRs' commit SHAs against LastAppliedBuild.Commit and LatestBuild.Commit
+4. If merged PR commit > LastAppliedBuild commit → bookkeeping is wrong
+5. Add to result: MergedPrsSinceLastApplied (count + URLs)
+```
+
+**Example output enhancement:**
+```
+Subscription: emsdk → dotnet/dotnet
+  Maestro says: 29 commits behind (last applied: build #123456 from Jan 21)
+  ⚠️ Ground truth: 3 PRs merged since Jan 21 (#4343, #3864, #3528)
+  → Bookkeeping appears STUCK
+```
+
+---
+
+### Strategy 2: Commit Reachability Validation
+
+**What it validates:**  
+Detects when `LastAppliedBuildId`'s commit SHA is not actually reachable from target repo HEAD.
+
+**Data sources:**
+- **Maestro API:** `GetSubscriptionAsync()` → `LastAppliedBuild.Commit`
+- **GitHub API:** `CompareCommitsAsync(base: LastAppliedBuild.Commit, head: targetBranch)`
+  - Status = "behind" → commit is reachable (normal)
+  - Status = "diverged" or "identical" → expected states
+  - HTTP 404 → commit doesn't exist in target repo (bookkeeping wrong)
+
+**Where it fits:**  
+New validation in `GetSubscriptionHealthAsync()` — add `commitReachability` field.
+
+**Cost:**
+- 1 GitHub compare API call per subscription
+- Same rate limits as Strategy 1
+- Lightweight — no diff data needed, just status
+
+**Reliability:**
+- Very high: commit graph is authoritative
+- Edge case: force-pushes can invalidate old SHAs (rare on main branches)
+- False positive: if LastAppliedBuild is legitimately ahead (impossible in normal flow)
+
+**Implementation sketch:**
+```
+For each subscription:
+1. Get LastAppliedBuild.Commit from subscription
+2. Call GitHub compare: base=LastAppliedCommit, head=targetBranch
+3. If 404 or status="diverged" when LastApplied should be ancestor → flag as suspect
+4. Add result field: CommitReachable (true/false/unknown)
+```
+
+**Example detection:**
+```
+Subscription: foo → dotnet/dotnet (main)
+  LastAppliedBuild: #999 (commit abc123)
+  GitHub compare: abc123...main → 404 Not Found
+  → Commit abc123 does not exist in dotnet/dotnet
+  → BOOKKEEPING CORRUPTED
+```
+
+---
+
+### Strategy 3: Subscription History vs. PR Lifecycle Alignment
+
+**What it validates:**  
+Cross-references Maestro's subscription history events with actual PR state transitions on GitHub.
+
+**Data sources:**
+- **Maestro API:** `GetSubscriptionHistoryAsync()` → timestamped actions, success/failure
+- **Maestro API:** `GetTrackedPullRequestBySubscriptionIdAsync()` → current/recent tracked PR
+- **GitHub API:** `GetPullRequest()` → merged_at, closed_at, state
+- **GitHub API:** `ListPullRequestCommits()` → commits in the PR
+
+**Where it fits:**  
+New tool: `maestro_validate_subscription` — deep diagnostic combining history + PR state.
+
+**Cost:**
+- 3–5 API calls per subscription:
+  - 1 × subscription history (Maestro)
+  - 1 × tracked PR (Maestro)
+  - 1 × PR details (GitHub)
+  - 1 × PR commits (GitHub, if needed)
+- Expensive — only use on-demand for debugging
+
+**Reliability:**
+- High for merged PRs (merged_at is definitive)
+- Medium for failed PRs — GitHub doesn't record why a PR was closed
+- Can't distinguish "Maestro bug" from "legitimate validation failure"
+
+**Implementation sketch:**
+```
+1. Get subscription history, find last "UpdatePR" action
+2. Get tracked PR for this subscription (if exists)
+3. Fetch PR from GitHub
+4. Align:
+   - If history says "failed" but GitHub says "merged" → bookkeeping bug
+   - If history says "succeeded" but GitHub says "closed" → unexpected
+   - If no tracked PR but history shows recent activity → orphaned record
+5. Return diagnostic report with timeline alignment
+```
+
+**Use case:** Debugging specific subscriptions when health check flags anomalies.
+
+---
+
+### Strategy 4: Build Freshness vs. Actual Source Activity
+
+**What it validates:**  
+Detects when Maestro reports subscription as "current" but source repo has unreported builds.
+
+**Data sources:**
+- **Maestro API:** `GetLatestBuildAsync(sourceRepo, channelId)` → "latest" build
+- **GitHub API:** `ListCommits(sourceRepo, since: latestBuild.DateProduced)` → newer commits
+- **Default Channel Config:** Confirm sourceRepo has default channel mapping for this branch
+
+**Where it fits:**  
+Enhance `maestro_subscription_health` with field: `unreportedCommits` (count since latest build).
+
+**Cost:**
+- 1 GitHub API call per subscription (list commits with date filter)
+- 1 Maestro API call (already in current flow)
+
+**Reliability:**
+- Medium: Can't tell if commits are actually built yet
+- False positives: Commits that don't trigger builds (docs-only, CI skips)
+- Better indicator: compare build timestamps vs. commit timestamps
+
+**Implementation sketch:**
+```
+For each subscription:
+1. Get latestBuild.DateProduced
+2. Query GitHub: commits on source branch since latestBuild.DateProduced
+3. If commits exist but no newer builds → potential build pipeline issue
+4. Add field: SourceActivitySinceLatestBuild { commitCount, oldestCommitDate }
+```
+
+**Example detection:**
+```
+Subscription: runtime → dotnet/dotnet
+  Latest build: #789 (Feb 15)
+  Source commits since Feb 15: 47 commits (newest: Mar 10)
+  → Either builds aren't happening OR channel mapping is wrong
+```
+
+---
+
+### Strategy 5: Codeflow Status Cross-Validation with Tracked PRs
+
+**What it validates:**  
+The `/api/codeflows` endpoint (`maestro_codeflow_statuses`) returns `LastAppliedBuildId` — validate this against tracked PR state.
+
+**Data sources:**
+- **Maestro API:** `GetCodeflowStatusesAsync()` → subscription statuses with LastAppliedBuildId
+- **Maestro API:** `GetTrackedPullRequestsAsync()` → all active PRs
+- **GitHub API:** For each tracked PR URL → merged status, commit SHAs
+
+**Where it fits:**  
+New composite tool or enhancement to `maestro_codeflow_statuses` (Tool #20).
+
+**Cost:**
+- Already calls codeflow endpoint
+- Additional: 1 GitHub API call per active tracked PR (~5–20 PRs typically)
+- Low incremental cost
+
+**Reliability:**
+- High: Tracked PRs are Maestro's own records
+- Limitation: Only validates active PRs, not completed ones
+
+**Implementation sketch:**
+```
+1. Get codeflow statuses for repo+branch
+2. Get all tracked PRs
+3. For each subscription in codeflow response:
+   a. Find corresponding tracked PR
+   b. If PR is merged on GitHub but LastAppliedBuildId is old → stuck record
+   c. If no PR but subscription shows "updating" → orphaned state
+4. Annotate each subscription status with prValidation: { merged, commitSha, matchesBookkeeping }
+```
+
+**Example output:**
+```
+Codeflow Status: dotnet/dotnet (main)
+  Subscription: emsdk (channel: .NET 11)
+    Maestro says: LastAppliedBuildId=123, updating=false
+    Tracked PR: #4567 (merged 2 days ago, commit def456)
+    ⚠️ PR merged but LastAppliedBuildId not updated → STUCK
+```
+
+---
+
+### Strategy 6: Subscription History "Success" Field Audit
+
+**What it validates:**  
+The `Success` field in subscription history — confirm it's actually being set to true when PRs merge.
+
+**Data sources:**
+- **Maestro API:** `GetSubscriptionHistoryAsync()` → all history items
+- Analysis: Count true vs. false, compare with actual PR merge rate
+
+**Where it fits:**  
+New diagnostic tool: `maestro_audit_subscription_history` or inline in subscription health.
+
+**Cost:**
+- Maestro API calls only (no external validation)
+- Cheap: history is paginated, typically <100 items per subscription
+
+**Reliability:**
+- This is introspection, not cross-validation with ground truth
+- Can detect "Success is always false" bug
+- Cannot confirm if "Success=true" is actually correct
+
+**Implementation sketch:**
+```
+For a given subscription or set of subscriptions:
+1. Fetch full history
+2. Count Success=true vs. false
+3. If Success=true count is 0 → flag as "Success field never set"
+4. Cross-reference with PR merge data (Strategy 1) to confirm
+```
+
+**Example detection:**
+```
+Subscription: emsdk → dotnet/dotnet
+  History: 150 events, Success=true: 0, Success=false: 150
+  GitHub: 43 PRs merged in same timeframe
+  → SUCCESS FIELD BUG CONFIRMED
+```
+
+---
+
+## Recommended Implementation Roadmap
+
+### Phase 1: Low-Cost, High-Value (P1)
+**Target:** v0.7.0 (2 weeks)
+
+1. **Strategy 1: PR Ground Truth** — Add to `maestro_subscription_health`
+   - Effort: 2–3 days
+   - Most directly addresses the emsdk bug scenario
+   - GitHub search API is already used in codebase
+
+2. **Strategy 2: Commit Reachability** — Add to `maestro_subscription_health`
+   - Effort: 1–2 days
+   - Lightweight validation using existing GitHub compare API
+   - Catches corrupted bookkeeping states
+
+**Output enhancement:**
+```markdown
+### Subscription Health for dotnet/dotnet
+
+Subscription: emsdk → dotnet/dotnet (main)
+  Channel: .NET 11.0.1xx SDK
+  Maestro Status: 29 commits behind (last applied: #123456, Jan 21)
+  Latest Build: #125000 (Mar 10)
+  
+  🔍 Cross-validation:
+    ✅ Commit reachable: Yes (commit abc123 exists in target)
+    ⚠️ PR activity: 3 PRs merged since Jan 21 (#4343 Mar 8, #3864 Feb 20, #3528 Feb 1)
+    → Bookkeeping appears STUCK — investigate subscription history
+```
+
+### Phase 2: Deep Diagnostics (P2)
+**Target:** v0.8.0 (backlog)
+
+3. **Strategy 3: History-PR Alignment** — New tool `maestro_validate_subscription`
+   - Effort: 3–4 days
+   - On-demand debugging tool, not in hot path
+   - Provides timeline correlation for root cause analysis
+
+4. **Strategy 6: Success Field Audit** — Inline in subscription health or new tool
+   - Effort: 1 day
+   - Confirms the "Success never true" bug at scale
+   - No external API dependencies
+
+### Phase 3: Proactive Monitoring (P3)
+**Target:** Future consideration
+
+5. **Strategy 4: Build Freshness** — Optional enhancement
+   - Effort: 2 days
+   - More useful for detecting build pipeline issues than bookkeeping bugs
+   - Lower priority since it doesn't directly address the identified failure mode
+
+6. **Strategy 5: Codeflow + Tracked PR** — Enhance `maestro_codeflow_statuses`
+   - Effort: 2–3 days
+   - Provides real-time validation for Tool #20
+   - Useful but overlaps with Strategy 1+2
+
+---
+
+## Key Architectural Decisions
+
+### Decision 1: Keep Validation Optional
+**Rationale:** Cross-validation adds API call overhead. Make it opt-in via tool parameter.
+
+**Proposal:** Add `validate: bool = false` parameter to `maestro_subscription_health`.
+- `validate=false` (default): Current behavior, fast, cached
+- `validate=true`: Runs PR ground truth + commit reachability checks
+
+### Decision 2: Return Structured Anomalies
+**Rationale:** LLMs need clear signals, humans need actionable data.
+
+**Proposal:** Add new fields to `SubscriptionHealthResult`:
+```csharp
+record SubscriptionHealthResult(
+    // ... existing fields ...
+    ValidationResult? Validation = null
+);
+
+record ValidationResult(
+    bool CommitReachable,
+    int MergedPrsSinceLastApplied,
+    List<string> MergedPrUrls,
+    bool BookkeepingAnomalyDetected,
+    string? AnomalyReason
+);
+```
+
+### Decision 3: Rate Limit Awareness
+**Rationale:** Validating 50+ subscriptions can exhaust GitHub rate limits.
+
+**Proposal:**
+- Batch validation: validate top N stale subscriptions first
+- Return partial results if rate limit hit
+- Log rate limit status to stderr for visibility
+
+### Decision 4: Cache Validation Results
+**Rationale:** Ground truth doesn't change rapidly.
+
+**Proposal:**
+- Cache PR search results for 15 minutes (vs. 5 min for subscription data)
+- Cache commit reachability for 30 minutes
+- Allows repeated health checks without re-validating
+
+---
+
+## Alternative Approaches Considered
+
+### Alternative 1: Maestro Self-Healing
+**Idea:** Have Maestro detect and auto-fix stuck bookkeeping internally.
+
+**Rejected because:**
+- Requires upstream changes to Maestro codebase (out of scope for maestro.mcp)
+- maestro.mcp is a read-only observability tool by design
+- Our tools surface the data for humans/skills to act on
+
+**Long-term:** File issues with Maestro team for self-healing logic in `PullRequestUpdater.cs`.
+
+### Alternative 2: VMR Commit Analysis
+**Idea:** Parse VMR commit messages for "Merge pull request #X" to reconstruct true flow history.
+
+**Rejected because:**
+- Brittle: Depends on commit message format
+- Incomplete: Squash merges don't preserve PR numbers
+- Expensive: Requires walking commit history
+- Strategy 1 (PR search) is simpler and more reliable
+
+### Alternative 3: Azure DevOps API for VMR PRs
+**Idea:** Since dotnet/dotnet is mirrored to AzDO, query AzDO for PR state.
+
+**Rejected because:**
+- GitHub is the source of truth for dotnet/dotnet
+- AzDO mirror is read-only and may lag
+- Adds unnecessary API surface (AzDoApiClient already exists but for source repos)
+
+---
+
+## Security & Privacy Considerations
+
+### Threat: Information Disclosure
+**Risk:** Validation queries might expose repo structure or PR activity to unauthorized clients.
+
+**Mitigation:**
+- Validation only queries public repos (dotnet/dotnet)
+- Uses same auth cascade as existing tools (PAT → Entra → Anonymous)
+- GitHub search respects client's access level
+
+### Threat: Rate Limit Exhaustion
+**Risk:** Aggressive validation could exhaust GitHub rate limits, impacting other tools.
+
+**Mitigation:**
+- Make validation opt-in (not default)
+- Implement rate limit tracking and back-off
+- Cache validation results longer than normal data
+
+### Threat: SSRF via Repo URLs
+**Risk:** Subscription data contains arbitrary repo URLs — validation could be tricked into querying internal hosts.
+
+**Mitigation:**
+- Existing URL parsing (`ParseGitHubUrl`, `IsVmrRepository`) validates host
+- Validation only runs for GitHub and AzDO URLs (known domains)
+- HttpClient follows redirects from aka.ms but targets are GitHub (already noted in STRIDE threat model as accepted risk)
+
+---
+
+## Testing Strategy
+
+### Unit Tests
+- Mock Maestro API responses with stuck `LastAppliedBuildId`
+- Mock GitHub API responses showing merged PRs
+- Verify anomaly detection logic
+
+### Integration Tests
+- Use real Maestro staging environment (if available)
+- Create test subscription with known state
+- Trigger validation and confirm detection
+
+### Regression Tests
+- Ensure validation doesn't break existing `maestro_subscription_health` output
+- Verify `validate=false` matches current behavior exactly
+
+---
+
+## Open Questions for Team
+
+1. **Priority:** Is Phase 1 (PR ground truth + commit reachability) the right focus, or is there a more urgent validation need?
+
+2. **Tool Design:** Should validation be:
+   - A. Optional parameter on existing `maestro_subscription_health` tool?
+   - B. Separate new tool `maestro_validate_subscription_health`?
+   - C. Always-on enhancement with no opt-in?
+
+3. **Upstream Fix:** Should we file issues with the Maestro team about:
+   - The `GetLastCodeflownBuild()` exception-handling bug?
+   - The `Success` field never being set to true?
+
+4. **Consuming Skills:** Will flow-analysis skill (or others) want structured validation data (JSON) or is markdown sufficient?
+
+5. **Rate Limits:** What's our acceptable GitHub API budget? Currently ~30 req/min authenticated. Validation could add 50–100 calls for full health check.
+
+---
+
+## Success Metrics
+
+How do we know cross-validation is working?
+
+1. **Detection Rate:** Tool correctly flags the emsdk subscription (from session 55857d51) as stuck
+2. **False Positive Rate:** <5% of subscriptions flagged as anomalies when they're actually correct
+3. **Performance:** Validation adds <10 seconds to health check for 10 subscriptions
+4. **Usability:** Consuming skills can act on validation results without re-querying
+
+---
+
+## References
+
+- Session 55857d51: emsdk subscription stuck investigation
+- Maestro `PullRequestUpdater.cs`: Exception handling in `GetLastCodeflownBuild()`
+- Current implementation: `MaestroService.GetSubscriptionHealthAsync()` (line 138)
+- GitHub API: [Compare commits](https://docs.github.com/en/rest/commits/commits#compare-two-commits)
+- GitHub API: [Search PRs](https://docs.github.com/en/rest/search/search#search-issues-and-pull-requests)
+# Decision: Phase 1 Cross-Validation Implementation Choices
+
+**Author:** Naomi (Backend Dev)
+**Date:** 2026-03-11
+**Status:** Implemented
+
+## Context
+
+Maestro's `LastAppliedBuildId` bookkeeping can get stuck when exceptions bypass state clearing. The `Success` field is never set to true. Our `maestro_subscription_health` tool trusted this data at face value.
+
+## Decisions Made
+
+### 1. Branch pattern matching uses source repo short name
+Instead of trying to reconstruct exact `darc-` branch naming conventions (which vary by codeflow version), we search GitHub for merged PRs with `head:{sourceRepoName}` (e.g., `head:emsdk` for `dotnet/emsdk`). This is simpler, covers both darc and VMR codeflow patterns, and is sufficient for anomaly detection.
+
+### 2. Commit reachability checks the SOURCE repo, not target
+We verify `LastAppliedBuild.Commit` is reachable in the source repository (where the build was produced), not the target. A 404 from the compare API means the commit doesn't exist, indicating corrupted bookkeeping.
+
+### 3. Canary warning runs unconditionally for stale subs
+The canary check (10+ history entries with zero successes) is cheap — it reuses the existing cached `GetSubscriptionHistoryAsync`. No need for `validate=true`. This provides early warning without any extra API calls.
+
+### 4. Validation results cached at MediumTtl (15 min)
+Ground truth (merged PRs, commit reachability) changes slowly. Caching at 15 minutes prevents rate limit exhaustion during repeated health checks.
+
+### 5. GitHub search API returns max 10 results
+We cap at `per_page=10` since we only need to detect whether PRs exist, not enumerate all of them. This minimizes API quota usage.
+
+## Files Changed
+- `src/MaestroTool.Core/IGitHubApiClient.cs` — Added `SearchMergedPullRequestsAsync`, `GitHubPullRequest` record
+- `src/MaestroTool.Core/GitHubApiClient.cs` — Implemented search method
+- `src/MaestroTool.Core/MaestroService.cs` — `ValidationResult` record, `SubscriptionHealthResult` extension, validation + canary logic
+- `src/MaestroTool.Core/MaestroMcpTools.cs` — `validate` param, formatted output
+# Decision: Maestro MCP Tool Audit Findings
+
+**Author:** Holden (Lead)  
+**Date:** 2026-02-20  
+**Status:** Audit Complete — Implementation TBD
+
+## Context
+
+Larry requested a thorough audit of `src/MaestroTool.Core/MaestroMcpTools.cs` to ensure the tool surface is agent-optimized, not API-mirrored. The audit cross-referenced all 19 tools against flow-analysis and flow-tracing skill files (449 lines combined) to validate against actual agent workflows.
+
+## Audit Scope
+
+1. **Tool descriptions** — Are they tight? Do they list return schemas agents already see? Are they vague or confusable? Do they cross-reference related tools?
+2. **API abstraction** — Are we exposing raw API internals (IDs without context)? Could we provide higher-level abstractions? Do parameters need descriptions?
+3. **Agent workflows** — What do agents actually want? Are there gaps where 3+ calls could be 1?
+
+## Key Findings
+
+### 🔴 HIGH — Description Bloat (8 tools)
+
+8 of 19 tools list return fields in descriptions ("Returns subscription ID, source/target repo..."). Agents see the actual response — schema docs are waste. **Fix: Remove "Returns X, Y, Z" from all descriptions.**
+
+Affected tools: `maestro_subscriptions`, `maestro_latest_build`, `maestro_build`, `maestro_builds`, `maestro_channel`, `maestro_channels`, `maestro_codeflow_prs`, `maestro_tracked_pr`.
+
+### 🟡 MEDIUM — Multi-Step Friction (2 gaps)
+
+1. **Triggering requires 3 steps**: Agents call `maestro_latest_build` → parse markdown → extract build ID → call `maestro_trigger_subscription`. **Fix: Add optional `sourceRepository`/`channelName` parameters to trigger tool to resolve latest build internally.**
+
+2. **Subscription discovery is awkward**: Agents call `maestro_subscriptions` to list all, then grep for the one they want. **Fix: Add `maestro_find_subscription(source, target, channel, branch)` tool for direct lookup.**
+
+### 🟡 MEDIUM — Channel ID Asymmetry
+
+`maestro_channel` requires an integer ID, but agents only have names. This forces a "list all → grep → extract ID" workflow. **Fix: Change parameter to `string channelNameOrId` and resolve internally** (pattern already used in other tools).
+
+### 🟡 MEDIUM — Missing Cross-References
+
+Three subscription tools don't guide agents on when to use which: `maestro_subscriptions` (discovery), `maestro_subscription` (single detail), `maestro_subscription_health` (batch check). **Fix: Add "Use X for..." cross-references to descriptions.**
+
+### 🟢 LOW — Parameter Description Gaps
+
+`maestro_flow_graph` has 5 parameters (4 booleans) with unclear impact. **Fix: Explain what "flow graph" means and when to toggle flags** (e.g., "includeArcade=false hides tooling noise").
+
+### ✅ POSITIVE — What's Working
+
+- **Composite tools are excellent**: `maestro_subscription_health` and `maestro_codeflow_statuses` match agent mental models perfectly. Flow-analysis skill shows these are first-step tools for "why is X stuck?" questions. DO NOT break into smaller primitives.
+- **Parameter examples are effective**: Almost every parameter includes examples (e.g., "e.g. https://github.com/dotnet/runtime"). Agents use these directly.
+- **noCache is consistent**: All 17 read-only tools accept it; agents understand when to use it.
+- **Naming conventions work**: Verbs for actions, nouns for queries. Agents learn the pattern without docs.
+
+## Agent Workflow Validation
+
+Validated against flow-analysis (302 lines) and flow-tracing (147 lines) skills:
+
+✅ **Codeflow overview** — covered by `maestro_subscription_health`, `maestro_codeflow_prs`, `maestro_build_freshness`  
+✅ **PR analysis** — skill uses PowerShell for GitHub data, Maestro tools for enrichment  
+✅ **Flow health** — covered by composite tools + batch checks  
+⚠️ **Remediation** — covered but friction (3-step trigger workflow)  
+⚠️ **Subscription discovery** — gap (no direct "find subscription for A→B" tool)
+
+## Recommendations
+
+### P0 (Must Do)
+1. Remove "Returns X, Y, Z" from 8 tool descriptions
+
+### P1 (Should Do)
+2. Add optional `sourceRepository`/`channelName` to `maestro_trigger_subscription`
+3. Add `maestro_find_subscription` tool OR document workaround in cross-references
+4. Add cross-references to overlapping subscription tools
+
+### P2 (Nice to Have)
+5. Improve `maestro_flow_graph` parameter descriptions
+6. Add auth requirement note to write operations
+7. Clarify cache scope in `maestro_clear_cache`
+
+### Do NOT Change
+8. Keep composite tools (`maestro_subscription_health`, `maestro_codeflow_statuses`)
+9. Keep `noCache` parameter consistent
+10. Keep parameter descriptions with examples
+
+## Decision
+
+**Audit complete.** Findings documented for Larry to prioritize. The tool surface is fundamentally well-designed — most issues are polish (description bloat, missing cross-refs) or optional improvements (composite trigger, subscription finder). The core abstraction level is correct.
+
+**Next steps**: Larry to decide:
+- P0 (description cleanup) — 1 hour, high ROI
+- P1 (composite trigger + finder) — 4-6 hours, medium ROI
+- P2 (parameter docs) — 2 hours, low ROI
+# MCP Server Design Skill Review — Decisions & Implications
+
+**Date:** 2026-03-11  
+**Reviewer:** Holden (Lead / Architect)  
+**Requestor:** Larry Ewing  
+**Context:** Review of `/home/lewing/src/blazor-playground/copilot-skills/plugins/skill-trainer/skills/mcp-server-design/` against real-world maestro.mcp implementation
+
+## Decision
+
+The mcp-server-design skill has **solid foundational patterns but critical gaps in operational depth**. It should be enhanced with patterns learned from building maestro.mcp before being promoted as comprehensive guidance.
+
+## Rationale
+
+### What Works
+- **Knowledge tool architecture** is genuinely valuable — the two-tier pattern (compact descriptions + on-demand knowledge endpoints) matches our best design decision and is well-articulated with `helix_ci_guide` as a concrete exemplar.
+- **Tool descriptions as routing signals** is the right mental model and directly informed our description tightening work.
+- **Purpose-first structure** ("lead with a verb," "don't describe return schemas") matches what we actually do across 20 tools.
+
+### What's Missing
+Critical operational patterns absent from the skill:
+
+1. **Caching architecture** — 15-min TTLs, SQLite persistence, cache invalidation, action deduplication (2-minute cooldowns to prevent LLM retry storms)
+2. **Auth patterns** — PAT → Entra ID → Anonymous cascade, when tools enforce auth vs. rely on API rejection, error message design
+3. **Error handling** — Structured messages, parameter validation (`Guid.TryParse`), recovery guidance
+4. **Parameter design** — Standard params (`noCache`), format examples in descriptions, cross-parameter relationships
+5. **Real anti-patterns** — PCS factory crashes (null baseUri), process execution on Windows, GitHub rate limits, SQLite corruption
+6. **Health check patterns** — When to create composite diagnostic tools vs. expose primitives
+
+### Slop Detected
+- agent-integration-patterns.md repeats the same point 3 times
+- industry-alignment.md doesn't extract actionable implications from research
+- validation-methodology.md reveals most patterns haven't been formally validated
+
+## Implications for maestro.mcp
+
+**Positive:** The skill validates our core design choices:
+- Two-tier architecture (compact descriptions + knowledge tools)
+- Purpose-first tool descriptions
+- Tool family naming consistency (`maestro_*`)
+- Cross-referencing related tools in descriptions
+
+**Negative:** The skill wouldn't have prepared us for real challenges:
+- Caching strategy design
+- Auth cascade error handling
+- Action deduplication patterns
+- Composite vs. atomic tool tradeoffs
+
+**Recommendation:** If we write MCP server guidance in the future, prioritize operational patterns over theoretical design principles. The skill has good bones but lacks the depth needed for production servers.
+
+## Actions for Larry
+
+If this skill is intended for external consumption:
+
+**P0 (Critical Gaps):**
+1. Add caching strategy section with TTL guidance, persistence patterns, invalidation
+2. Add error handling section with structured messages, validation patterns, recovery
+3. Add auth patterns section with cascade design, error message design
+4. Add parameter design section with standard params, format examples, validation
+5. Add real anti-patterns section derived from maestro.mcp / helix.mcp experience
+
+**P1 (Depth):**
+6. Expand tool annotations — clarify security vs. documentation distinction
+7. Expand parameter descriptions — dedicated section with examples
+8. Add composite tool patterns — when to create diagnostic tools vs. primitives
+
+**P2 (Polish):**
+9. Cut repetition in agent-integration-patterns.md
+10. Extract actionable takeaways from industry-alignment.md research findings
+11. Add before/after examples and case studies (use maestro.mcp as exemplar)
+
+## Follow-up Questions
+
+- Is this skill intended as comprehensive guidance or directional patterns?
+- Should we contribute maestro.mcp-specific patterns back to the skill?
+- Does the skill need formal validation (A/B testing) before external promotion?
+
+## Status
+
+Decision recorded for team awareness. No immediate action required in maestro.mcp codebase — this is guidance for the skill itself.
+
+
+# Decision: MCP Tool Description Tightening and Usability Improvements
+
+**Author:** Naomi (Backend Dev)
+**Date:** 2025-07-19
+**Status:** Implemented
+
+## Context
+
+Holden's MCP tool audit identified several improvements to reduce token waste and improve agent routing accuracy. This implements P0 and P1 items.
+
+## Decisions
+
+### 1. Remove "Returns..." from tool descriptions (P0)
+
+Removed "Returns X, Y, Z" sentences from 8 tool descriptions. Agents see the actual response — listing return fields wastes tokens and clutters routing. Affected tools: `maestro_subscriptions`, `maestro_latest_build`, `maestro_build`, `maestro_builds`, `maestro_channel`, `maestro_channels`, `maestro_codeflow_prs`, `maestro_codeflow_pr`.
+
+### 2. Cross-reference overlapping tools (P1-M4)
+
+Added cross-references to help agents pick the right tool:
+- `maestro_subscriptions` → points to `maestro_subscription_health` and `maestro_subscription`
+- `maestro_subscription` → points to `maestro_subscription_health`
+- `maestro_subscription_health` → points to `maestro_subscriptions`
+- `maestro_build` → points to `maestro_builds`
+- `maestro_channel` → points to `maestro_channels`
+
+### 3. Channel ID vs name asymmetry fix (P1-M3)
+
+Changed `maestro_channel` parameter from `int channelId` to `string channelNameOrId`. If it parses as int, routes to `GetChannelAsync(int)`; otherwise uses `GetChannelByNameAsync(string)`. This eliminates a common failure mode where agents pass a channel name to a tool that only accepted IDs.
+
+### 4. Smart trigger_subscription auto-resolve (P1-M1)
+
+Made `buildId` optional on `maestro_trigger_subscription`. When null, agents can provide `sourceRepository` + `channelName` to auto-resolve the latest build. This eliminates a 3-step agent dance (latest_build → parse → trigger) that was error-prone.
+
+## Files Changed
+
+- `src/MaestroTool.Core/MaestroMcpTools.cs` — All description and parameter changes
+- `src/MaestroTool.Tests/MaestroMcpToolsTests.cs` — Constructor fix for test compatibility
+
+## Rationale
+
+Token efficiency in MCP tool descriptions directly impacts agent performance. Every unnecessary word in a description is repeated across every `tools/list` call. Cross-references reduce trial-and-error routing. Parameter flexibility (string channel, optional buildId) reduces multi-tool orchestration failures.
+
+# Maestro.mcp Code Reorganization Plan
+
+**Author:** Holden (Lead/Architect)  
+**Date:** 2026-03-13  
+**Status:** PROPOSAL — awaiting team review and approval  
+**Reference:** helix.mcp commit 731260e, maestro.mcp current state (896-line monolithic MaestroMcpTools.cs)
+
+---
+
+## Executive Summary
+
+**Recommendation:** Use a **partial-class + subfolder strategy** for Core domain organization (no separate Mcp.Tools project).
+
+**Rationale:**
+- MaestroMcpTools has 20 tools that are heavily coupled to MaestroService (which wraps 3 API clients)
+- Splitting to a separate project adds ceremony without isolation benefit (unlike helix.mcp, where tools are thin API wrappers)
+- Partial classes preserve zero DI registration changes while enabling logical file organization
+- Subfolders in Core (Maestro/, GitHub/, AzDO/) match the API client architecture
+- Tests stay flat for now (167 tests, manageable)
+
+**Non-breaking:** No namespace changes, no project structure changes to integrators.
+
+---
+
+## Context & Analysis
+
+### Current State
+
+```
+src/MaestroTool.Core/
+  ├─ MaestroMcpTools.cs        (896 lines, 20 tools, 1 class)
+  ├─ MaestroService.cs          (1000+ lines, business logic, wraps 3 API clients)
+  ├─ MaestroApiClient.cs        (Maestro/PCS API)
+  ├─ GitHubApiClient.cs         (GitHub API)
+  ├─ AzDoApiClient.cs           (AzDO API)
+  ├─ CacheService.cs            (14.5 KB, caching layer)
+  └─ MaestroToolOptions.cs      (configuration)
+
+src/MaestroTool.Tests/
+  ├─ MaestroMcpToolsTests.cs    (167 tests, flat structure)
+  ├─ MaestroServiceTests.cs
+  ├─ CacheServiceTests.cs
+  └─ ...
+```
+
+### Why helix.mcp's Pattern Doesn't Fit Directly
+
+**helix.mcp (reference):**
+- 2 API clients (Helix, AzDO) → Created separate `HelixTool.Mcp.Tools` project
+- Tools are thin wrappers around API calls
+- Clear separation: Core (API + service) vs Tools (MCP exposure layer)
+- 8 tools total
+
+**maestro.mcp (our context):**
+- 3 API clients (Maestro/PCS, GitHub, AzDO) + **MaestroService business logic**
+- 20 tools organized by **Maestro domain concepts**, not backend APIs:
+  - Subscriptions (5 tools)
+  - Channels (3 tools)
+  - Builds (3 tools)
+  - Codeflow (4 tools)
+  - Cache/utilities (5 tools)
+- Tools call MaestroService methods, not raw API clients
+- Heavy state coupling (MaestroService, CacheService, MaestroToolOptions all passed to constructor)
+
+**Consequence:** Creating `MaestroTool.Mcp.Tools` would require:
+- Pulling MaestroService and its dependencies into the new project
+- Managing cross-project test dependencies
+- Adding `<ProjectReference>` complexity
+- **Net result:** No isolation gain, only extra indirection
+
+---
+
+## Tool Organization Analysis
+
+**Current 20 tools by domain concept:**
+
+| Domain | Tools | Lines | Characteristics |
+|--------|-------|-------|-----------------|
+| **Subscriptions** | subscriptions, subscription, subscription_health, trigger_subscription, subscription_history | ~250 | Heavy service calls, caching, parameter resolution |
+| **Channels** | channels, channel, default_channels | ~100 | Simple service wrapping |
+| **Builds** | builds, build, latest_build, build_freshness, build_graph | ~150 | Mixed service + HTTP calls, caching |
+| **Codeflow** | codeflow_prs, codeflow_pr, codeflow_statuses, backflow_status, flow_graph, trigger_daily_update | ~280 | Complex state logic, multi-level filtering |
+| **Cache** | clear_cache | ~20 | Utility |
+
+**Observation:** Tools cluster by **Maestro domain concepts** (what users care about), not by backend API. This is the correct abstraction level for MCP tools and should not be split by API backend.
+
+---
+
+## Proposed Restructure
+
+### OPTION A: Partial Class + Subfolders (RECOMMENDED)
+
+Keep `MaestroMcpTools` as a single logical class spread across multiple files using partial class declarations. Organize subfolders by domain concept.
+
+#### New Structure
+
+```
+src/MaestroTool.Core/
+  ├─ MaestroMcpTools/                    (new folder)
+  │  ├─ MaestroMcpTools.cs               (class declaration, constructor, helper methods)
+  │  ├─ MaestroMcpTools.Channels.cs      (partial: channels, channel, default_channels)
+  │  ├─ MaestroMcpTools.Subscriptions.cs (partial: subscriptions, subscription, subscription_history, 
+  │  │                                     subscription_health, trigger_subscription)
+  │  ├─ MaestroMcpTools.Builds.cs        (partial: builds, build, latest_build, build_freshness, 
+  │  │                                     build_graph)
+  │  ├─ MaestroMcpTools.Codeflow.cs      (partial: codeflow_prs, codeflow_pr, codeflow_statuses, 
+  │  │                                     backflow_status, flow_graph, trigger_daily_update)
+  │  └─ MaestroMcpTools.Utilities.cs     (partial: clear_cache)
+  │
+  ├─ Maestro/                            (new folder - Maestro/PCS domain)
+  │  ├─ MaestroApiClient.cs              (move)
+  │  ├─ IMaestroApiClient.cs             (move)
+  │  └─ MaestroService.cs                (move)
+  │
+  ├─ GitHub/                             (new folder - GitHub domain)
+  │  ├─ GitHubApiClient.cs               (move)
+  │  └─ IGitHubApiClient.cs              (move)
+  │
+  ├─ AzDO/                               (new folder - AzDO domain)
+  │  ├─ AzDoApiClient.cs                 (move)
+  │  └─ IAzDoApiClient.cs                (move)
+  │
+  ├─ CacheService.cs                     (stays - shared by multiple layers)
+  └─ MaestroToolOptions.cs               (stays - configuration)
+
+src/MaestroTool.Tests/
+  ├─ MaestroMcpTools/                    (new folder)
+  │  ├─ MaestroMcpToolsTests.cs          (stays flat for now, but logically grouped)
+  │
+  ├─ Maestro/                            (new folder)
+  │  ├─ MaestroApiClientTests.cs         (move)
+  │  └─ MaestroServiceTests.cs           (move)
+  │
+  ├─ GitHub/                             (new folder)
+  │  ├─ GitHubApiClientTests.cs          (move if exists)
+  │
+  ├─ AzDO/                               (new folder)
+  │  ├─ AzDoUrlParsingTests.cs           (move)
+  │  └─ AzDoApiClientTests.cs            (move if exists)
+  │
+  ├─ CacheServiceTests.cs                (stays - shared)
+  └─ MaestroToolOptionsTests.cs          (stays - shared)
+```
+
+### Namespace Strategy
+
+**NO CHANGES to public namespaces.** All files stay in `MaestroTool.Core` namespace:
+
+```csharp
+namespace MaestroTool.Core;
+
+public partial class MaestroMcpTools { /* channels */ }
+public partial class MaestroMcpTools { /* subscriptions */ }
+// etc.
+
+public class MaestroService { }        // stays in MaestroTool.Core
+public class MaestroApiClient { }      // stays in MaestroTool.Core
+// etc.
+```
+
+**Rationale:** Partial classes are a language feature—they're still a single namespace. DI registration doesn't change. External callers see no difference.
+
+### Benefits
+
+✅ **Reduced file size:** 896 → ~150-200 lines each, more readable  
+✅ **Clear organization:** Tools grouped by user-facing domain (Channels, Subscriptions, etc.)  
+✅ **API client structure mirrors reality:** Folders match the 3 API clients (Maestro, GitHub, AzDO)  
+✅ **Zero breaking changes:** Same namespace, same DI registration, same public surface  
+✅ **Easier code review:** Review by domain (e.g., "review all subscription tools")  
+✅ **Tests organized by layer:** Mirrors source structure  
+✅ **Low migration effort:** Move files, add `partial class` keyword, done
+
+### Risks
+
+⚠️ **Partial class complexity:** Developers unfamiliar with partial classes might not realize methods are spread across files. **Mitigation:** Add comment at top of each partial file referencing the class declaration.
+
+⚠️ **Potential for divergence:** Different developers might add to different partial files for related concerns. **Mitigation:** Document which partial file owns which domain in the Main method or PR checklist.
+
+---
+
+## OPTION B: Separate Mcp.Tools Project (NOT RECOMMENDED)
+
+For completeness, here's what it would look like if we followed helix.mcp exactly:
+
+```
+src/MaestroTool.Core/
+  ├─ Maestro/
+  │  ├─ MaestroService.cs
+  │  ├─ MaestroApiClient.cs
+  │  ├─ IMaestroApiClient.cs
+  │
+  ├─ GitHub/
+  │  ├─ GitHubApiClient.cs
+  │  └─ IGitHubApiClient.cs
+  │
+  ├─ AzDO/
+  │  ├─ AzDoApiClient.cs
+  │  └─ IAzDoApiClient.cs
+  │
+  ├─ CacheService.cs
+  └─ MaestroToolOptions.cs
+
+src/MaestroTool.Mcp.Tools/          (new project)
+  ├─ Channels/
+  │  └─ ChannelTools.cs
+  ├─ Subscriptions/
+  │  └─ SubscriptionTools.cs
+  ├─ Builds/
+  │  └─ BuildTools.cs
+  ├─ Codeflow/
+  │  └─ CodeflowTools.cs
+  ├─ Utilities/
+  │  └─ UtilityTools.cs
+  └─ MaestroTool.Mcp.Tools.csproj   (depends on MaestroTool.Core)
+
+src/MaestroTool.Mcp/
+  └─ Program.cs                       (WithToolsFromAssembly loads MaestroTool.Mcp.Tools)
+```
+
+**Why NOT:** 
+- MaestroMcpTools constructor takes (MaestroService, MaestroToolOptions, CacheService)
+- Splitting across 5 files each needing the same dependencies
+- No isolation: tools still tightly coupled to MaestroService
+- Adding project reference, updating `.slnx`, build complexity
+- Tests would need cross-project setup
+- **All the ceremony of separate project with none of the benefits**
+
+This pattern works for helix.mcp because tools are thin API wrappers. Not applicable here.
+
+---
+
+## Migration Plan
+
+### Phase 1: Create Folder Structure (Non-breaking prep)
+
+1. Create folders:
+   - `src/MaestroTool.Core/MaestroMcpTools/`
+   - `src/MaestroTool.Core/Maestro/`
+   - `src/MaestroTool.Core/GitHub/`
+   - `src/MaestroTool.Core/AzDO/`
+   - `src/MaestroTool.Tests/MaestroMcpTools/`
+   - `src/MaestroTool.Tests/Maestro/`
+   - `src/MaestroTool.Tests/GitHub/`
+   - `src/MaestroTool.Tests/AzDO/`
+
+2. Move API client files and test files to their respective folders (namespace stays the same)
+
+3. Create partial class files for MaestroMcpTools (skeleton)
+
+4. Run tests after each file move—ensure no regressions
+
+### Phase 2: Migrate MaestroMcpTools
+
+1. Move main MaestroMcpTools.cs to `MaestroMcpTools/MaestroMcpTools.cs`
+   - Keep class declaration, constructor, shared helpers (Timestamp method)
+   - Mark as `public partial class`
+
+2. Create partial files:
+   - `MaestroMcpTools.Channels.cs` → channels, channel, default_channels
+   - `MaestroMcpTools.Subscriptions.cs` → subscriptions, subscription, subscription_health, trigger_subscription, subscription_history
+   - `MaestroMcpTools.Builds.cs` → builds, build, latest_build, build_freshness, build_graph
+   - `MaestroMcpTools.Codeflow.cs` → codeflow_prs, codeflow_pr, codeflow_statuses, backflow_status, flow_graph, trigger_daily_update
+   - `MaestroMcpTools.Utilities.cs` → clear_cache
+
+3. Each partial file:
+   - Starts with `#nullable enable` and global usings
+   - Declares `public partial class MaestroMcpTools`
+   - Contains 2-6 tool methods
+
+4. Run full test suite after migration
+
+### Phase 3: Reorganize Tests
+
+1. Move test files to mirror source structure
+2. Rename MaestroMcpToolsTests.cs → MaestroMcpToolsTests.cs (stays at folder root, can split later)
+3. Verify test discovery and execution
+
+---
+
+## File-by-File Plan
+
+### Core Project Migrations
+
+**Move (no namespace changes):**
+
+```
+src/MaestroTool.Core/MaestroApiClient.cs
+  → src/MaestroTool.Core/Maestro/MaestroApiClient.cs
+  namespace: MaestroTool.Core (unchanged)
+
+src/MaestroTool.Core/IMaestroApiClient.cs
+  → src/MaestroTool.Core/Maestro/IMaestroApiClient.cs
+  namespace: MaestroTool.Core (unchanged)
+
+src/MaestroTool.Core/MaestroService.cs
+  → src/MaestroTool.Core/Maestro/MaestroService.cs
+  namespace: MaestroTool.Core (unchanged)
+
+src/MaestroTool.Core/GitHubApiClient.cs
+  → src/MaestroTool.Core/GitHub/GitHubApiClient.cs
+  namespace: MaestroTool.Core (unchanged)
+
+src/MaestroTool.Core/IGitHubApiClient.cs
+  → src/MaestroTool.Core/GitHub/IGitHubApiClient.cs
+  namespace: MaestroTool.Core (unchanged)
+
+src/MaestroTool.Core/AzDoApiClient.cs
+  → src/MaestroTool.Core/AzDO/AzDoApiClient.cs
+  namespace: MaestroTool.Core (unchanged)
+
+src/MaestroTool.Core/IAzDoApiClient.cs
+  → src/MaestroTool.Core/AzDO/IAzDoApiClient.cs
+  namespace: MaestroTool.Core (unchanged)
+```
+
+**Split (partial classes):**
+
+```
+src/MaestroTool.Core/MaestroMcpTools.cs
+  → src/MaestroTool.Core/MaestroMcpTools/MaestroMcpTools.cs
+     (class declaration, constructor, helpers, Timestamp method)
+     namespace: MaestroTool.Core
+     declaration: public partial class MaestroMcpTools
+
+  → src/MaestroTool.Core/MaestroMcpTools/MaestroMcpTools.Channels.cs
+     (GetChannels, GetChannel, GetDefaultChannels)
+     namespace: MaestroTool.Core
+     declaration: public partial class MaestroMcpTools
+
+  → src/MaestroTool.Core/MaestroMcpTools/MaestroMcpTools.Subscriptions.cs
+     (GetSubscriptions, GetSubscription, GetSubscriptionHealth, 
+      TriggerSubscription, GetSubscriptionHistory)
+     namespace: MaestroTool.Core
+     declaration: public partial class MaestroMcpTools
+
+  → src/MaestroTool.Core/MaestroMcpTools/MaestroMcpTools.Builds.cs
+     (ListBuilds, GetBuild, GetLatestBuild, GetBuildFreshness, GetBuildGraph)
+     namespace: MaestroTool.Core
+     declaration: public partial class MaestroMcpTools
+
+  → src/MaestroTool.Core/MaestroMcpTools/MaestroMcpTools.Codeflow.cs
+     (GetCodeflowPrs, GetTrackedPr, GetCodeflowStatuses, 
+      GetBackflowStatus, GetFlowGraph, TriggerDailyUpdate)
+     namespace: MaestroTool.Core
+     declaration: public partial class MaestroMcpTools
+
+  → src/MaestroTool.Core/MaestroMcpTools/MaestroMcpTools.Utilities.cs
+     (ClearCache)
+     namespace: MaestroTool.Core
+     declaration: public partial class MaestroMcpTools
+```
+
+**Stay in place:**
+
+```
+src/MaestroTool.Core/CacheService.cs (no move)
+src/MaestroTool.Core/MaestroToolOptions.cs (no move)
+```
+
+### Test Project Migrations
+
+```
+src/MaestroTool.Tests/MaestroMcpToolsTests.cs
+  → src/MaestroTool.Tests/MaestroMcpTools/MaestroMcpToolsTests.cs
+  namespace: MaestroTool.Tests (unchanged)
+
+src/MaestroTool.Tests/MaestroServiceTests.cs
+  → src/MaestroTool.Tests/Maestro/MaestroServiceTests.cs
+  namespace: MaestroTool.Tests (unchanged)
+
+src/MaestroTool.Tests/MaestroApiClientTests.cs
+  → src/MaestroTool.Tests/Maestro/MaestroApiClientTests.cs
+  namespace: MaestroTool.Tests (unchanged)
+
+src/MaestroTool.Tests/AzDoUrlParsingTests.cs
+  → src/MaestroTool.Tests/AzDO/AzDoUrlParsingTests.cs
+  namespace: MaestroTool.Tests (unchanged)
+
+src/MaestroTool.Tests/CacheServiceTests.cs (no move - shared layer)
+src/MaestroTool.Tests/MaestroToolOptionsTests.cs (no move - shared)
+```
+
+---
+
+## Example: MaestroMcpTools.Subscriptions.cs
+
+```csharp
+using System.ComponentModel;
+using System.Text;
+using ModelContextProtocol.Server;
+
+namespace MaestroTool.Core;
+
+/// <summary>
+/// Subscription-related MCP tools. Part of the MaestroMcpTools class.
+/// See MaestroMcpTools.cs for class declaration and helpers.
+/// </summary>
+public partial class MaestroMcpTools
+{
+    [McpServerTool(Name = "maestro_subscriptions", Title = "List Subscriptions", ReadOnly = true, Idempotent = true)]
+    [Description("List Maestro subscriptions filtered by source/target repository and/or channel name. For health checks, use maestro_subscription_health. For details on a single subscription by ID, use maestro_subscription.")]
+    public async Task<string> GetSubscriptions(
+        [Description("Filter by source repository URL (e.g. https://github.com/dotnet/runtime)")] string? sourceRepository = null,
+        // ... rest of method
+    )
+    {
+        // ... implementation
+    }
+
+    // ... other subscription tools
+}
+```
+
+---
+
+## DI Registration (No Changes)
+
+In `src/MaestroTool.Mcp/Program.cs` and `src/MaestroTool/Program.cs`:
+
+```csharp
+// BEFORE and AFTER — IDENTICAL
+services.AddScoped<MaestroMcpTools>();
+services.AddScoped<MaestroService>();
+services.AddScoped<CacheService>();
+services.AddScoped<IMaestroApiClient, MaestroApiClient>();
+services.AddScoped<IGitHubApiClient, GitHubApiClient>();
+services.AddScoped<IAzDoApiClient, AzDoApiClient>();
+
+// BEFORE and AFTER — IDENTICAL
+.WithToolsFromAssembly(typeof(MaestroMcpTools).Assembly)
+```
+
+The partial class declaration is transparent to DI. One registration works across all partial files.
+
+---
+
+## Testing & Validation
+
+### Build Verification
+```bash
+dotnet build MaestroTool.slnx
+# Should compile with zero errors
+```
+
+### Test Execution
+```bash
+dotnet test src/MaestroTool.Tests/MaestroTool.Tests.csproj
+# All 167 tests should pass (assumes no test changes)
+```
+
+### Integration Check
+```bash
+dotnet run --project src/MaestroTool.Mcp/
+# MCP server should start with 20 tools available
+# Verify: /tools/call maestro_subscriptions works
+```
+
+---
+
+## Future Improvements
+
+Once this reorganization is in place:
+
+1. **Test splitting:** Split MaestroMcpToolsTests into domain-specific test files (SubscriptionToolsTests, etc.)
+2. **Helper extraction:** Extract common patterns (parameter resolution, output formatting) to domain-specific helpers
+3. **Tool documentation:** Create per-domain markdown files documenting tool parameters and workflows
+4. **Consider future Mcp.Tools project:** If tool layer becomes thick enough or has different lifecycle, re-evaluate creating separate project
+
+---
+
+## Sign-Off Checklist
+
+- [ ] Team agrees on recommendation (Option A: Partial class + subfolders)
+- [ ] No concerns about partial class discoverability in code reviews
+- [ ] Agrees to mirror folder structure in tests
+- [ ] Namespace stability confirmed (no breaking changes)
+- [ ] DI registration verified (zero changes needed)
+- [ ] File move order planned (to minimize merge conflicts)
+
+---
+
+## References
+
+- helix.mcp commit 731260e (reference pattern, not directly applicable)
+- maestro.mcp current decisions.md (security review, auth cascade, test gaps)
+- Holden's audit (2026-03-12) — tool descriptions, parameter design, MCP patterns
+- MaestroMcpTools.cs (896 lines, 20 tools)
+- MaestroService.cs (1000+ lines, business logic)
+
+# Naomi — Code Restructure Complete
+
+### 2026-03-13: Partial Class Restructure Executed Successfully
+
+**By:** Naomi  
+**Status:** ✅ COMPLETE — all tests passing, build verified
+
+## What Was Done
+
+Executed Holden's restructuring plan (Option A: partial classes + subfolders) with zero breaking changes:
+
+### File Moves (using git mv to preserve history)
+
+**API clients → domain folders:**
+- MaestroApiClient.cs, IMaestroApiClient.cs, MaestroService.cs → `Maestro/`
+- GitHubApiClient.cs, IGitHubApiClient.cs → `GitHub/`
+- AzDoApiClient.cs, IAzDoApiClient.cs → `AzDO/`
+
+**Tests → mirrored structure:**
+- MaestroMcpToolsTests.cs → `MaestroMcpTools/`
+- MaestroServiceTests.cs, MaestroApiClientTests.cs → `Maestro/`
+- AzDoUrlParsingTests.cs → `AzDO/`
+
+### Partial Class Split
+
+Split 902-line `MaestroMcpTools.cs` into 6 files organized by domain:
+
+| File | Lines | Tools | Purpose |
+|------|-------|-------|---------|
+| MaestroMcpTools.cs | 34 | - | Class declaration, constructor, Timestamp helper |
+| MaestroMcpTools.Channels.cs | 94 | 3 | channel, channels, default_channels |
+| MaestroMcpTools.Subscriptions.cs | 318 | 5 | subscriptions, subscription, subscription_health, trigger_subscription, subscription_history |
+| MaestroMcpTools.Builds.cs | 153 | 5 | builds, build, latest_build, build_freshness, build_graph |
+| MaestroMcpTools.Codeflow.cs | 339 | 6 | codeflow_prs, codeflow_pr, codeflow_statuses, backflow_status, flow_graph, trigger_daily_update |
+| MaestroMcpTools.Utilities.cs | 19 | 1 | clear_cache |
+
+**Total:** 20 MCP tools across 6 files (down from 1 monolithic file)
+
+## Why This Approach
+
+**Benefits delivered:**
+- ✅ File sizes reduced to 34-339 lines (from 902)
+- ✅ Clear domain organization for code review
+- ✅ API client folders mirror architecture (3 backend APIs)
+- ✅ Git history preserved through `git mv`
+- ✅ Zero namespace changes (all stay in `MaestroTool.Core`)
+- ✅ Zero DI registration changes (partial class transparent to DI)
+- ✅ All 167 tests pass
+
+**Alignment with plan:**
+- Followed Holden's Option A exactly: partial classes + subfolders
+- Did NOT create separate `Mcp.Tools` project (not appropriate for our coupling model)
+- Organized by **user-facing domain** (what users care about) not backend API
+- Helper methods stay local to their domain (FormatBuild in Codeflow)
+
+## Technical Notes
+
+**Using statements per partial file:**
+Each partial file needs its own complete imports. Required for MCP tools:
+```csharp
+using System.ComponentModel;
+using System.Text;
+using Microsoft.DotNet.ProductConstructionService.Client;        // for RestApiException
+using Microsoft.DotNet.ProductConstructionService.Client.Models; // for Channel, Build, etc.
+using ModelContextProtocol.Server;
+```
+
+**Domain-specific helpers:**
+- Private helper methods can live in their domain partial (e.g., `FormatBuild`, `FormatFlowStatus` in Codeflow.cs)
+- Shared helpers stay in main file (e.g., `Timestamp` method)
+
+**Validation:**
+- Build: ✅ `dotnet build MaestroTool.slnx` succeeds
+- Tests: ✅ All 167 tests pass in `dotnet test`
+- Git: ✅ All moves show as renames (history preserved)
+
+## Next Steps (Future Work)
+
+From Holden's plan:
+1. **Test splitting:** Consider splitting MaestroMcpToolsTests into domain-specific test files (SubscriptionToolsTests, etc.)
+2. **Helper extraction:** Extract common patterns (parameter resolution, output formatting) to domain helpers
+3. **Tool documentation:** Per-domain markdown files documenting parameters and workflows
+
+## References
+
+- Holden's plan: `.ai-team/decisions/inbox/holden-restructure-plan.md`
+- helix.mcp commit 731260e (reference pattern, different use case)
+- Current commit: All changes staged, ready for review
+### 2026-03-13: Restructure review approved
+**By:** Holden
+**What:** Reviewed Naomi's `squad/restructure-core-partials` implementation against the Option A partial-class plan and approved it. All 20 MCP tools are present exactly once, grouped into the intended Channels, Subscriptions, Builds, Codeflow, and Utilities partials; the main `MaestroMcpTools.cs` retained the constructor, shared fields, and helper.
+**Why:** The restructure preserved API surface and namespace stability, moved API clients and tests into the planned subfolders with clean renames, and passed the full solution test suite (`167/167`).
+# CLI Help Text Enhancement for CLI-as-Skill Pattern
+
+**Date:** 2026-03-13  
+**Author:** Naomi  
+**Status:** Implemented
+
+## Context
+
+We're establishing a "CLI-as-skill" pattern where AI agents can use the `mstro` CLI tool instead of MCP tools. The pattern requires progressive disclosure via help text, so agents get the same information from `mstro --help` and `mstro <cmd> --help` that they would from MCP tool descriptions.
+
+## Decision
+
+### Updated CLI Command Descriptions
+
+Enhanced all CLI command `[Description]` attributes in `src/MaestroTool/Program.cs` to mirror the corresponding MCP tool descriptions from `src/MaestroTool.Core/MaestroMcpTools/*.cs`.
+
+**Changes made:**
+- Updated all 18 existing command descriptions to match MCP tool descriptions
+- Added 2 missing commands: `channel` (singular) and `builds` to achieve parity with MCP tools
+- Command descriptions now include cross-references (e.g., "For health checks, use subscription-health")
+- Added contextual information (e.g., "Defaults to the VMR (dotnet/dotnet, main)")
+- Included important details like "Requires authentication" for destructive operations
+
+### ConsoleAppFramework Limitations
+
+ConsoleAppFramework 5.x does **not** support:
+- Command grouping/categories (unlike MCP which uses partial classes for logical domains)
+- Parameter-level descriptions in help output (only shows parameter names and types)
+- Rich help text formatting beyond command-level descriptions
+
+The framework auto-generates kebab-case option names from parameter names (e.g., `sourceRepository` → `--source-repository`).
+
+## Rationale
+
+1. **Parity:** CLI and MCP now expose equivalent information density to agents
+2. **Progressive disclosure:** Agents can discover commands via `--help`, then get detailed info on specific commands
+3. **Portability:** This pattern uses only framework-provided attributes (no custom code), making it portable to other CLI tools (e.g., lewing/helix.mcp)
+4. **Maintainability:** Descriptions live in one place (ConsoleAppFramework attributes), not duplicated in external docs
+
+## Alternative Considered
+
+**Enhanced parameter descriptions via custom middleware:** Could inject parameter descriptions into help output via ConsoleAppFramework filters. **Rejected** because:
+- Adds complexity and maintenance burden
+- Would require duplicating MCP parameter descriptions
+- Framework limitation suggests this isn't a priority for the library maintainers
+- Command-level descriptions provide sufficient context for the CLI-as-skill pattern
+
+## Implementation Notes
+
+- All command names use kebab-case (e.g., `subscription-health`, not `subscriptionHealth`)
+- The `builds` command was added to match `maestro_builds` MCP tool (was previously missing)
+- The `channel` command (singular) was added to match `maestro_channel` MCP tool (was previously missing)
+- Cross-references use CLI command names, not MCP tool names (e.g., "use subscription-health" not "use maestro_subscription_health")
+
+## Future Considerations
+
+If porting this pattern to other tools:
+- Keep command descriptions synchronized with MCP tool descriptions as a build-time check
+- Consider auto-generating CLI commands from MCP tool definitions (code generation from `[McpServerTool]` attributes)
+- For frameworks that support parameter descriptions, add them for even better discoverability
+### 2026-03-13: CLI-as-skill pattern portability
+**By:** Larry Ewing (via Copilot)
+**What:** If the CLI-as-skill pattern works for maestro.mcp, apply the same pattern to lewing/helix.mcp
+**Why:** User request — both MCP packages should share the same progressive disclosure approach
+### 2026-03-13: JSON output audit findings
+**By:** Amos  
+**What:** Comprehensive audit of CLI command output formats  
+**Why:** Needed to plan JSON output mode work for CLI-as-skill pattern
+
+---
+
+## Executive Summary
+
+**Total Endpoints:** 20 CLI commands, 20 MCP tools (40 total)  
+**JSON Support:** 17/20 CLI commands have `--json` flag  
+**MCP Format:** All 20 MCP tools return Markdown strings (NO JSON support)  
+**Shared Data:** CLI and MCP use identical `MaestroService` methods → same underlying data  
+
+---
+
+## 🎯 Critical Findings
+
+1. **CLI has strong JSON support** - 17/20 commands support `--json` flag with pretty-printed JSON via `JsonSerializer.Serialize(data, WriteIndented=true)`
+2. **MCP tools are Markdown-only** - All 20 MCP tools return formatted Markdown strings built with `StringBuilder` + emojis
+3. **No output parity** - CLI JSON ≠ MCP Markdown → different representations of same data
+4. **Triggers don't support JSON** - 2 destructive commands (`trigger-subscription`, `trigger-daily-update`) output only human-readable text with emojis
+5. **Cache command is admin-only** - No JSON needed for `cache clear`
+6. **Shared infrastructure** - Both CLI and MCP use same `MaestroService` and `CacheService` (SQLite)
+
+---
+
+## 📊 Complete CLI Command Audit
+
+| Command | Has --json | JSON Output | Text Output | Notes |
+|---------|-----------|-------------|-------------|-------|
+| `mcp` | ❌ | N/A | N/A | Starts MCP server mode (stdio transport) |
+| `subscriptions` | ✅ | List of subscription objects | Formatted list with arrows | Filters by source/target/channel/branch |
+| `subscription` | ✅ | Single subscription object | Formatted details + health check | GUID required |
+| `latest-build` | ✅ | Build object | Formatted build details | Requires repo + channel |
+| `build` | ✅ | Build object | Formatted build details | Requires build ID |
+| `builds` | ✅ | List of build objects | Formatted list | Filters by repo/channel/commit/buildNumber |
+| `channels` | ✅ | List of channel objects | Formatted list | Lists all channels |
+| `channel` | ✅ | Channel object with classification | Formatted channel details | Accepts int ID or string name |
+| `default-channels` | ✅ | List of default channel mappings | Formatted list | Filters by repo/branch |
+| `subscription-health` | ✅ | Health report object | Formatted health report with emojis | Compares last applied vs latest builds |
+| `build-freshness` | ✅ | Freshness check object | Formatted freshness report | Uses aka.ms redirect + Last-Modified headers |
+| `trigger-subscription` | ❌ | N/A | Success/error message with emojis | **Destructive** - requires MAESTRO_BAR_TOKEN |
+| `trigger-daily-update` | ❌ | N/A | Success/error message with emojis | **Destructive** - triggers all daily subs |
+| `codeflow-prs` | ✅ | List of tracked PRs | Formatted PR list | Filters by channel name |
+| `tracked-pr` | ✅ | Single tracked PR object | Formatted PR details | Requires subscription ID |
+| `backflow-status` | ✅ | Backflow status object | Formatted backflow report | Requires VMR build ID |
+| `subscription-history` | ✅ | History entries list | Formatted history timeline | Requires subscription ID |
+| `build-graph` | ✅ | Build graph object | Formatted dependency graph | Requires build ID |
+| `flow-graph` | ✅ | Flow graph object | Formatted flow graph | Requires channel ID + optional filters |
+| `codeflow-statuses` | ✅ | Codeflow status object | Formatted status report | Defaults to VMR (dotnet/dotnet, main) |
+| `cache` | ❌ | N/A | Cache cleared message | Admin command - clears SQLite cache |
+
+**Summary:** 17/20 = **85% JSON coverage** (excludes: mcp, 2 triggers, cache)
+
+---
+
+## 🔍 MCP Tool Output Analysis
+
+**All 20 MCP tools return `Task<string>`** with the following pattern:
+
+```csharp
+public async Task<string> GetSubscriptions(...)
+{
+    var subs = await _service.GetSubscriptionsAsync(...);
+    
+    var sb = new StringBuilder();
+    sb.AppendLine($"Found {subs.Count} subscription(s):\n");
+    foreach (var sub in subs)
+    {
+        sb.AppendLine($"**{sub.SourceRepository}** → **{sub.TargetRepository}**");
+        sb.AppendLine($"  Channel: {sub.Channel?.Name} | ID: {sub.Id}");
+    }
+    
+    return Timestamp(noCache) + sb.ToString();  // Always includes timestamp
+}
+```
+
+**MCP Output Characteristics:**
+- ✅ Human-readable Markdown formatting
+- ✅ Bold headers (`**text**`), bullet points, structured layout
+- ✅ Emojis for status indicators (✅ ⚠️ 🔒 ⚡)
+- ✅ Timestamp prefix on every response (cached or fresh)
+- ❌ NO JSON support - strings are not machine-parseable
+- ❌ NO `--json` equivalent option
+
+**MCP Tool List (20 total):**
+1. `maestro_subscriptions`
+2. `maestro_subscription`
+3. `maestro_latest_build`
+4. `maestro_build`
+5. `maestro_builds`
+6. `maestro_channels`
+7. `maestro_channel`
+8. `maestro_default_channels`
+9. `maestro_subscription_health`
+10. `maestro_build_freshness`
+11. `maestro_trigger_subscription` (destructive)
+12. `maestro_trigger_daily_update` (destructive)
+13. `maestro_codeflow_prs`
+14. `maestro_codeflow_pr` (tracked PR)
+15. `maestro_backflow_status`
+16. `maestro_subscription_history`
+17. `maestro_build_graph`
+18. `maestro_flow_graph`
+19. `maestro_codeflow_statuses`
+20. `maestro_clear_cache` (admin)
+
+---
+
+## 🔧 Output Format Patterns
+
+### CLI Text Output Pattern
+```csharp
+Console.WriteLine($"Found {subs.Count} subscription(s):\n");
+foreach (var sub in subs)
+{
+    Console.WriteLine($"{sub.SourceRepository} → {sub.TargetRepository} ({sub.TargetBranch})");
+    Console.WriteLine($"  Channel: {sub.Channel?.Name ?? "N/A"} | ID: {sub.Id}");
+    Console.WriteLine($"  Enabled: {sub.Enabled} | Last Build: {sub.LastAppliedBuild?.Id.ToString() ?? "none"}");
+    Console.WriteLine();
+}
+```
+
+### CLI JSON Output Pattern
+```csharp
+if (json)
+{
+    Console.WriteLine(JsonSerializer.Serialize(subs, s_jsonOptions));
+}
+```
+
+Where `s_jsonOptions = new() { WriteIndented = true }` (pretty-printed)
+
+### MCP Output Pattern
+```csharp
+var sb = new StringBuilder();
+sb.AppendLine($"**{sub.SourceRepository}** → **{sub.TargetRepository}** ({sub.TargetBranch})");
+sb.AppendLine($"  Channel: {sub.Channel?.Name ?? "N/A"} | ID: {sub.Id}");
+sb.AppendLine($"  Enabled: {sub.Enabled} | Last Build: {sub.LastAppliedBuild?.Id.ToString() ?? "none"}");
+return Timestamp(noCache) + sb.ToString();
+```
+
+**Key Differences:**
+- CLI text: Plain text, no Markdown, no timestamp
+- CLI JSON: Pretty-printed JSON objects, no timestamp
+- MCP: Markdown + emojis + timestamp prefix
+
+---
+
+## 📋 Gap Analysis
+
+### ✅ What Works Well
+1. **17/20 CLI commands support JSON** - Strong foundation for agent use
+2. **Consistent JSON pattern** - All use same `s_jsonOptions` (WriteIndented=true)
+3. **Shared data layer** - `MaestroService` ensures CLI and MCP return same underlying data
+4. **Error handling** - CLI uses `Console.Error.WriteLine()` + `Environment.Exit(1)` for failures
+
+### ⚠️ Gaps for CLI-as-Skill Pattern
+
+#### **Gap 1: Trigger commands lack JSON output**
+- `trigger-subscription` outputs: `✅ Successfully triggered subscription {id} for build #{buildId}`
+- `trigger-daily-update` outputs: `✅ Successfully triggered daily update for all subscriptions`
+- **Problem:** Agents can't parse success/error in structured way
+- **Impact:** Agents must use regex/string matching to detect success
+
+#### **Gap 2: MCP has no JSON mode**
+- MCP tools return Markdown strings only
+- **Problem:** If agents call MCP tools via bash (indirect), they can't get structured data
+- **Impact:** Not relevant for direct CLI-as-skill pattern, but limits MCP-as-skill use
+
+#### **Gap 3: Error format inconsistency**
+- CLI errors: `Console.Error.WriteLine()` + exit code 1
+- MCP errors: Return error string (graceful, no exception)
+- **Problem:** Agents need to check both stderr and exit codes
+- **Impact:** Slightly more complex error detection logic
+
+#### **Gap 4: No structured trigger responses**
+- Trigger commands return void (no data object)
+- Success message is human-readable only
+- **Problem:** Agents can't get subscription details after trigger
+- **Impact:** Agents must make second call to `subscription` command to verify
+
+---
+
+## 💡 Recommendations
+
+### **Priority 1: Add JSON support to trigger commands**
+
+**Change:** Add `bool json = false` parameter to both trigger commands
+
+**Example:**
+```csharp
+[Command("trigger-subscription")]
+public async Task TriggerSubscription(
+    [Argument] string subscriptionId,
+    [Argument] int buildId,
+    bool force = false,
+    bool json = false)  // NEW
+{
+    if (!Guid.TryParse(subscriptionId, out var id))
+    {
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(new { error = "Invalid subscription ID format. Expected a GUID." }, s_jsonOptions));
+            Environment.Exit(1);
+        }
+        else
+        {
+            Console.Error.WriteLine("Invalid subscription ID format. Expected a GUID.");
+            Environment.Exit(1);
+        }
+        return;
+    }
+
+    try
+    {
+        var result = await _service.TriggerSubscriptionAsync(id, buildId, force);
+        
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(new
+            {
+                success = true,
+                subscriptionId = subscriptionId,
+                buildId = buildId,
+                forced = force,
+                subscription = result
+            }, s_jsonOptions));
+        }
+        else
+        {
+            Console.WriteLine($"✅ Successfully {(force ? "force-" : "")}triggered subscription {subscriptionId} for build #{buildId}");
+            Console.WriteLine($"\nSubscription: {result.SourceRepository} → {result.TargetRepository} ({result.TargetBranch})");
+            Console.WriteLine($"Channel: {result.Channel?.Name ?? "N/A"}");
+            if (force)
+                Console.WriteLine($"\n⚡ Force mode: existing PR branch will be overwritten with fresh VMR content.");
+        }
+    }
+    catch (InvalidOperationException ex) when (ex.Message.Contains("Authentication required"))
+    {
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(new { error = ex.Message }, s_jsonOptions));
+            Environment.Exit(1);
+        }
+        else
+        {
+            Console.Error.WriteLine($"🔒 {ex.Message}");
+            Environment.Exit(1);
+        }
+    }
+}
+```
+
+**Impact:** Agents can parse trigger results reliably
+
+---
+
+### **Priority 2: Standardize JSON error responses**
+
+**Current:** Mix of `Console.Error.WriteLine()` + exit code 1  
+**Proposed:** When `--json` flag is used, output JSON to stdout (not stderr) + exit code
+
+**Example:**
+```json
+{
+  "error": "Channel 'invalid-channel' not found.",
+  "exitCode": 1
+}
+```
+
+**Benefits:**
+- Agents can parse errors in JSON mode
+- Consistent with success responses
+- Still uses exit codes for shell integration
+
+---
+
+### **Priority 3: Document CLI-as-skill pattern**
+
+**Create:** Documentation for agents using `mstro` via bash
+
+**Include:**
+- Complete command reference with JSON output schemas
+- Error handling guide (exit codes + JSON errors)
+- Example bash scripts for common workflows
+- Comparison: CLI vs MCP tool equivalents
+
+**Location:** `docs/cli-as-skill.md`
+
+---
+
+### **Priority 4 (Optional): Add MCP JSON mode**
+
+**If** we want MCP tools to support JSON (low priority for current CLI-as-skill focus):
+
+**Change:** Add optional parameter to MCP tools
+```csharp
+[McpServerTool(...)]
+public async Task<string> GetSubscriptions(
+    ...,
+    bool jsonOutput = false)  // NEW
+{
+    var subs = await _service.GetSubscriptionsAsync(...);
+    
+    if (jsonOutput)
+    {
+        return JsonSerializer.Serialize(new
+        {
+            timestamp = DateTime.UtcNow,
+            cached = !noCache,
+            data = subs
+        }, s_jsonOptions);
+    }
+    
+    // ... existing Markdown output ...
+}
+```
+
+**Note:** This is lower priority since agents will use CLI, not MCP tools directly
+
+---
+
+## 🎓 Data Structures Reference
+
+### MaestroService Return Types (from service layer)
+
+The CLI `--json` flag serializes these objects directly:
+
+- `GetSubscriptionsAsync()` → `List<Subscription>`
+- `GetSubscriptionAsync(Guid)` → `Subscription`
+- `GetLatestBuildAsync(string, int)` → `Build`
+- `GetBuildAsync(int)` → `Build`
+- `GetBuildsAsync(...)` → `List<Build>`
+- `GetChannelsAsync()` → `List<Channel>`
+- `GetChannelByIdAsync(int)` → `Channel`
+- `GetChannelByNameAsync(string)` → `Channel`
+- `GetDefaultChannelsAsync(...)` → `List<DefaultChannel>`
+- `GetSubscriptionHealthAsync(...)` → `SubscriptionHealthReport` (custom object)
+- `GetBuildFreshnessAsync(string)` → `BuildFreshnessResult` (custom object)
+- `TriggerSubscriptionAsync(...)` → `Subscription`
+- `TriggerDailyUpdateAsync()` → `void`
+- `GetCodeflowPrsAsync(...)` → `List<CodeflowPr>`
+- `GetTrackedPrAsync(Guid)` → `CodeflowPr`
+- `GetBackflowStatusAsync(int)` → `BackflowStatus` (custom object)
+- `GetSubscriptionHistoryAsync(Guid)` → `List<SubscriptionHistoryItem>`
+- `GetBuildGraphAsync(int)` → `BuildGraph` (custom object)
+- `GetFlowGraphAsync(...)` → `FlowGraph` (custom object)
+- `GetCodeflowStatusesAsync(...)` → `CodeflowStatuses` (custom object)
+
+**Note:** Most are direct Maestro API models (`Subscription`, `Build`, `Channel`), some are custom aggregations for specific use cases.
+
+---
+
+## 📝 Summary
+
+**Current State:**
+- ✅ **85% CLI JSON coverage** (17/20 commands)
+- ❌ **0% MCP JSON coverage** (20/20 Markdown-only)
+- ✅ Strong foundation for CLI-as-skill pattern
+
+**Minimal Changes Needed:**
+1. Add `--json` to 2 trigger commands
+2. Standardize JSON error format
+3. Document CLI-as-skill usage
+
+**Estimated Effort:**
+- Priority 1 (trigger JSON): ~2 hours (straightforward pattern replication)
+- Priority 2 (error standardization): ~1 hour (refactor error handling)
+- Priority 3 (documentation): ~3 hours (comprehensive guide)
+- **Total: ~6 hours** for full agent-friendly CLI
+
+**Agent Benefits:**
+- Reliable JSON parsing for all commands
+- Consistent error detection (exit codes + JSON)
+- No need to parse human-readable text
+- Can chain commands via bash scripts with structured data flow
+
+---
+
+**Audit completed:** 2026-03-13  
+**Next steps:** Review with team, prioritize changes, implement trigger JSON support
+# Skill-Based Architecture for Context Tax Reduction
+
+**Author:** Holden (Lead / Architect)  
+**Date:** 2026-03-18  
+**Status:** Proposal — Awaiting Larry's review
+
+---
+
+## Executive Summary
+
+**Recommendation: Implement a lightweight Copilot skill that routes to the CLI tool, supplemented by a knowledge-base resource for progressive disclosure.**
+
+This hybrid approach reduces context tax from **~1,310 tokens** (20 MCP tools) to **~50-100 tokens** (1 skill entry point + 1 knowledge resource), while preserving full functionality and improving agent discoverability through progressive help patterns.
+
+---
+
+## 1. Context Tax Quantification
+
+### Current MCP Tool Surface (20 tools)
+
+**Total description text:** 5,241 characters across 74 description attributes  
+**Estimated token cost:** ~1,310 tokens (using 4 chars/token approximation)  
+**Breakdown:**
+- Tool-level descriptions: 20 tools × ~75 chars each = ~1,500 chars
+- Parameter descriptions: 54 parameters × ~65 chars each = ~3,500 chars
+- Attribute overhead: ~240 chars
+
+**Per-agent impact:**
+- Every agent connected to the MCP server pays this cost upfront
+- Even simple queries like "what's the latest runtime build?" consume 1,310 tokens before the agent writes a single word
+- Multi-client deployments (VS Code + CLI + Claude) replicate this cost across 3 separate processes
+
+### Proposed Skill Approach (1 entry point + 1 resource)
+
+**Skill entry description:** ~50-100 chars  
+**Knowledge resource:** ~200-500 chars (overview + routing hints)  
+**Total context tax:** ~50-100 tokens (87-94% reduction)
+
+**Progressive disclosure cost:**
+- Initial context: 50-100 tokens
+- When agent needs help: +500 tokens (via resource read or help command output)
+- Total worst-case: 550-600 tokens (still 58% cheaper than MCP tools)
+
+**Key insight:** Most agent interactions use 1-3 tools. The current approach pays for 20 upfront. The skill approach defers 95% of the documentation cost until it's actually needed.
+
+---
+
+## 2. Feasibility: CLI vs MCP for Agent Use
+
+### Can a CLI replace MCP tools?
+
+**Yes, with caveats.** The maestro.mcp CLI already implements 19 commands that mirror the 20 MCP tools (1:1 parity minus `mcp` command itself). The CLI has been designed for both humans and agents:
+
+- ✅ **Structured output:** `--json` flag on every command returns machine-readable JSON
+- ✅ **Exit codes:** Proper 0/1 exit codes signal success/failure
+- ✅ **Stderr separation:** Errors go to stderr, data to stdout (agent-friendly)
+- ✅ **Parameter consistency:** Same parameter names as MCP tools
+- ✅ **Shared cache:** CLI and MCP server use the same SQLite cache at `~/.mstro/cache.db`
+
+**CLI advantages over MCP:**
+1. **No persistent connection** — agents spawn on-demand, no stdio lifecycle management
+2. **Lower latency** — bash tool is faster than MCP tool roundtrip for simple queries
+3. **Easier debugging** — humans can test exact commands agents run (`mstro subscriptions --source-repository=...`)
+4. **Tool install friction:** `dnx lewing.maestro.mcp` downloads on first use (no install step)
+
+**CLI disadvantages vs MCP:**
+1. **No parameter validation** — MCP tools get typed parameter validation; CLI requires manual parsing
+2. **No streaming** — MCP supports streaming responses for long operations; CLI dumps full output
+3. **Process overhead** — Each CLI invocation spawns a new .NET process (~200ms startup)
+
+**Tradeoff verdict:** For maestro.mcp, the CLI disadvantages are **negligible**:
+- Parameter validation: ConsoleAppFramework handles this (type-safe, auto help)
+- Streaming: Not needed — largest response (build graph) is <10KB
+- Process overhead: Acceptable — 200ms startup << 5min cache TTL benefit
+
+---
+
+## 3. Progressive Disclosure Patterns
+
+### Pattern 1: Help Command (Current Helix Model)
+
+The helix.mcp MCP server uses a `helix_ci_guide` tool that returns repo-specific documentation on-demand. This is a **knowledge tool** — it doesn't perform actions, just returns structured help text.
+
+**Applied to maestro.mcp:**
+
+Agent sees skill → runs `mstro --help` → sees 19 commands (200 lines, ~500 tokens) → runs `mstro help <command>` for details
+
+**Token cost:**
+- Initial: ~50 tokens (skill description)
+- After help: +500 tokens (command list)
+- After command help: +100 tokens (parameter details)
+- **Total: 650 tokens** (still 50% cheaper than 1,310 for all MCP tools upfront)
+
+### Pattern 2: MCP Knowledge Resource (New Model)
+
+The MCP spec supports **resources** — documents that agents can read on-demand. This is what lewing/helix.mcp is experimenting with as an alternative to tool descriptions.
+
+**Applied to maestro.mcp:**
+
+```json
+{
+  "resources": [
+    {
+      "uri": "maestro://guide",
+      "name": "Maestro CLI Guide",
+      "description": "Command reference and usage patterns for Maestro/BAR data"
+    }
+  ]
+}
+```
+
+Resource content includes: command overview table, common task examples, parameter conventions, cache behavior, cross-references.
+
+**Token cost:**
+- Initial: ~50 tokens (skill description)
+- After resource read: +200 tokens (guide overview)
+- **Total: 250 tokens** (81% cheaper than MCP tools)
+
+**Resource advantages:**
+- ✅ Agents can re-read the guide mid-session (no CLI invocation)
+- ✅ Can include examples, gotchas, cross-references
+- ✅ Can be versioned/updated independently of tool code
+
+**Resource disadvantages:**
+- ❌ MCP resource support is new (not all clients support it yet)
+- ❌ Requires implementing `resources/read` handler in MCP server
+
+---
+
+## 4. Skill vs MCP vs Resources: Comparison
+
+| Dimension | Full MCP Tools (Current) | CLI Skill + Help | CLI Skill + Resource |
+|-----------|-------------------------|------------------|---------------------|
+| **Initial context tax** | ~1,310 tokens | ~50 tokens | ~50 tokens |
+| **Worst-case context tax** | ~1,310 tokens | ~650 tokens | ~250 tokens |
+| **Agent discovery** | Excellent (all tools listed in `tools/list`) | Good (via `--help`) | Excellent (resource is discoverable) |
+| **Parameter validation** | Excellent (typed, auto-checked) | Good (ConsoleAppFramework validates) | Good (ConsoleAppFramework validates) |
+| **Cross-references** | Medium (via description text) | Good (via `--help` related commands) | Excellent (markdown links in resource) |
+| **Client compatibility** | Universal (all MCP clients) | Universal (bash tool) | Limited (resource support new) |
+| **Implementation complexity** | Low (already exists) | Low (CLI exists, skill is trivial) | Medium (need resource handler) |
+| **Maintainability** | Medium (descriptions in code) | Medium (help text in CLI) | High (guide is separate markdown) |
+| **Multi-step workflows** | Good (agent chains tools) | Good (agent chains CLI commands) | Excellent (guide shows patterns) |
+| **Offline usage** | No (requires MCP server) | Yes (CLI is standalone) | No (requires MCP server for resource) |
+
+**Verdict:**
+- **Best for context tax:** CLI Skill + Resource (81% reduction)
+- **Best for compatibility:** CLI Skill + Help (works everywhere)
+- **Best for agent experience:** CLI Skill + Resource (if client supports it)
+
+---
+
+## 5. Implementation Sketch
+
+### Option A: CLI Skill + Help (Conservative)
+
+**Copilot skill definition:**
+
+```yaml
+name: maestro
+description: Query Maestro/BAR dependency flow data using the mstro CLI tool
+invoke: |
+  # Check if mstro is installed
+  if ! command -v mstro &> /dev/null; then
+    echo "Installing mstro CLI..."
+    dnx lewing.maestro.mcp --help > /dev/null 2>&1 || {
+      echo "ERROR: dnx not available. Install .NET 10 SDK first."
+      exit 1
+    }
+  fi
+  
+  echo "Maestro CLI (mstro) is available. Use 'mstro --help' to see all commands."
+  echo ""
+  echo "Common tasks:"
+  echo "  - Check subscription health: mstro subscription-health <repo-url>"
+  echo "  - List subscriptions: mstro subscriptions --target-repository <url>"
+  echo "  - Get latest build: mstro latest-build <repo-url> --channel-name '<channel>'"
+  echo ""
+  echo "All commands support --json for structured output and --no-cache to bypass cache."
+```
+
+**Implementation cost:** ~1 hour (write skill YAML, test in Copilot CLI)
+
+### Option B: CLI Skill + MCP Resource (Optimal)
+
+**MCP server changes:**
+
+```csharp
+// In new file: src/MaestroTool.Core/MaestroResources.cs
+
+[McpServerResource]
+public class MaestroResources
+{
+    private const string GuideContent = @"# Maestro CLI Guide
+The `mstro` CLI provides access to Maestro/BAR data...
+(full guide content)
+";
+
+    [Resource(Uri = "maestro://guide")]
+    [Description("Command reference and usage patterns for Maestro/BAR data")]
+    public Task<string> GetGuide()
+    {
+        return Task.FromResult(GuideContent);
+    }
+}
+```
+
+**Implementation cost:** ~3 hours (resource handler, guide content, testing)
+
+### Option C: Hybrid (Recommended)
+
+**Combine both approaches:**
+1. Keep the full MCP tool surface for clients that prefer it (backward compatible)
+2. Add a `maestro://guide` resource for progressive disclosure
+3. Publish a Copilot skill that routes to the CLI + resource
+
+**Client choice:**
+- **MCP-native clients:** Use tools directly (pay 1,310 token tax if they want)
+- **Skill-aware clients:** Use skill → CLI + resource (pay 250 token tax)
+- **Humans:** Use CLI directly (no agent needed)
+
+**Implementation cost:** ~4 hours (resource handler + skill + testing)
+
+**Benefits:**
+- ✅ Zero breaking changes (MCP tools stay)
+- ✅ Context tax reduction for skill-aware clients
+- ✅ Resource acts as living documentation
+- ✅ CLI stays independent (works without MCP server)
+
+---
+
+## 6. Comparison to Helix MCP Approaches
+
+### Helix MCP: Knowledge Tools
+
+The helix.mcp server uses a `helix_ci_guide` tool that returns repo-specific help text. Agents discover it naturally (it's in the tool list), but it still counts against initial context tax.
+
+### Helix MCP: Resource Experiment
+
+The helix.mcp team is experimenting with:
+- Resource: `helix://knowledgebase` (large markdown document)
+- Tool: `helix_query_kb(question)` (semantic search over the resource)
+
+**Pros:** Resource only loaded on-demand (no upfront context tax), can store huge amounts of documentation
+
+**Cons:** Requires semantic search implementation (complex), resource support is new, debugging is harder
+
+### Maestro MCP: Proposed Approach
+
+**Hybrid of both:**
+- Resource: `maestro://guide` (command reference, 2-3KB markdown)
+- Skill: Routes to CLI, points to resource
+- MCP tools: Stay available for MCP-native clients
+
+**Advantages over Helix approaches:**
+1. **Simpler than semantic search** — guide is static markdown, no embeddings
+2. **Cheaper than knowledge tools** — resource doesn't count against initial context
+3. **More flexible than pure MCP** — skill works even if MCP server is down (CLI is standalone)
+
+---
+
+## 7. Recommended Architecture
+
+**Implement Option C (Hybrid):**
+
+1. **Add `maestro://guide` resource to MCP server**
+   - Content: 2-3KB markdown guide (command reference, common patterns, examples)
+   - Estimated token cost when read: ~200 tokens
+   - Located in: `src/MaestroTool.Core/MaestroResources.cs` (new file)
+
+2. **Publish Copilot skill**
+   - Name: `maestro`
+   - Description: "Query Maestro/BAR dependency flow data. Read maestro://guide or run mstro --help."
+   - Invoke script: Checks `mstro` availability, prints routing message
+   - Located in: `.copilot/skills/maestro/` (new directory)
+
+3. **Keep MCP tools unchanged**
+   - Backward compatible — existing clients continue working
+   - Located in: `src/MaestroTool.Core/MaestroMcpTools/*.cs` (no changes)
+
+4. **Document the tradeoff in README**
+   - Section: "Reducing Context Tax"
+   - Explain: MCP tools (1,310 tokens) vs skill+resource (250 tokens)
+   - Recommend: Use skill for Copilot CLI, MCP tools for other clients
+
+### Implementation Checklist
+
+- [ ] Create `MaestroResources.cs` with `maestro://guide` resource handler
+- [ ] Write guide content (markdown, 2-3KB):
+  - [ ] Command overview table
+  - [ ] Common task examples (health checks, triggers, flow status)
+  - [ ] Parameter conventions (--json, --no-cache)
+  - [ ] Cache behavior explanation
+  - [ ] Cross-references to related commands
+- [ ] Create `.copilot/skills/maestro/skill.yaml`
+- [ ] Test skill in Copilot CLI:
+  - [ ] Verify `mstro` installs via `dnx` if not present
+  - [ ] Verify resource is readable
+  - [ ] Verify agents can chain CLI commands
+- [ ] Update README with "Reducing Context Tax" section
+- [ ] Update CHANGELOG with new resource + skill
+
+### Migration Path
+
+**Phase 1 (now):** Implement resource + skill (4 hours)  
+**Phase 2 (after validation):** Promote skill in documentation, update Copilot CLI defaults  
+**Phase 3 (future):** Deprecate MCP tools if skill adoption is high (breaking change, needs major version bump)
+
+---
+
+## 8. Open Questions
+
+1. **Copilot skill format:** What's the actual YAML/JSON schema for Copilot skills?
+2. **Resource client support:** Which MCP clients support `resources/read`? (VS Code Copilot? Claude Desktop?)
+3. **Skill discovery:** How do agents discover available skills?
+4. **Skill vs MCP tool priority:** If both skill and MCP tools are available, which do agents prefer?
+
+**Action items:**
+- [ ] Larry: Confirm Copilot skill format and discovery mechanism
+- [ ] Holden: Test MCP resource support in VS Code Copilot + Claude Desktop
+- [ ] Naomi: Implement resource handler once format is confirmed
+
+---
+
+## Appendix: Token Cost Calculation Details
+
+### MCP Tools (Current)
+
+```python
+# Data from codebase analysis:
+total_chars = 5241  # All [Description("...")] text
+tool_count = 20
+param_count = 54
+
+# Token estimation (conservative: 4 chars/token)
+estimated_tokens = total_chars / 4  # = 1,310 tokens
+
+# Breakdown:
+tool_descriptions = 1500 / 4  # ~375 tokens
+param_descriptions = 3500 / 4  # ~875 tokens
+attribute_overhead = 240 / 4   # ~60 tokens
+```
+
+### Skill + Resource (Proposed)
+
+```python
+# Skill description
+skill_tokens = 25  # "Query Maestro/BAR... Read maestro://guide..."
+
+# Resource content (guide)
+guide_tokens = 625  # 2500 chars / 4
+
+# Initial context (before agent reads resource)
+initial_cost = 25 tokens
+
+# Worst-case (agent reads guide)
+worst_case = 25 + 625 = 650 tokens
+
+# Typical case (agent uses guide examples, doesn't read full text)
+typical_cost = 25 + (625 * 0.3) = ~200 tokens
+```
+
+**Reduction:** 1,310 → 200 = **85% context tax reduction** in typical usage
+
+---
+
+## Conclusion
+
+The skill-based architecture achieves **81-85% context tax reduction** while preserving full functionality and improving agent discoverability. The hybrid approach (Option C) is recommended because it:
+
+1. **Reduces context tax** from 1,310 to ~250 tokens (worst-case) for skill-aware clients
+2. **Maintains backward compatibility** — MCP tools stay available
+3. **Improves agent experience** — progressive disclosure via resource + help text
+4. **Works everywhere** — skill uses CLI (universal), resource is MCP bonus
+5. **Low implementation cost** — 4 hours to ship, no breaking changes
+
+**Next step:** Larry confirms Copilot skill format, then Naomi implements resource handler.
+# CLI-as-Skill Files and Guide Command
+
+**Date:** 2026-03-13  
+**Author:** Naomi  
+**Status:** Implemented
+
+## Context
+
+We're establishing a CLI-as-skill pattern where AI agents can use the `mstro` CLI tool via bash instead of loading the MCP server. This requires:
+1. Lightweight documentation shipped with the NuGet package
+2. Squad skill file documenting the pattern
+3. Workflow-organized guide command for agent consumption
+
+This pattern needs to be portable to `lewing/helix.mcp` later.
+
+## Decision
+
+### Created Three Deliverables
+
+**1. `src/MaestroTool/copilot-skill.md` (~6KB)**
+- Ships in NuGet package as discoverable documentation
+- Content: what mstro does, install command, quick discovery, 5-6 common workflows, JSON output, cache notes
+- All examples use `--json` flag to teach structured output pattern
+- Focuses on most common use cases: subscription-health, latest-build, codeflow-statuses, build tracing
+
+**2. `.ai-team/skills/maestro-cli/SKILL.md` (~4.5KB)**
+- Squad skill documentation following standard skill format
+- Sections: Pattern, When to Use, Examples, Implementation Notes, Portability
+- Documents preference rules: CLI when need JSON/bash pipeline, MCP when conversational/long-running
+- 3 concrete examples showing bash scripting patterns with jq, variable capture, cache warming
+
+**3. `mstro guide` command in Program.cs (~5KB inline)**
+- New CLI command that outputs workflow-organized markdown guide
+- Structure: Quick Reference table → Workflows (by scenario) → Notes
+- Each workflow section: numbered steps with command + explanation, followed by bash example
+- Organized by **user intent** (Investigating Subscription Health, Tracing Build Flow) not by command
+
+### Key Design Choices
+
+**Why workflow organization in guide?**
+- Teaches agents HOW to accomplish tasks, not just what commands exist
+- Agent searches guide for "subscription health" and finds complete workflow with examples
+- Shows command chaining patterns (pipe to jq, capture output to variable)
+- More valuable than `--help` which only lists commands
+
+**Why inline string constant?**
+- Guide content is static, doesn't need external file dependencies
+- Easy to maintain (single location in Program.cs)
+- Always in sync with command availability
+- No build-time generation complexity
+
+**Why ship copilot-skill.md in NuGet package?**
+- Agents can discover it without needing to query the repo
+- Available immediately after `dotnet tool install`
+- Lightweight entry point (100 lines) that points to `mstro guide` for details
+- Pattern is portable to other NuGet-packaged CLI+MCP tools
+
+## Rationale
+
+1. **Progressive disclosure:** `copilot-skill.md` → `mstro --help` → `mstro guide` → `mstro <cmd> --help`
+2. **Portability:** Pattern uses only framework features, portable to helix.mcp with different content
+3. **Maintainability:** Guide content is single string constant, easy to update when commands change
+4. **Discoverability:** NuGet package ships with skill file, no external docs needed
+
+## Alternative Considered
+
+**Generate guide from command attributes at build time:** Could extract `[Description]` attributes and build guide automatically. **Rejected** because:
+- Guide needs workflow organization, not command-alphabetical
+- Examples and command chaining patterns can't be auto-generated
+- Inline string constant is easier to maintain for workflow-based content
+- Code generation adds complexity for marginal benefit
+
+## Implementation Notes
+
+- Guide command is simple: no parameters, outputs string constant to stdout
+- Guide content organized by workflows matching common user tasks (not by command)
+- All examples include `--json` flag to reinforce structured output pattern
+- Quick Reference table lists all 21 commands (20 query/action + 1 cache utility)
+- copilot-skill.md focuses on top 5-6 most common workflows only
+
+## Future Considerations
+
+When porting this pattern to helix.mcp:
+- Keep same file structure (`copilot-skill.md`, `SKILL.md`, `guide` command)
+- Adapt workflow sections to helix/AzDO tasks (test failures, CI analysis, work items)
+- Use same progressive disclosure pattern (skill file → --help → guide → command help)
+- Consider sharing guide format template between maestro.mcp and helix.mcp
+
+## Testing
+
+- Build verified: `dotnet build src/MaestroTool/MaestroTool.csproj` succeeded
+- Guide command tested: `dotnet run --project src/MaestroTool/MaestroTool.csproj -- guide` outputs formatted markdown
+- Help listing verified: `mstro --help` shows guide command in list
+
+## Related Decisions
+
+- **naomi-cli-help.md** — Enhanced CLI command descriptions for MCP/CLI parity
+- **amos-json-audit.md** — Documented JSON output coverage (17/20 commands support --json)
+- **holden-skill-architecture.md** — Squad skill format and organization
+
+---
+
+## Reflection-based CLI Schema Output
+
+**Author:** Naomi (Backend Dev)  
+**Date:** 2026-03-13  
+**Status:** Implemented
+
+### Context
+
+Issue #12 adds a `--schema` flag to every read/query CLI command that already supports `--json`. The goal is to let agents and users inspect the JSON result shape without calling Maestro APIs or hand-maintaining separate schema contracts for PCS client models.
+
+### Decision
+
+Implement schema generation as a shared reflection-based concern in `src/MaestroTool.Core/CliSchema/SchemaGenerator.cs`, then wire each CLI query command through a common `TryPrintSchema<T>(bool schema)` helper at the top of the command body.
+
+### Implementation Details
+
+1. `SchemaGenerator` walks public instance properties and produces a PascalCase JSON skeleton that matches the CLI's default JSON naming.
+2. Placeholder mapping is centralized:
+   - strings/chars/URIs → `"<string>"`
+   - numerics → `0`
+   - booleans → `false`
+   - `DateTime`/`DateTimeOffset`/`DateOnly`/`TimeOnly` → `"<datetime>"`
+   - enums → `"<Value1|Value2|...>"`
+   - nullable types unwrap to the underlying placeholder
+   - collections emit a one-element sample array
+   - dictionaries emit a single `"<key>"` sample entry
+3. Cycle protection uses both a visited-type set and a max recursion depth of 5. When either guard trips, the generator emits `"<circular>"`.
+4. Schema output uses `JavaScriptEncoder.UnsafeRelaxedJsonEscaping` so placeholder tokens remain human-readable (`<string>`, not `\u003Cstring\u003E`).
+5. `--schema` short-circuits before per-command API/service lookups and wins over `--json`.
+
+### Files Changed
+
+- `src/MaestroTool.Core/CliSchema/SchemaGenerator.cs`
+- `src/MaestroTool/Program.cs`
+
+---
+
+## CLI Schema as Intentional Contracts
+
+**Author:** Holden (Architect)  
+**Date:** 2026-03-13  
+**Status:** Decided
+
+### Decision
+
+`mstro --schema` should be a **contract feature**, not a docs dump. Add `--schema` to every query command that already supports `--json`, emit a pretty-printed JSON skeleton with exact live field names/root shape, and generate it via reflection over the existing return types in `MaestroTool.Core`. Use real custom records and PCS client models directly where they exist.
+
+### Rationale
+
+1. **Agents need exact jq field discovery**, not a verbose specification language or a transport-model object dump
+2. **Keeping schema generation in Core** preserves the project architecture (host → service → client/cache)
+3. **Direct type reflection** generates schemas from actual return types, keeping implementation simple and maintainable
+4. **Pretty-printed output** allows agents to easily parse and understand the exact field structure they'll encounter
+
+### Related Work
+
+- Naomi's implementation uses reflection over existing return types (PCS models and custom records)
+- Consolidates schema generation logic in single `SchemaGenerator.cs` file
+- Supports all 17 query commands with consistent field naming (PascalCase)
+
+## MCP SDK Upgrade Recommendation — v1.0.0 → v1.3.0
+
+**Author:** Naomi (Backend Dev)  
+**Date:** 2026-05-08  
+**Status:** Recommendation (awaiting implementation)
+
+### Context
+
+ModelContextProtocol v1.0.0 is 3 minor versions behind the latest stable v1.3.0 (published ~20 hours ago). Changes between v1.0.0 and v1.3.0 include reliability fixes, memory leak patches, and improved diagnostics.
+
+### Decision
+
+**✅ Upgrade to v1.3.0 now.**
+
+Clean upgrade path with no breaking changes to our codebase. No code modifications required, only .csproj dependency version bumps.
+
+### Key Findings
+
+**v1.1.0 (2 months ago):**
+- Auto-populated completion handlers for prompt/resource parameters
+- Fixed server-initiated ping handling (SSE/HTTP stability)
+- Fixed server capabilities initialization
+- Fixed in-flight message handler cleanup (prevents memory leaks)
+- Impact on our code: None — we don't use prompts/resources yet
+
+**v1.2.0 (1 month ago):**
+- Legacy SSE endpoints disabled by default (we use Streamable HTTP; unaffected)
+- `RequestContext` 2-arg constructor marked obsolete (we don't construct RequestContext manually)
+- DI scope lifetime fix for task-augmented tools
+- OutputSchema support independent of return type
+- Fixed `WithMeta` + `WithProgress` causing tool invocation failures
+- Impact on our code: None for breaking changes; DI scope fix could benefit future long-running tools
+
+**v1.3.0 (20 hours ago):**
+- Made `ClientTransportClosedException` public with structured details (diagnostics improvement)
+- Fixed process crash when testing `StandardErrorLines` callbacks
+- Fixed stateless HTTP transport advertising `listChanged` incorrectly
+- Impact on our code: Exception handling is a UX win if we add client-side diagnostics
+
+### Breaking Changes Assessment
+
+**None for our codebase.**
+- We use Streamable HTTP (modern), not legacy SSE
+- We don't construct `RequestContext` instances manually
+- We don't have client-side transport error handling yet
+
+### Files to Update
+
+- `src/MaestroTool.Core/MaestroTool.Core.csproj` — Update `ModelContextProtocol` v1.0.0 → v1.3.0
+- `src/MaestroTool/MaestroTool.csproj` — Update `ModelContextProtocol` v1.0.0 → v1.3.0
+- `src/MaestroTool.Mcp/MaestroTool.Mcp.csproj` — Update `ModelContextProtocol.AspNetCore` v1.0.0 → v1.3.0
+
+### Verification Plan
+
+- Run all 167 tests (`dotnet test`)
+- Test stdio mode: `mstro mcp`
+- Test HTTP mode: `dotnet run --project src/MaestroTool.Mcp`
+
+### Future Considerations
+
+1. **AllowedValuesAttribute for channel names** (Medium effort) — v1.1.0 introduced auto-completion. We have several tools with `channelName` parameter that could benefit.
+2. **Document HTTP transport compliance** (Small effort) — Add note to README that our HTTP server uses modern Streamable HTTP.
+
+
+---
+
+# MCP SDK Upgrade Applied (v1.0.0 → v1.3.0)
+
+**Date:** 2026-05-08  
+**Decider:** Naomi (Backend Developer)  
+**Context:** Executed upgrade from ModelContextProtocol v1.0.0 → v1.3.0 based on prior review
+
+## Decision
+
+Applied ModelContextProtocol package upgrade to v1.3.0 across all 3 projects:
+- `MaestroTool.Core`: ModelContextProtocol v1.0.0 → v1.3.0
+- `MaestroTool`: ModelContextProtocol v1.0.0 → v1.3.0
+- `MaestroTool.Mcp`: ModelContextProtocol.AspNetCore v1.0.0 → v1.3.0
+
+## Verification Results
+
+**Build:** ✅ Clean (Release mode)
+- 0 warnings
+- 0 errors
+- Build time: 6.19s
+
+**Tests:** ✅ All passing
+- 179/179 tests passed
+- Test time: 21.25s
+- No new failures introduced
+
+**Warnings:** ✅ None
+- No obsolete-API warnings from v1.2.0 changes
+- We don't use deprecated `RequestContext` 2-arg constructor
+- Legacy SSE deprecation doesn't affect us (we use Streamable HTTP)
+
+## Code Changes Required
+
+**None** — upgrade was completely transparent to our codebase.
+
+## Benefits Gained
+
+From v1.1.0:
+- Auto-completion support via `AllowedValuesAttribute` (available for future use)
+- In-flight message handler cleanup fixes (improves reliability)
+
+From v1.2.0:
+- DI scope lifetime fix for task-augmented tools (improves tool execution stability)
+- Streamable HTTP transport fixes (directly benefits our HTTP MCP server)
+
+From v1.3.0:
+- Public `ClientTransportClosedException` with structured diagnostics (better error handling)
+- Process crash fix for stderr callbacks (improves reliability)
+- Stateless HTTP fix for `listChanged` capability (correct tool discovery behavior)
+
+## Recommendation
+
+**Continue monitoring SDK releases** — this upgrade demonstrated a clean upgrade path with zero friction. Future upgrades should be straightforward given our minimal surface area (20 tools, no custom transport logic, no manual `RequestContext` construction).
+
+---
+
+**Related:** See `.squad/agents/naomi/history.md` § "MCP SDK Version Review" for initial upgrade review and compatibility analysis.

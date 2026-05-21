@@ -98,3 +98,28 @@
 - Naomi implemented per architecture; all 179 tests passing
 
 **Related decision:** Reflection-based CLI Schema Output (naomi-schema-implementation.md) — implementation details and file changes
+
+📌 Team update (2026-05-08): MCP SDK v1.3.0 upgrade approved — Naomi comprehensive review confirms no breaking changes, clean upgrade path. 3 .csproj files need version bump (ModelContextProtocol v1.0.0 → v1.3.0). Reliability wins include DI scope fixes, memory leak prevention, improved diagnostics.
+
+
+## 2026-05-08: SDK Version Baseline Shifted
+
+Naomi completed upgrade of ModelContextProtocol from v1.0.0 → v1.3.0. Build clean (0 warnings), all 179 tests pass. SDK version baseline is now v1.3.0 across all projects. See decisions.md for upgrade details and benefits.
+
+---
+
+## 2026-05-21: Pending Architecture Decisions
+
+Two proposals await your review:
+
+### 1. Central Package Management (Alex — Infrastructure)
+**Status:** Decision required before implementation  
+**Proposal:** Adopt `Directory.Packages.props` with `<ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>`. Consolidates 4 .csproj files' version pins to single source. Effort: small (refactor only). Impacts all contributors' build workflow.  
+**See:** decisions.md § Recommendation 2
+
+### 2. MCP Tool Parameter Completion Enhancement (Naomi — SDK Capability)
+**Status:** Design recommendation provided  
+**Proposal:** Enhance validation errors in maestro.mcp tools with "Did you mean: X, Y, Z?" suggestions when parameter validation fails (e.g., invalid channel name). MCP spec does not support dynamic tool parameter completions — only Prompts/Resources. Recommended approach uses existing discovery tools + error message enhancement.  
+**See:** decisions.md § MCP Dynamic Parameter Completions Research
+
+**Next:** Please review and respond to decisions.md entries to unblock implementation phases.
