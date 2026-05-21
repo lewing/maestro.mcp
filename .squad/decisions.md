@@ -196,3 +196,81 @@ The following do not need my review:
 ### Decision 4: 🔴 Pre-release holds — confirmed
 
 NSubstitute 6.0.0-rc.1 and xunit.runner.visualstudio 4.0.0-pre.4 stay on hold until stable releases. No action needed.
+
+---
+
+## Naomi — Sqlite + Extensions PR Shipped
+
+**Date:** 2026-05-21  
+**Author:** Naomi  
+**PR:** https://github.com/lewing/maestro.mcp/pull/17
+
+### Notable: Shared-Environment Branch Contention
+
+During execution, git HEAD was being switched between calls by other concurrent agent sessions (Alex on `squad/infra-globaljson-and-actions`, Amos on `squad/test-infra-pin-and-sdk-bump`). This caused the initial checkout + edit sequence to land on the wrong branch at commit time. Mitigation: ran checkout + file edits + dotnet restore/build/test + commit all within a single bash process to prevent interleaved branch switching.
+
+**Recommendation for team:** When multiple agents work on the same repo simultaneously, each should do checkout-through-push in a single atomic shell session. Consider coordination via `.squad/orchestration-log.md` before branch ops.
+
+### Outcome
+
+All 4 packages bumped successfully. 179/179 tests pass. PR open for merge.
+
+---
+
+## Alex — RollForward Major Added to MaestroTool Executable
+
+**Author:** Alex (DevOps / Infrastructure)  
+**Date:** 2026-05-21  
+**Status:** Complete  
+**PR:** #16  
+**Precedent:** helix.mcp PR #52
+
+### Decision
+
+Add `<RollForward>Major</RollForward>` to `src/MaestroTool/MaestroTool.csproj` PropertyGroup to enable the global tool to start on machines with only newer .NET runtimes installed.
+
+### Rationale
+
+#### Problem
+
+The maestro.mcp global tool targets `net10.0`. On machines with only .NET 11 (or newer) installed, the tool fails to start because the .NET runtime config refuses to run if the exact target framework runtime is unavailable.
+
+#### Solution: Why RollForward Major
+
+- **Major (chosen):** Tool stays on net10 when available; rolls forward only when net10 is unavailable. Conservative, predictable behavior.
+- **LatestMajor (rejected):** Would unconditionally upgrade to any newer major version. Aggressive, unpredictable side effects.
+
+The decision to use `Major` preserves user expectations: the tool should behave the same across machines when possible, and only adapt when necessary.
+
+### Implementation
+
+Changed line 11 in `src/MaestroTool/MaestroTool.csproj`:
+
+```xml
+<PropertyGroup>
+  <OutputType>Exe</OutputType>
+  <TargetFramework>net10.0</TargetFramework>
+  <ImplicitUsings>enable</ImplicitUsings>
+  <Nullable>enable</Nullable>
+  <PackAsTool>true</PackAsTool>
+  <PackageType>McpServer</PackageType>
+  <ToolCommandName>mstro</ToolCommandName>
+  <Version>0.15.1</Version>
+  <RollForward>Major</RollForward>  <!-- Added -->
+</PropertyGroup>
+```
+
+### Verification
+
+- ✅ Build succeeds (0 warnings, 0 errors)
+- ✅ Pack succeeds (`lewing.maestro.mcp.0.15.1.nupkg` created)
+- ✅ All 179 tests pass
+- ✅ Change mirrors helix.mcp PR #52 exactly
+
+### Reference
+
+[.NET roll-forward behavior documentation](https://learn.microsoft.com/en-us/dotnet/core/versions/selection#control-roll-forward-behavior)
+
+### Precedent
+
+This fix replicates the approach taken in helix.mcp PR #52, which applied the same RollForward Major setting to HelixTool.csproj for the same reason: enabling compatibility with newer .NET runtimes while maintaining predictable behavior on machines with the target framework available.

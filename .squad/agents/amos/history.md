@@ -128,3 +128,26 @@ Naomi completed upgrade of ModelContextProtocol from v1.0.0 → v1.3.0. Build cl
 - `NSubstitute` 5.* → **5.3.0** (was already resolving to this)
 
 Holden's pin-exact-versions condition honored. No pre-release packages introduced. `dotnet test --logger trx` CI integration confirmed.
+
+---
+
+## 2026-05-21: Test Infrastructure — Test.Sdk Bump + Wildcard Pin Elimination
+
+**Task:** Upgrade Microsoft.NET.Test.Sdk 17.x → 18.5.1 and pin all wildcard version specifications in test projects to explicit semantic versions.
+
+**Deliverable:** PR #18 (`squad/test-infra-pin-and-sdk-bump`)
+
+**Key changes:**
+- Microsoft.NET.Test.Sdk 17.* → 18.5.1 (explicit pin; backward-compatible with VSTest)
+- xunit 2.* → 2.9.3 (explicit pin; removes risk of silent MAJOR bump)
+- xunit.runner.visualstudio 3.* → 3.1.5 (explicit pin)
+- NSubstitute 5.* → 5.3.0 (explicit pin; remains stable, pre-release 6.0.0-rc.1 held)
+
+**Rationale (Holden approval, Decision 2):**
+- Test.Sdk 18.x ships Microsoft.Testing.Platform but maintains VSTest backward compatibility
+- Wildcard pins are latent risk (easy to accidentally cross MAJOR boundary)
+- Central Package Management (Directory.Packages.props) proposal pending — these pins will migrate there when adopted
+
+**Verification:** All 179 tests pass; VSTest output produces valid TRX format; no new analyzer warnings from Test.Sdk 18.x bump.
+
+**Test framework compatibility:** xunit 2.9.3 + NSubstitute 5.3.0 + VSTest 18.5.1 combination validated; no breaking changes in mainstream test patterns.

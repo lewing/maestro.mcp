@@ -171,3 +171,39 @@
 - **Bundled with:** Extensions.DependencyInjection 10.0.3→10.0.8, Extensions.Hosting 10.0.0→10.0.8, PCS Client beta refresh
 
 **Rationale:** Sqlite 10.x aligns with net10.0 TFM and avoids unnecessary version skew with the broader .NET ecosystem.
+
+## 2026-05-21: PR #17 — Sqlite 9→10 + Extensions 10.0.8 + PCS Client beta refresh
+
+**PR:** https://github.com/lewing/maestro.mcp/pull/17  
+**Branch:** `squad/deps-sqlite-extensions-bump`  
+**Date:** 2026-05-21
+
+**Shipped:**
+- Microsoft.Data.Sqlite: 9.0.0 → 10.0.8 (major, Holden-approved)
+- Microsoft.Extensions.DependencyInjection: 10.0.3 → 10.0.8
+- Microsoft.Extensions.Hosting: 10.0.0 → 10.0.8
+- Microsoft.DotNet.ProductConstructionService.Client: 1.1.0-beta.26161.4 → 1.1.0-beta.26271.2
+
+**Test result:** 179/179 passed ✅  
+**Build:** 0 errors, 0 warnings ✅  
+**Note:** Shared-environment branch contention observed (other agents switching branches between bash calls). Mitigated by running checkout + edits + build + commit atomically.
+
+---
+
+## 2026-05-21: Dependency Bump — Sqlite + Extensions
+
+**Task:** Upgrade Microsoft.Data.Sqlite from 9.0.0 to 10.0.8 along with safe patch bumps for Microsoft.Extensions packages and PCS Client beta.
+
+**Deliverable:** PR #17 (`squad/infra-sqlite-extensions-bump`)
+
+**Key changes:**
+- Microsoft.Data.Sqlite 9.0.0 → 10.0.8 (approved by Holden; aligns net10.0 TFM with Sqlite major version)
+- Microsoft.Extensions.DependencyInjection 10.0.3 → 10.0.8 (patch)
+- Microsoft.Extensions.Hosting 10.0.0 → 10.0.8 (patch)
+- Microsoft.DotNet.ProductConstructionService.Client 1.1.0-beta.26161.4 → 1.1.0-beta.26271.2 (beta patch)
+
+**Verification:** 179/179 tests pass; cache service smoke test validates (CacheService.cs uses only stable ADO.NET APIs unchanged since v2)
+
+**Incident:** Shared repository environment caused git branch contention during concurrent execution with alex-1 and amos. Mitigation: ran entire workflow (checkout → edits → build → test → commit) atomically within single bash session.
+
+**Team recommendation:** Future parallel fan-outs use SQUAD_WORKTREES=1 to isolate agent worktrees.
