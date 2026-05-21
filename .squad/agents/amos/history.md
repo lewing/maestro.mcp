@@ -151,3 +151,28 @@ Holden's pin-exact-versions condition honored. No pre-release packages introduce
 **Verification:** All 179 tests pass; VSTest output produces valid TRX format; no new analyzer warnings from Test.Sdk 18.x bump.
 
 **Test framework compatibility:** xunit 2.9.3 + NSubstitute 5.3.0 + VSTest 18.5.1 combination validated; no breaking changes in mainstream test patterns.
+
+## 2026-05-21: PR #18 Merge Conflicts Resolved
+
+**Task:** Resolve merge conflicts on PR #18 after PRs #15, #16, and #17 merged ahead.
+
+**Conflicting files:**
+- `src/MaestroTool.Core/MaestroTool.Core.csproj` (dependency version conflicts)
+- `src/MaestroTool/MaestroTool.csproj` (dependency version conflicts)
+
+**Conflict details:**
+My branch (PR #18, Test.Sdk bump) had older dependency versions from the base. PRs #15 (Alex - Extensions patches), #16 (Alex - RollForward), and #17 (Naomi - Sqlite + Extensions) merged ahead with newer versions.
+
+**Resolution strategy:**
+Per Holden's policy: pin exact versions, take HIGHER stable versions. Resolved conflicts by accepting incoming versions from PRs #15 and #17:
+- Microsoft.Data.Sqlite: 9.0.0 → **10.0.8** (from PR #17, Naomi's Sqlite bump)
+- Microsoft.DotNet.ProductConstructionService.Client: 1.1.0-beta.26161.4 → **1.1.0-beta.26271.2** (from PR #15, Alex's PCS refresh)
+- Microsoft.Extensions.DependencyInjection: 10.0.3 → **10.0.8** (from PR #15, Alex's patch bump)
+- Microsoft.Extensions.Hosting: 10.0.0 → **10.0.8** (from PR #15, Alex's patch bump)
+
+**Verification:**
+- `dotnet restore` — clean
+- `dotnet test` — **179/179 tests passed** ✅
+- `gh pr view 18` — mergeStateStatus: **CLEAN**, mergeable: **MERGEABLE** ✅
+
+**Outcome:** PR #18 is now conflict-free and ready to merge. All test infrastructure changes (Test.Sdk 18.5.1 + pinned xunit/NSubstitute versions) validated with latest dependency versions from team PRs.
