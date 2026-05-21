@@ -17,6 +17,7 @@ public class MaestroService
     private readonly CacheService _cache;
     private readonly IGitHubApiClient? _gitHubClient;
     private readonly IAzDoApiClient? _azDoClient;
+    private readonly SemaphoreSlim _concurrencySemaphore = new(5, 5);
 
     public MaestroService(IMaestroApiClient client, CacheService cache, IGitHubApiClient? gitHubClient = null, IAzDoApiClient? azDoClient = null)
     {
@@ -143,187 +144,202 @@ public class MaestroService
         CancellationToken cancellationToken = default)
     {
         var subscriptions = await GetSubscriptionsAsync(targetRepository: targetRepository, noCache: noCache, cancellationToken: cancellationToken);
-        var results = new List<SubscriptionHealthResult>();
 
-        foreach (var sub in subscriptions)
+        // Filter out subscriptions with no channel
+        var validSubscriptions = subscriptions.Where(s => s.Channel?.Id != null).ToList();
+
+        // Parallelize subscription health checks with concurrency limit
+        var tasks = validSubscriptions.Select(sub => CheckSubscriptionHealthAsync(sub, noCache, includeCommitDetails, validate, cancellationToken));
+        var results = await Task.WhenAll(tasks);
+
+        return results.ToList();
+    }
+
+    private async Task<SubscriptionHealthResult> CheckSubscriptionHealthAsync(
+        Subscription sub,
+        bool noCache,
+        bool includeCommitDetails,
+        bool validate,
+        CancellationToken cancellationToken)
+    {
+        var channelId = sub.Channel!.Id; // Already validated in GetSubscriptionHealthAsync
+
+        await _concurrencySemaphore.WaitAsync(cancellationToken);
+        try
         {
-            var channelId = sub.Channel?.Id;
-            if (channelId == null) continue;
+            var latestBuild = await GetLatestBuildAsync(sub.SourceRepository, channelId, noCache, cancellationToken);
+            var lastApplied = sub.LastAppliedBuild;
 
-            try
+            var isStale = latestBuild != null && lastApplied != null && latestBuild.Id != lastApplied.Id;
+            var buildsBehind = 0;
+            int? commitsBehind = null;
+            IReadOnlyList<CommitInfo>? recentCommits = null;
+
+            if (isStale && latestBuild != null && lastApplied != null)
             {
-                var latestBuild = await GetLatestBuildAsync(sub.SourceRepository, channelId, noCache, cancellationToken);
-                var lastApplied = sub.LastAppliedBuild;
+                buildsBehind = latestBuild.Id - lastApplied.Id; // Approximate
 
-                var isStale = latestBuild != null && lastApplied != null && latestBuild.Id != lastApplied.Id;
-                var buildsBehind = 0;
-                int? commitsBehind = null;
-                IReadOnlyList<CommitInfo>? recentCommits = null;
-
-                if (isStale && latestBuild != null && lastApplied != null)
+                // For GitHub-hosted source repos, use GitHub compare API for accurate commit distance
+                if (_gitHubClient != null && IsGitHubRepository(sub.SourceRepository))
                 {
-                    buildsBehind = latestBuild.Id - lastApplied.Id; // Approximate
-
-                    // For GitHub-hosted source repos, use GitHub compare API for accurate commit distance
-                    if (_gitHubClient != null && IsGitHubRepository(sub.SourceRepository))
+                    var parsedRepo = ParseGitHubUrl(sub.SourceRepository);
+                    if (parsedRepo.HasValue)
                     {
-                        var parsedRepo = ParseGitHubUrl(sub.SourceRepository);
-                        if (parsedRepo.HasValue)
+                        // Fetch full build objects if commit SHAs are missing
+                        var lastAppliedCommit = lastApplied.Commit;
+                        var latestBuildCommit = latestBuild.Commit;
+
+                        if (string.IsNullOrEmpty(lastAppliedCommit) && lastApplied.Id > 0)
                         {
-                            // Fetch full build objects if commit SHAs are missing
-                            var lastAppliedCommit = lastApplied.Commit;
-                            var latestBuildCommit = latestBuild.Commit;
-
-                            if (string.IsNullOrEmpty(lastAppliedCommit) && lastApplied.Id > 0)
-                            {
-                                Console.Error.WriteLine($"[maestro-mcp] Fetching full build {lastApplied.Id} for commit SHA");
-                                var fullLastApplied = await GetBuildAsync(lastApplied.Id, noCache, cancellationToken);
-                                lastAppliedCommit = fullLastApplied?.Commit;
-                            }
-
-                            if (string.IsNullOrEmpty(latestBuildCommit) && latestBuild.Id > 0)
-                            {
-                                Console.Error.WriteLine($"[maestro-mcp] Fetching full build {latestBuild.Id} for commit SHA");
-                                var fullLatestBuild = await GetBuildAsync(latestBuild.Id, noCache, cancellationToken);
-                                latestBuildCommit = fullLatestBuild?.Commit;
-                            }
-
-                            if (!string.IsNullOrEmpty(lastAppliedCommit) && !string.IsNullOrEmpty(latestBuildCommit))
-                            {
-                                var (owner, repo) = parsedRepo.Value;
-                                Console.Error.WriteLine($"[maestro-mcp] Comparing commits {lastAppliedCommit}...{latestBuildCommit} in {owner}/{repo}");
-                                var compareResult = await _gitHubClient.CompareCommitsAsync(
-                                    owner, repo, lastAppliedCommit, latestBuildCommit, cancellationToken);
-                                
-                                if (compareResult != null)
-                                {
-                                    commitsBehind = compareResult.AheadBy;
-                                    if (includeCommitDetails)
-                                        recentCommits = compareResult.Commits;
-                                }
-                            }
+                            Console.Error.WriteLine($"[maestro-mcp] Fetching full build {lastApplied.Id} for commit SHA");
+                            var fullLastApplied = await GetBuildAsync(lastApplied.Id, noCache, cancellationToken);
+                            lastAppliedCommit = fullLastApplied?.Commit;
                         }
-                    }
-                    else if (_azDoClient != null && IsAzDoRepository(sub.SourceRepository))
-                    {
-                        var parsed = ParseAzDoUrl(sub.SourceRepository);
-                        if (parsed.HasValue)
+
+                        if (string.IsNullOrEmpty(latestBuildCommit) && latestBuild.Id > 0)
                         {
-                            var lastAppliedCommit = lastApplied.Commit;
-                            var latestBuildCommit = latestBuild.Commit;
+                            Console.Error.WriteLine($"[maestro-mcp] Fetching full build {latestBuild.Id} for commit SHA");
+                            var fullLatestBuild = await GetBuildAsync(latestBuild.Id, noCache, cancellationToken);
+                            latestBuildCommit = fullLatestBuild?.Commit;
+                        }
 
-                            if (string.IsNullOrEmpty(lastAppliedCommit) && lastApplied.Id > 0)
+                        if (!string.IsNullOrEmpty(lastAppliedCommit) && !string.IsNullOrEmpty(latestBuildCommit))
+                        {
+                            var (owner, repo) = parsedRepo.Value;
+                            Console.Error.WriteLine($"[maestro-mcp] Comparing commits {lastAppliedCommit}...{latestBuildCommit} in {owner}/{repo}");
+                            var compareResult = await _gitHubClient.CompareCommitsAsync(
+                                owner, repo, lastAppliedCommit, latestBuildCommit, cancellationToken);
+                            
+                            if (compareResult != null)
                             {
-                                var fullLastApplied = await GetBuildAsync(lastApplied.Id, noCache, cancellationToken);
-                                lastAppliedCommit = fullLastApplied?.Commit;
-                            }
-
-                            if (string.IsNullOrEmpty(latestBuildCommit) && latestBuild.Id > 0)
-                            {
-                                var fullLatestBuild = await GetBuildAsync(latestBuild.Id, noCache, cancellationToken);
-                                latestBuildCommit = fullLatestBuild?.Commit;
-                            }
-
-                            if (!string.IsNullOrEmpty(lastAppliedCommit) && !string.IsNullOrEmpty(latestBuildCommit))
-                            {
-                                var (org, project, repo) = parsed.Value;
+                                commitsBehind = compareResult.AheadBy;
                                 if (includeCommitDetails)
-                                {
-                                    recentCommits = await _azDoClient.GetCommitDetailsAsync(
-                                        org, project, repo, lastAppliedCommit, latestBuildCommit, cancellationToken);
-                                    commitsBehind = recentCommits?.Count;
-                                }
-                                else
-                                {
-                                    commitsBehind = await _azDoClient.GetCommitCountAsync(
-                                        org, project, repo, lastAppliedCommit, latestBuildCommit, cancellationToken);
-                                }
+                                    recentCommits = compareResult.Commits;
                             }
                         }
                     }
                 }
-
-                // Cross-validation: only for stale GitHub-hosted target repos when validate=true
-                ValidationResult? validation = null;
-                if (isStale && validate && _gitHubClient != null && IsGitHubRepository(sub.TargetRepository))
+                else if (_azDoClient != null && IsAzDoRepository(sub.SourceRepository))
                 {
-                    validation = await CrossValidateSubscriptionAsync(sub, lastApplied, noCache, cancellationToken);
-                }
-
-                // Oscillation detection: check for stuck state cycling (runs even without validate=true)
-                OscillationResult? oscillation = null;
-                string? vmrConsumedCommit = null;
-                DateTimeOffset? vmrConsumedDate = null;
-                TrackedPrDiagnosis? trackedPrDiagnosis = null;
-                if (isStale)
-                {
-                    oscillation = await DetectStateOscillationAsync(sub.Id, noCache, cancellationToken);
-
-                    // Tracked PR diagnosis: cross-reference with GitHub to determine why it's stuck
-                    trackedPrDiagnosis = await DiagnoseTrackedPrAsync(sub.Id, noCache, cancellationToken);
-
-                    // For VMR-targeting subscriptions, look up actual consumed commit
-                    if (IsVmrRepository(sub.TargetRepository))
+                    var parsed = ParseAzDoUrl(sub.SourceRepository);
+                    if (parsed.HasValue)
                     {
-                        var manifestEntry = await GetVmrConsumedCommitAsync(sub.SourceRepository, sub.TargetBranch, noCache, cancellationToken);
-                        if (manifestEntry != null)
+                        var lastAppliedCommit = lastApplied.Commit;
+                        var latestBuildCommit = latestBuild.Commit;
+
+                        if (string.IsNullOrEmpty(lastAppliedCommit) && lastApplied.Id > 0)
                         {
-                            vmrConsumedCommit = manifestEntry.CommitSha;
-                            // Try to resolve date from barId if available
-                            if (manifestEntry.BarId.HasValue)
+                            var fullLastApplied = await GetBuildAsync(lastApplied.Id, noCache, cancellationToken);
+                            lastAppliedCommit = fullLastApplied?.Commit;
+                        }
+
+                        if (string.IsNullOrEmpty(latestBuildCommit) && latestBuild.Id > 0)
+                        {
+                            var fullLatestBuild = await GetBuildAsync(latestBuild.Id, noCache, cancellationToken);
+                            latestBuildCommit = fullLatestBuild?.Commit;
+                        }
+
+                        if (!string.IsNullOrEmpty(lastAppliedCommit) && !string.IsNullOrEmpty(latestBuildCommit))
+                        {
+                            var (org, project, repo) = parsed.Value;
+                            if (includeCommitDetails)
                             {
-                                try
-                                {
-                                    var vmrBuild = await GetBuildAsync(manifestEntry.BarId.Value, noCache, cancellationToken);
-                                    vmrConsumedDate = vmrBuild?.DateProduced;
-                                }
-                                catch { /* non-critical */ }
+                                recentCommits = await _azDoClient.GetCommitDetailsAsync(
+                                    org, project, repo, lastAppliedCommit, latestBuildCommit, cancellationToken);
+                                commitsBehind = recentCommits?.Count;
+                            }
+                            else
+                            {
+                                commitsBehind = await _azDoClient.GetCommitCountAsync(
+                                    org, project, repo, lastAppliedCommit, latestBuildCommit, cancellationToken);
                             }
                         }
                     }
                 }
-
-                results.Add(new SubscriptionHealthResult(
-                    SubscriptionId: sub.Id,
-                    SourceRepository: sub.SourceRepository,
-                    TargetRepository: sub.TargetRepository,
-                    TargetBranch: sub.TargetBranch,
-                    ChannelName: sub.Channel?.Name ?? "unknown",
-                    IsStale: isStale,
-                    BuildsBehind: buildsBehind,
-                    LastAppliedBuildId: lastApplied?.Id,
-                    LastAppliedDate: lastApplied?.DateProduced,
-                    LatestBuildId: latestBuild?.Id,
-                    LatestBuildDate: latestBuild?.DateProduced,
-                    CommitsBehind: commitsBehind,
-                    RecentCommits: recentCommits,
-                    Validation: validation,
-                    Oscillation: oscillation,
-                    TrackedPr: trackedPrDiagnosis,
-                    VmrConsumedCommit: vmrConsumedCommit,
-                    VmrConsumedDate: vmrConsumedDate
-                ));
             }
-            catch (Exception ex)
+
+            // Cross-validation: only for stale GitHub-hosted target repos when validate=true
+            ValidationResult? validation = null;
+            if (isStale && validate && _gitHubClient != null && IsGitHubRepository(sub.TargetRepository))
             {
-                results.Add(new SubscriptionHealthResult(
-                    SubscriptionId: sub.Id,
-                    SourceRepository: sub.SourceRepository,
-                    TargetRepository: sub.TargetRepository,
-                    TargetBranch: sub.TargetBranch,
-                    ChannelName: sub.Channel?.Name ?? "unknown",
-                    IsStale: false,
-                    BuildsBehind: 0,
-                    LastAppliedBuildId: sub.LastAppliedBuild?.Id,
-                    LastAppliedDate: sub.LastAppliedBuild?.DateProduced,
-                    LatestBuildId: null,
-                    LatestBuildDate: null,
-                    Error: ex.Message
-                ));
+                validation = await CrossValidateSubscriptionAsync(sub, lastApplied, noCache, cancellationToken);
             }
-        }
 
-        return results;
+            // Oscillation detection: check for stuck state cycling (runs even without validate=true)
+            OscillationResult? oscillation = null;
+            string? vmrConsumedCommit = null;
+            DateTimeOffset? vmrConsumedDate = null;
+            TrackedPrDiagnosis? trackedPrDiagnosis = null;
+            if (isStale)
+            {
+                oscillation = await DetectStateOscillationAsync(sub.Id, noCache, cancellationToken);
+
+                // Tracked PR diagnosis: cross-reference with GitHub to determine why it's stuck
+                trackedPrDiagnosis = await DiagnoseTrackedPrAsync(sub.Id, noCache, cancellationToken);
+
+                // For VMR-targeting subscriptions, look up actual consumed commit
+                if (IsVmrRepository(sub.TargetRepository))
+                {
+                    var manifestEntry = await GetVmrConsumedCommitAsync(sub.SourceRepository, sub.TargetBranch, noCache, cancellationToken);
+                    if (manifestEntry != null)
+                    {
+                        vmrConsumedCommit = manifestEntry.CommitSha;
+                        // Try to resolve date from barId if available
+                        if (manifestEntry.BarId.HasValue)
+                        {
+                            try
+                            {
+                                var vmrBuild = await GetBuildAsync(manifestEntry.BarId.Value, noCache, cancellationToken);
+                                vmrConsumedDate = vmrBuild?.DateProduced;
+                            }
+                            catch { /* non-critical */ }
+                        }
+                    }
+                }
+            }
+
+            return new SubscriptionHealthResult(
+                SubscriptionId: sub.Id,
+                SourceRepository: sub.SourceRepository,
+                TargetRepository: sub.TargetRepository,
+                TargetBranch: sub.TargetBranch,
+                ChannelName: sub.Channel?.Name ?? "unknown",
+                IsStale: isStale,
+                BuildsBehind: buildsBehind,
+                LastAppliedBuildId: lastApplied?.Id,
+                LastAppliedDate: lastApplied?.DateProduced,
+                LatestBuildId: latestBuild?.Id,
+                LatestBuildDate: latestBuild?.DateProduced,
+                CommitsBehind: commitsBehind,
+                RecentCommits: recentCommits,
+                Validation: validation,
+                Oscillation: oscillation,
+                TrackedPr: trackedPrDiagnosis,
+                VmrConsumedCommit: vmrConsumedCommit,
+                VmrConsumedDate: vmrConsumedDate
+            );
+        }
+        catch (Exception ex)
+        {
+            return new SubscriptionHealthResult(
+                SubscriptionId: sub.Id,
+                SourceRepository: sub.SourceRepository,
+                TargetRepository: sub.TargetRepository,
+                TargetBranch: sub.TargetBranch,
+                ChannelName: sub.Channel?.Name ?? "unknown",
+                IsStale: false,
+                BuildsBehind: 0,
+                LastAppliedBuildId: sub.LastAppliedBuild?.Id,
+                LastAppliedDate: sub.LastAppliedBuild?.DateProduced,
+                LatestBuildId: null,
+                LatestBuildDate: null,
+                Error: ex.Message
+            );
+        }
+        finally
+        {
+            _concurrencySemaphore.Release();
+        }
     }
 
     /// <summary>
