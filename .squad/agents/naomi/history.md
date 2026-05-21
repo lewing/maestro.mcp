@@ -7,7 +7,7 @@
 **Architecture knowledge:**
 - **3-tier auth cascade**: env var (MAESTRO_BAR_TOKEN) → Entra ID (cached darc credentials) → anonymous. Guard on auth record file existence prevents browser popups.
 - **SQLite cache**: Cross-process sharing via WAL mode, JSON serialization, SemaphoreSlim lock for dedup, auto-cleanup every 100 ops, max 10K entries.
-- **PcsApiFactory**: Always use overloads with explicit `baseUri` parameter ("https://maestro.dot.net"). Parameterless versions crash.
+- **PcsApiFactory**: Always use 5-parameter overload with explicit `baseUri` and `loggerFactory: null`. The 4-param overload was removed in beta.26271.2. Parameterless versions crash.
 
 **Key files owned:**
 - `src/MaestroTool.Core/MaestroApiClient.cs` — Auth cascade, API client factory
@@ -16,6 +16,74 @@
 - `src/MaestroTool.Core/MaestroMcpTools/` — Tool surface definitions and descriptions (partial classes)
 - `src/MaestroTool/Program.cs` — CLI commands
 - `src/MaestroTool.Tests/` — Unit tests (xUnit, NSubstitute)
+
+## 2026-05-21: URGENT — PR #21 — Fix PCS Client beta.26271.2 breaking API changes
+
+**PR:** https://github.com/lewing/maestro.mcp/pull/21  
+**Branch:** `squad/fix-pcs-client-regression`  
+**Date:** 2026-05-21  
+**Severity:** 🚨 **PRODUCTION OUTAGE** — All PCS-backed MCP tools dead in the wild
+
+### Incident Summary
+
+**Symptom:** Every PCS-backed tool (`maestro_channels`, `maestro_subscriptions`, `maestro_builds`, etc.) failing with:
+```
+An error occurred invoking 'maestro_channels'
+```
+
+**Confirmed pattern:** Pure-HTTP tools (`maestro_build_freshness`) worked; anything touching `Microsoft.DotNet.ProductConstructionService.Client` failed.
+
+### Root Cause
+
+PCS Client **1.1.0-beta.26271.2** (merged in PR #17 as "safe patch bump") introduced **breaking API changes**:
+
+1. **`PcsApiFactory.GetAuthenticated()`** — old 4-parameter overload **removed completely** (not deprecated). New signature requires 5th parameter `loggerFactory: ILoggerFactory?`.
+2. **`Channels.ListChannelsAsync()`** — new required parameter `classification: string?` (can be null).
+3. **`Subscriptions.ListSubscriptionsAsync()`** — parameter order changed; new parameters `sourceDirectory`, `sourceEnabled`, `targetDirectory` added.
+4. **`DefaultChannels.ListAsync()`** — parameter order changed; new parameter `enabled` added.
+
+The removal of the 4-param overload (not just addition of a 5-param overload) caused **runtime `MethodNotFoundException`** when our code tried to bind to the old signature.
+
+### Why Tests Didn't Catch It
+
+Our 179 unit tests use **NSubstitute mocks** of `IProductConstructionServiceApi`. The mocks implement whatever interface signatures we define, so tests passed — but the **real PCS Client binary** at runtime doesn't have the old overloads, causing immediate crash on first API call.
+
+**Lesson:** Mock-based tests can't catch breaking changes in external binary dependencies. Beta package bumps need **integration smoke tests** against real or staging endpoints.
+
+### Fix Applied
+
+Updated all PCS Client API calls in `MaestroApiClient.cs`:
+
+| Line | Method | Change |
+|------|--------|--------|
+| 39 | `PcsApiFactory.GetAuthenticated()` (BAR token) | Added `loggerFactory: null` |
+| 64 | `PcsApiFactory.GetAuthenticated()` (Entra ID) | Added `loggerFactory: null` |
+| 167 | `Channels.ListChannelsAsync()` | Added `classification: null` |
+| 102-109 | `Subscriptions.ListSubscriptionsAsync()` | Reordered parameters, added nulls for new fields |
+| 176-181 | `DefaultChannels.ListAsync()` | Reordered parameters, added `enabled: null` |
+
+### Verification
+
+✅ **Build:** 0 errors, 0 warnings  
+✅ **Tests:** 179/179 passed  
+✅ **Smoke test:** Created minimal repro projects with both old (beta.26161.4) and new (beta.26271.2) PCS Client versions to confirm API surface differences and validate fixes
+
+### Diagnosis Timeline
+
+1. Created repro test project with PCS Client beta.26271.2
+2. Reflected on `PcsApiFactory` and `IChannels` to discover new signatures
+3. Compared with old beta.26161.4 to isolate breaking changes
+4. Identified all affected call sites in `MaestroApiClient.cs`
+5. Applied fixes, verified with tests and live API calls
+
+### Policy Recommendation
+
+Filed `.squad/decisions/inbox/naomi-pcs-client-regression.md` proposing:
+- Beta package bumps **require integration smoke tests** against live/staging PCS
+- Tag beta bumps as "needs-integration-test" in PRs
+- Consider CI step that calls real Maestro API (not mocks) to catch binary-level breaks
+
+---
 
 ## 2026-05-21: PR #20 — Parallelize subscription_health GitHub fan-out
 

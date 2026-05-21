@@ -176,3 +176,29 @@ Per Holden's policy: pin exact versions, take HIGHER stable versions. Resolved c
 - `gh pr view 18` — mergeStateStatus: **CLEAN**, mergeable: **MERGEABLE** ✅
 
 **Outcome:** PR #18 is now conflict-free and ready to merge. All test infrastructure changes (Test.Sdk 18.5.1 + pinned xunit/NSubstitute versions) validated with latest dependency versions from team PRs.
+
+---
+
+## 2026-05-21: Live MCP Smoke Test Plan — Post-Reload Validation
+
+**Context:** Larry reloaded maestro.mcp server after recent merges (PRs #15-18) and while PR #20 (subscription_health parallelization) is open. Task was to validate recent changes live and capture baseline metrics before issue #19 (flow_graph 7d→3d perf fix) lands.
+
+**Local sanity check (2026-05-21):**
+- `git pull` → Already up to date
+- `dotnet test --nologo` → **179/179 tests passed** ✅
+- Build status: Clean, no warnings
+- Trunk is green after all recent merges
+
+**Recent PRs merged:**
+- #18 (Test.Sdk 18.5.1 + wildcard pin elimination) — MERGED 2026-05-21
+- #17 (Sqlite 9→10, Extensions 10.0.8, PCS Client beta) — MERGED 2026-05-21
+- #16 (RollForward Major on MaestroTool.csproj) — MERGED 2026-05-21
+- #15 (global.json SDK pinning, GitHub Actions standardization) — MERGED 2026-05-21
+
+**Open PRs:**
+- #20 (subscription_health Task.WhenAll parallelization) — OPEN, awaiting merge
+
+**Open issues:**
+- #19 (flow_graph 7d→3d default window) — Fix not yet implemented; baseline timing capture priority
+
+**Smoke test plan drafted:** 5-step live validation plan for Larry, prioritizing subscription_health perf validation, Sqlite 10 + PCS Client stability, flow_graph baseline timing (pre-#19), and coverage of tools not recently exercised.
