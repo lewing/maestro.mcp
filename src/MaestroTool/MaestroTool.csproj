@@ -9,6 +9,7 @@
     <PackageType>McpServer</PackageType>
     <ToolCommandName>mstro</ToolCommandName>
     <Version>0.15.1</Version>
+    <RollForward>Major</RollForward>
   </PropertyGroup>
 
   <PropertyGroup Label="Package Metadata">
