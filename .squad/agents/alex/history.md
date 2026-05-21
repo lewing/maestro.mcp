@@ -120,3 +120,84 @@ Requested by Larry Ewing. Audited NuGet packages, .NET SDK, GitHub Actions, and 
 - GitHub Actions major bumps documented as drop-in compatible (e.g., checkout v4 → v6)
 
 **No approval gate required** for safe bumps as long as full test suite (179+ tests) passes. Naomi and Amos assigned to handle major/minor dependency PRs.
+
+## 2026-05-21: Global.json SDK Pinning & Actions Standardization PR
+
+**Date:** 2026-05-21  
+**PR:** #15  
+**Request:** Ship two safe infra changes as one PR per standing policy (Holden's Decision 3)
+
+### Changes Shipped:
+1. **global.json**: Added at repo root pinning SDK to 10.0.202 with `rollForward: latestPatch`
+   - Resolves environment drift (was floating between dev machines and CI)
+   - Pinned to 10.0.202 (verified working on this machine) rather than aspirational 10.0.300
+2. **GitHub Actions**: Standardized across all 13 workflows
+   - `actions/checkout@v4` → `@v6` (12 workflows)
+   - `actions/github-script@v7,v8` → `@v9` (13 workflows)
+   - Left setup-dotnet@v5, NuGet/login@v1 unchanged (already current within major)
+
+### Validation:
+- ✅ `dotnet --version` respects global.json (10.0.202)
+- ✅ Build succeeds with new SDK pin
+- ✅ Actions versions verified as drop-in compatible per GitHub docs
+- ✅ Zero test impact (infra-only, no code logic changes)
+
+**Scope discipline:** Did not touch .csproj files, test infra, or executable RollForward setting (separate PR coming).
+
+## 2026-05-21: Global Tool RollForward Major Fix
+
+**Date:** 2026-05-21  
+**PR:** #16  
+**Request:** Larry Ewing (mirrors helix.mcp PR #52)
+
+### Change:
+Added `<RollForward>Major</RollForward>` to MaestroTool.csproj PropertyGroup (line 12).
+
+### Outcome:
+- Tool can now start on machines with **only newer .NET runtimes** installed (e.g., .NET 11 machine running net10.0 tool)
+- **Conservative rollforward:** Tool stays on net10 when available; only rolls forward if net10 missing
+- Avoids aggressive `LatestMajor` behavior that would unconditionally upgrade across major versions
+
+### Validation:
+- ✅ Build succeeds (0 warnings, 0 errors)
+- ✅ Pack succeeds (lewing.maestro.mcp.0.15.1.nupkg created)
+- ✅ All 179 tests pass
+- ✅ Mirrors helix.mcp precedent exactly (same rationale, same config value)
+
+---
+
+## 2026-05-21: Infrastructure Wave — SDK Pinning + Actions Standardization + RollForward Major
+
+**Tasks:** 
+1. Add global.json for SDK pinning (alex-1, PR #15)
+2. Add RollForward Major to MaestroTool (alex-rollforward, PR #16)
+
+### PR #15 (alex-1): global.json + GH Actions Standardization
+
+**Deliverable:** `squad/infra-globaljson-and-actions` branch
+
+**Changes:**
+- Added `global.json` pinning SDK to 10.0.202 with `rollForward: latestPatch` (prevents SDK drift across developers and CI)
+- Standardized GitHub Actions versions across 13 workflows:
+  - `actions/checkout` v4 → v6 (latest major)
+  - `actions/github-script` v7 & v8 → v9 (latest major)
+  - `actions/setup-dotnet` already at v5 (no change)
+  - `NuGet/login` already at v1 (no change)
+
+**Rationale:** Ensures consistent build environment, eliminates "works on my machine" drift, standardizes CI runner versions (GitHub documents major bumps as drop-in compatible within Node.js infrastructure).
+
+**Verification:** Build passes with global.json enforced; all workflows reference pinned versions.
+
+### PR #16 (alex-rollforward): RollForward Major for MaestroTool
+
+**Deliverable:** `squad/maestrotool-rollforward-major` branch
+
+**Change:** Added `<RollForward>Major</RollForward>` to `src/MaestroTool/MaestroTool.csproj` PropertyGroup
+
+**Rationale:** Tool targets net10.0. On machines with .NET 11+ but no net10.0 runtime, the tool failed to start. RollForward Major enables conservative forward-compatibility (use net10.0 when available; roll forward only when necessary) without aggressive unconditional upgrades (LatestMajor).
+
+**Precedent:** Mirrors helix.mcp PR #52 (HelixTool.csproj same pattern)
+
+**Verification:** Build clean, pack clean (0.15.1.nupkg created), 179 tests pass.
+
+Both PRs approved as routine infrastructure decisions (Holden gate).
