@@ -114,3 +114,17 @@ Naomi completed upgrade of ModelContextProtocol from v1.0.0 → v1.3.0. Build cl
 - **Future:** If Central Package Management (Directory.Packages.props) is approved, these pins migrate there.
 
 **Rationale:** Test.Sdk 18.x ships Microsoft.Testing.Platform but maintains VSTest compatibility. Wildcard pins are a risk and should be eliminated.
+
+## 2026-05-21: Shipped — PR #18 (Test.Sdk bump + wildcard pin elimination)
+
+**PR:** https://github.com/lewing/maestro.mcp/pull/18  
+**Branch:** `squad/test-infra-pin-and-sdk-bump`  
+**Test result:** 179/179 passed ✅
+
+**Versions pinned in `MaestroTool.Tests.csproj`:**
+- `Microsoft.NET.Test.Sdk` 17.* → **18.5.1** (bumped)
+- `xunit` 2.* → **2.9.3** (was already resolving to this)
+- `xunit.runner.visualstudio` 3.* → **3.1.5** (was already resolving to this)
+- `NSubstitute` 5.* → **5.3.0** (was already resolving to this)
+
+Holden's pin-exact-versions condition honored. No pre-release packages introduced. `dotnet test --logger trx` CI integration confirmed.
