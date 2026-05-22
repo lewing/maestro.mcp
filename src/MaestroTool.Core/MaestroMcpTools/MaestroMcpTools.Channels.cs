@@ -51,18 +51,26 @@ public partial class MaestroMcpTools
     }
 
     [McpServerTool(Name = "maestro_channels", Title = "List Channels", ReadOnly = true, Idempotent = true)]
-    [Description("List all Maestro channels.")]
+    [Description("List Maestro channels. Optional filter does a case-insensitive substring match on channel name (e.g. '.NET 10', 'VS 17.', 'Aspire'); classification is passed to Maestro; compact returns 'name → id' lines.")]
     public async Task<string> GetChannels(
         [Description("Bypass cache and fetch fresh data")] bool noCache = false,
+        [Description("Optional case-insensitive substring filter for channel names (e.g. '.NET 10', 'VS 17.', 'Aspire')")] string? filter = null,
+        [Description("Optional Maestro channel classification passed to the PCS API")]
+        string? classification = null,
+        [Description("Return compact 'name → id' lines instead of bulleted markdown")]
+        bool compact = false,
         CancellationToken cancellationToken = default)
     {
-        var channels = await _service.GetChannelsAsync(noCache, cancellationToken);
+        var channels = await _service.GetChannelsAsync(noCache, cancellationToken, classification, filter);
         var sb = new StringBuilder();
         sb.AppendLine($"Found {channels.Count} channel(s):\n");
 
         foreach (var ch in channels.OrderBy(c => c.Name))
         {
-            sb.AppendLine($"- **{ch.Name}** (ID: {ch.Id})");
+            if (compact)
+                sb.AppendLine($"{ch.Name} → {ch.Id}");
+            else
+                sb.AppendLine($"- **{ch.Name}** (ID: {ch.Id})");
         }
 
         return Timestamp(noCache) + sb.ToString();

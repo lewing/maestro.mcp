@@ -421,6 +421,70 @@ public class MaestroServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GetChannels_WithClassification_PassesThroughToApi()
+    {
+        var channels = new List<Channel> { CreateChannel(1, ".NET 10") };
+        _client.ListChannelsAsync(Arg.Any<CancellationToken>(), "product")
+            .Returns(channels);
+
+        var result = await _service.GetChannelsAsync(classification: "product");
+
+        Assert.Single(result);
+        await _client.Received(1).ListChannelsAsync(Arg.Any<CancellationToken>(), "product");
+    }
+
+    [Fact]
+    public async Task GetChannels_DifferentClassificationsUseIndependentCacheEntries()
+    {
+        var unclassifiedChannels = new List<Channel> { new(1, "All Channels", null) };
+        var productChannels = new List<Channel> { new(2, "Product Channels", "product") };
+        var infrastructureChannels = new List<Channel> { new(3, "Infrastructure Channels", "infrastructure") };
+
+        _client.ListChannelsAsync(Arg.Any<CancellationToken>(), null)
+            .Returns(unclassifiedChannels);
+        _client.ListChannelsAsync(Arg.Any<CancellationToken>(), "product")
+            .Returns(productChannels);
+        _client.ListChannelsAsync(Arg.Any<CancellationToken>(), "infrastructure")
+            .Returns(infrastructureChannels);
+
+        var unclassifiedFirst = await _service.GetChannelsAsync(classification: null);
+        var productFirst = await _service.GetChannelsAsync(classification: "product");
+        var infrastructureFirst = await _service.GetChannelsAsync(classification: "infrastructure");
+        var unclassifiedSecond = await _service.GetChannelsAsync(classification: null);
+        var productSecond = await _service.GetChannelsAsync(classification: "product");
+        var infrastructureSecond = await _service.GetChannelsAsync(classification: "infrastructure");
+
+        Assert.Equal([1], unclassifiedFirst.Select(c => c.Id));
+        Assert.Equal([2], productFirst.Select(c => c.Id));
+        Assert.Equal([3], infrastructureFirst.Select(c => c.Id));
+        Assert.Equal([1], unclassifiedSecond.Select(c => c.Id));
+        Assert.Equal([2], productSecond.Select(c => c.Id));
+        Assert.Equal([3], infrastructureSecond.Select(c => c.Id));
+        await _client.Received(1).ListChannelsAsync(Arg.Any<CancellationToken>(), null);
+        await _client.Received(1).ListChannelsAsync(Arg.Any<CancellationToken>(), "product");
+        await _client.Received(1).ListChannelsAsync(Arg.Any<CancellationToken>(), "infrastructure");
+        await _client.Received(3).ListChannelsAsync(Arg.Any<CancellationToken>(), Arg.Any<string?>());
+    }
+
+    [Fact]
+    public async Task GetChannels_WithFilter_FiltersByNameCaseInsensitive()
+    {
+        var channels = new List<Channel>
+        {
+            CreateChannel(1, ".NET 10.0.1xx SDK"),
+            CreateChannel(2, ".NET 9.0.1xx SDK"),
+            CreateChannel(3, "VS 17.14")
+        };
+        _client.ListChannelsAsync(Arg.Any<CancellationToken>())
+            .Returns(channels);
+
+        var result = await _service.GetChannelsAsync(filter: "net 10");
+
+        var channel = Assert.Single(result);
+        Assert.Equal(1, channel.Id);
+    }
+
+    [Fact]
     public async Task GetChannelByName_FindsMatchingChannel()
     {
         var channels = new List<Channel>

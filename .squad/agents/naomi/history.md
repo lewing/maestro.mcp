@@ -17,6 +17,16 @@
 - `src/MaestroTool/Program.cs` — CLI commands
 - `src/MaestroTool.Tests/` — Unit tests (xUnit, NSubstitute)
 
+## Learnings
+
+### 2026-05-22: `maestro_channels` low-cost filtering
+
+- Chose optional `filter`, `classification`, and `compact` parameters on `maestro_channels`; no-arg calls keep the previous full bulleted markdown output.
+- `classification` flows to PCS `IChannels.ListChannelsAsync(classification, cancellationToken)` and gets its own cache key; `filter` is applied after the cached API result so name searches do not multiply API calls.
+- Kept `compact` as a bool instead of a format enum because the immediate need is a single low-token `name → id` text mode, not a broader output contract.
+- Deferred pagination: channels is small and hierarchical, and the prior audit found markdown tools do not fit `LimitedResults<T>` cleanly.
+- Live measurement on 168 channels: current full MCP-style markdown is 6,392 bytes; compact is 5,048 bytes (1,344 bytes / 21% saved). Filtering `.NET 10` reduces the list to 30 channels: 1,289 bytes full, 1,049 bytes compact.
+
 ## 2026-05-21: PR #20 — Parallelize subscription_health GitHub fan-out
 
 **PR:** https://github.com/lewing/maestro.mcp/pull/20  
