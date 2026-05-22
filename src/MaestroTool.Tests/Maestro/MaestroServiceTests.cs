@@ -434,6 +434,39 @@ public class MaestroServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GetChannels_DifferentClassificationsUseIndependentCacheEntries()
+    {
+        var unclassifiedChannels = new List<Channel> { new(1, "All Channels", null) };
+        var productChannels = new List<Channel> { new(2, "Product Channels", "product") };
+        var infrastructureChannels = new List<Channel> { new(3, "Infrastructure Channels", "infrastructure") };
+
+        _client.ListChannelsAsync(Arg.Any<CancellationToken>(), null)
+            .Returns(unclassifiedChannels);
+        _client.ListChannelsAsync(Arg.Any<CancellationToken>(), "product")
+            .Returns(productChannels);
+        _client.ListChannelsAsync(Arg.Any<CancellationToken>(), "infrastructure")
+            .Returns(infrastructureChannels);
+
+        var unclassifiedFirst = await _service.GetChannelsAsync(classification: null);
+        var productFirst = await _service.GetChannelsAsync(classification: "product");
+        var infrastructureFirst = await _service.GetChannelsAsync(classification: "infrastructure");
+        var unclassifiedSecond = await _service.GetChannelsAsync(classification: null);
+        var productSecond = await _service.GetChannelsAsync(classification: "product");
+        var infrastructureSecond = await _service.GetChannelsAsync(classification: "infrastructure");
+
+        Assert.Equal([1], unclassifiedFirst.Select(c => c.Id));
+        Assert.Equal([2], productFirst.Select(c => c.Id));
+        Assert.Equal([3], infrastructureFirst.Select(c => c.Id));
+        Assert.Equal([1], unclassifiedSecond.Select(c => c.Id));
+        Assert.Equal([2], productSecond.Select(c => c.Id));
+        Assert.Equal([3], infrastructureSecond.Select(c => c.Id));
+        await _client.Received(1).ListChannelsAsync(Arg.Any<CancellationToken>(), null);
+        await _client.Received(1).ListChannelsAsync(Arg.Any<CancellationToken>(), "product");
+        await _client.Received(1).ListChannelsAsync(Arg.Any<CancellationToken>(), "infrastructure");
+        await _client.Received(3).ListChannelsAsync(Arg.Any<CancellationToken>(), Arg.Any<string?>());
+    }
+
+    [Fact]
     public async Task GetChannels_WithFilter_FiltersByNameCaseInsensitive()
     {
         var channels = new List<Channel>

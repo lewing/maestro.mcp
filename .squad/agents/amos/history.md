@@ -176,3 +176,9 @@ Per Holden's policy: pin exact versions, take HIGHER stable versions. Resolved c
 - `gh pr view 18` — mergeStateStatus: **CLEAN**, mergeable: **MERGEABLE** ✅
 
 **Outcome:** PR #18 is now conflict-free and ready to merge. All test infrastructure changes (Test.Sdk 18.5.1 + pinned xunit/NSubstitute versions) validated with latest dependency versions from team PRs.
+
+### 2026-05-22: Classification Cache-Isolation Test
+
+- Added `GetChannels_DifferentClassificationsUseIndependentCacheEntries` to verify null, `product`, and `infrastructure` channel classifications each get separate cache entries and cached results do not cross-contaminate.
+- NSubstitute pattern: configure distinct optional-argument calls with `_client.ListChannelsAsync(Arg.Any<CancellationToken>(), classification).Returns(...)`, then verify exact counts with `Received(1)` per classification; `Received.InOrder` is unnecessary for cache isolation because call count and result values are what matter.
+- Future cache-isolation tests should assert both the API invocation cardinality and a value-level discriminator in returned DTOs; cached SQLite round-trips may deserialize new instances, so avoid reference equality.
