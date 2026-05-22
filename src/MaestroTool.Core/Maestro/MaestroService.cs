@@ -507,8 +507,12 @@ public class MaestroService
             LongTtl); // Build graphs are immutable like builds
     }
 
-    public Task<FlowGraph> GetFlowGraphAsync(int days, int channelId, bool includeArcade = true, bool includeBuildTimes = true, bool includeDisabledSubscriptions = false, List<string>? includedFrequencies = null, bool noCache = false, CancellationToken cancellationToken = default)
+    public Task<FlowGraph> GetFlowGraphAsync(int days, int channelId, bool includeArcade = true, bool includeBuildTimes = false, bool includeDisabledSubscriptions = false, List<string>? includedFrequencies = null, bool noCache = false, CancellationToken cancellationToken = default)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(days);
+        if (days > 30)
+            throw new ArgumentOutOfRangeException(nameof(days), days, "Flow graph days must be between 1 and 30.");
+
         var key = $"flow-graph:{channelId}:{days}:{includeArcade}:{includeBuildTimes}:{includeDisabledSubscriptions}";
         if (noCache) _cache.Invalidate(key);
         return _cache.GetOrAddAsync(key,

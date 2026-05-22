@@ -19,6 +19,35 @@
 
 ## Learnings
 
+### 2026-05-22: PR #24 review fixes — filter-miss UX and CLI validation
+
+- Empty-after-filter results should distinguish backend emptiness from filter misses; when unfiltered data exists but `staleOnly`/`channelFilter`/`sourceRepoFilter` remove everything, echo the applied filters in the response.
+- CLI command handlers should validate user-supplied ranges before allocating timeout/cancellation resources or calling services that throw domain validation exceptions; print a clear error and exit non-zero.
+- Verification: `dotnet test --verbosity minimal` passed 208/208, and invalid `flow-graph --days 0` / `--timeout-seconds -1` now exit 1 with friendly errors.
+
+### 2026-05-22: Issue #19 flow graph scope-reduction defaults
+
+- Changed `maestro_flow_graph` default scope from 7 days with eager build-time metrics to 3 days with `includeBuildTimes=false`, while keeping `days` and `includeBuildTimes` as opt-in expansion knobs.
+- Lowered the MCP flow graph timeout to 30 seconds so pathological default calls fail fast instead of consuming the old 2-minute budget.
+- PCS client gotcha: `IChannels.GetFlowGraphAsync` already accepts `includeBuildTimes`; passing `false` is the lazy-fetch behavior because PCS skips detailed build timestamp resolution for the whole graph.
+- Verification: `dotnet build --no-restore --verbosity minimal` succeeded and `dotnet test --no-restore --verbosity minimal` passed 193/193.
+- Perf spot-check: local CLI default flow graph call for `.NET 10.0.1xx SDK` channel returned in ~28s via the 30s guard; PCS did not complete the graph within the budget on that live channel.
+
+### 2026-05-22: PR #23 reviewer fixes — error-state filtering and AzDO short names
+
+- `staleOnly`/"show broken" filters must include unknown or errored health states, not just explicit stale booleans; silently omitting error rows hides the highest-risk cases.
+- Compact health output should avoid mixed signals: errored rows render as `error`, not `current`, even when `IsStale` is false.
+- AzDO repository display/filter short names should reuse `MaestroService.ParseAzDoUrl`; `dev.azure.com/{org}/{project}/_git/{repo}` and legacy Visual Studio URLs parse to `(org, project, repo)`, which can be rendered consistently as `org/project/repo`.
+
+### 2026-05-22: `maestro_subscription_health` stale filters and compact mode
+
+- Added opt-in MCP parameters `staleOnly`, `channelFilter`, `sourceRepoFilter`, and `compact`; no-arg output remains the same detailed per-subscription block.
+- Names are domain-specific rather than a generic `filter` because subscription health has two natural axes: channel and source repo; `staleOnly` matches the common "what is broken" workflow.
+- Filters apply after `GetSubscriptionHealthAsync` completes its parallel fan-out, preserving PR #20's concurrency and avoiding new cache/API-key dimensions for ad hoc substring searches.
+- Extracted formatter helpers so tests can target filtering and markdown rendering directly without PCS network calls.
+- Compact lines intentionally omit channel names and shorten PR URLs to `#N` to keep scanning dense: `⚠️ dotnet/runtime → main: 42 commits behind (PR: #123)`.
+- Live dotnet/dotnet measurement from local tool harness: detailed formatter 24,398 bytes for 93 subscriptions / 43 stale; `staleOnly + compact` 3,049 bytes (~87.5% smaller).
+
 ### 2026-05-22: `maestro_channels` low-cost filtering
 
 - Chose optional `filter`, `classification`, and `compact` parameters on `maestro_channels`; no-arg calls keep the previous full bulleted markdown output.

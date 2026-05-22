@@ -819,19 +819,33 @@ public class Commands
     }
 
     [Command("flow-graph")]
-    [Description("Get the dependency flow graph for a channel showing how builds flow through subscriptions between repositories.")]
+    [Description("Get the dependency flow graph for a channel. Defaults to 3 days and skips expensive build-time metrics.")]
     public async Task FlowGraph(
         [Argument] int channelId,
-        int days = 7,
+        int days = 3,
         bool includeArcade = true,
-        bool includeBuildTimes = true,
+        bool includeBuildTimes = false,
         bool includeDisabled = false,
         bool json = false,
         bool schema = false,
         bool noCache = false,
-        int timeoutSeconds = 120)
+        int timeoutSeconds = 30)
     {
         if (TryPrintSchema<FlowGraph>(schema)) return;
+
+        if (days is < 1 or > 30)
+        {
+            Console.Error.WriteLine($"Error: Invalid days value '{days}'. Expected a value between 1 and 30.");
+            Environment.Exit(1);
+            return;
+        }
+
+        if (timeoutSeconds <= 0)
+        {
+            Console.Error.WriteLine($"Error: Invalid timeout-seconds value '{timeoutSeconds}'. Expected a positive number of seconds.");
+            Environment.Exit(1);
+            return;
+        }
 
         FlowGraph graph;
         try

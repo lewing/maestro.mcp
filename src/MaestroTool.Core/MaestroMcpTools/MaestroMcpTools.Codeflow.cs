@@ -162,40 +162,43 @@ public partial class MaestroMcpTools
         return Timestamp(noCache) + sb.ToString();
     }
     [McpServerTool(Name = "maestro_flow_graph", Title = "Flow Graph", ReadOnly = true, Idempotent = true)]
-    [Description("Get the dependency flow graph for a channel showing how builds flow through subscriptions between repositories.")]
+    [Description("Get the dependency flow graph for a channel. Defaults to a 3-day window and skips expensive build-time metrics; set days/includeBuildTimes for expanded investigations.")]
     public async Task<string> GetFlowGraph(
         [Description("The channel ID to get the flow graph for")] int channelId,
-        [Description("Number of days to include in the flow graph analysis")] int days = 7,
+        [Description("Number of days to include in the flow graph analysis (default: 3, max: 30)")] int days = 3,
         [Description("Include Arcade/tooling dependencies in the graph")] bool includeArcade = true,
-        [Description("Include build time metrics in the graph")] bool includeBuildTimes = true,
+        [Description("Include build time metrics; expensive, so enable only when expanding a scoped graph")] bool includeBuildTimes = false,
         [Description("Include disabled subscriptions in the graph")] bool includeDisabledSubscriptions = false,
         [Description("Bypass cache and fetch fresh data")] bool noCache = false,
         CancellationToken cancellationToken = default)
     {
+        if (days is < 1 or > 30)
+            return $"Invalid days value '{days}'. Expected a value between 1 and 30.";
+
         FlowGraph graph;
         try
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            cts.CancelAfter(TimeSpan.FromMinutes(2));
+            cts.CancelAfter(TimeSpan.FromSeconds(30));
             graph = await _service.GetFlowGraphAsync(days, channelId, includeArcade, includeBuildTimes, includeDisabledSubscriptions, null, noCache, cts.Token);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            return $"⏱️ Flow graph request timed out after 2 minutes.\n\n" +
+            return $"⏱️ Flow graph request timed out after 30 seconds.\n\n" +
                    $"The flow graph for channel {channelId} with {days} days of data is too large to compute in time.\n\n" +
                    $"**Suggestions to reduce scope:**\n" +
-                   $"- Reduce the time window: days=3 (currently {days})\n" +
+                   $"- Use the default time window: days=3 (currently {days})\n" +
                    $"- Exclude Arcade dependencies: includeArcade=false\n" +
-                   $"- Skip build time metrics: includeBuildTimes=false";
+                   $"- Keep build time metrics disabled: includeBuildTimes=false";
         }
         catch (Exception ex) when (ex is TaskCanceledException or HttpRequestException or TimeoutException)
         {
             if (cancellationToken.IsCancellationRequested) throw;
             return $"⚠️ Flow graph request failed: {ex.Message}\n\n" +
                    $"**Suggestions to reduce scope:**\n" +
-                   $"- Reduce the time window: days=3 (currently {days})\n" +
+                   $"- Use the default time window: days=3 (currently {days})\n" +
                    $"- Exclude Arcade dependencies: includeArcade=false\n" +
-                   $"- Skip build time metrics: includeBuildTimes=false";
+                   $"- Keep build time metrics disabled: includeBuildTimes=false";
         }
 
         var sb = new StringBuilder();

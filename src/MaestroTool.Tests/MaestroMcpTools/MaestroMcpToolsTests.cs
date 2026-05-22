@@ -75,6 +75,44 @@ public class MaestroMcpToolsTests : IDisposable
         return sub;
     }
 
+    private static SubscriptionHealthResult CreateHealth(
+        string source = "https://github.com/dotnet/runtime",
+        string branch = "main",
+        string channel = ".NET 10.0.1xx SDK",
+        bool stale = false,
+        int buildsBehind = 0,
+        int? commitsBehind = null,
+        string? error = null,
+        TrackedPrDiagnosis? trackedPr = null) =>
+        new(
+            Guid.NewGuid(),
+            source,
+            "https://github.com/dotnet/dotnet",
+            branch,
+            channel,
+            stale,
+            buildsBehind,
+            100,
+            new DateTimeOffset(2026, 5, 1, 0, 0, 0, TimeSpan.Zero),
+            stale ? 110 : 100,
+            new DateTimeOffset(2026, 5, 2, 0, 0, 0, TimeSpan.Zero),
+            Error: error,
+            CommitsBehind: commitsBehind,
+            TrackedPr: trackedPr);
+
+    private static FlowGraph CreateFlowGraph() =>
+        new(
+            new List<FlowRef>
+            {
+                new(officialBuildTime: 0, prBuildTime: 0, onLongestBuildPath: false, bestCasePathTime: 0, worstCasePathTime: 0, goalTimeInMinutes: 0)
+                {
+                    Id = "runtime-main",
+                    Repository = "https://github.com/dotnet/runtime",
+                    Branch = "main"
+                }
+            },
+            new List<FlowEdge>());
+
     // ================================================================
     // Channel name-or-ID resolution tests
     // ================================================================
@@ -244,6 +282,240 @@ public class MaestroMcpToolsTests : IDisposable
         Assert.Contains(".NET 10.0.1xx SDK → 10", result);
         Assert.Contains("VS 17.14 → 20", result);
         Assert.DoesNotContain("- **", result);
+    }
+
+    [Fact]
+    public void FilterSubscriptionHealthResults_WithStaleOnly_OmitsHealthySubscriptions()
+    {
+        var results = new[]
+        {
+            CreateHealth(source: "https://github.com/dotnet/runtime", stale: true, buildsBehind: 5),
+            CreateHealth(source: "https://github.com/dotnet/arcade", stale: false)
+        };
+
+        var filtered = MaestroMcpTools.FilterSubscriptionHealthResults(results, staleOnly: true).ToList();
+
+        var only = Assert.Single(filtered);
+        Assert.True(only.IsStale);
+        Assert.Equal("https://github.com/dotnet/runtime", only.SourceRepository);
+    }
+
+    [Fact]
+    public void FilterSubscriptionHealthResults_WithStaleOnly_IncludesErroredSubscriptions()
+    {
+        var results = new[]
+        {
+            CreateHealth(source: "https://github.com/dotnet/runtime", stale: false, error: "health check failed"),
+            CreateHealth(source: "https://github.com/dotnet/arcade", stale: false)
+        };
+
+        var filtered = MaestroMcpTools.FilterSubscriptionHealthResults(results, staleOnly: true).ToList();
+
+        var only = Assert.Single(filtered);
+        Assert.False(only.IsStale);
+        Assert.Equal("health check failed", only.Error);
+        Assert.Equal("https://github.com/dotnet/runtime", only.SourceRepository);
+    }
+
+    [Fact]
+    public void FilterSubscriptionHealthResults_WithChannelAndSourceFilters_IsCaseInsensitive()
+    {
+        var results = new[]
+        {
+            CreateHealth(source: "https://github.com/dotnet/runtime", channel: ".NET 10.0.1xx SDK", stale: true),
+            CreateHealth(source: "https://github.com/dotnet/aspnetcore", channel: ".NET 9.0.1xx SDK", stale: true),
+            CreateHealth(source: "https://github.com/dotnet/arcade", channel: ".NET 10.0.1xx SDK", stale: true)
+        };
+
+        var filtered = MaestroMcpTools.FilterSubscriptionHealthResults(
+            results,
+            channelFilter: "net 10",
+            sourceRepoFilter: "RUNTIME").ToList();
+
+        var only = Assert.Single(filtered);
+        Assert.Equal("https://github.com/dotnet/runtime", only.SourceRepository);
+    }
+
+    [Fact]
+    public void FormatSubscriptionHealthFilterMiss_EchoesProvidedFilters()
+    {
+        var output = MaestroMcpTools.FormatSubscriptionHealthFilterMiss(
+            staleOnly: true,
+            channelFilter: ".NET 10",
+            sourceRepoFilter: "runtime");
+
+        Assert.Equal("No subscriptions matched the provided filters: staleOnly=True, channelFilter='.NET 10', sourceRepoFilter='runtime'.", output);
+    }
+
+    [Fact]
+    public async Task GetSubscriptionHealth_WhenFiltersRemoveAllResults_ReturnsFilterMissMessage()
+    {
+        var channel = CreateChannel(1, ".NET 10");
+        var build = CreateBuild(id: 100);
+        var sub = CreateSubscription(
+            target: "https://github.com/dotnet/dotnet",
+            channel: channel,
+            lastApplied: build);
+
+        _client.ListSubscriptionsAsync(null, "https://github.com/dotnet/dotnet", null, true, Arg.Any<CancellationToken>())
+            .Returns(new List<Subscription> { sub });
+        _client.GetLatestBuildAsync(sub.SourceRepository, channel.Id, Arg.Any<CancellationToken>())
+            .Returns(build);
+
+        var result = await _tools.GetSubscriptionHealth(
+            "https://github.com/dotnet/dotnet",
+            staleOnly: true,
+            channelFilter: ".NET 10",
+            sourceRepoFilter: "runtime");
+
+        Assert.Contains("No subscriptions matched the provided filters", result);
+        Assert.Contains("staleOnly=True", result);
+        Assert.Contains("channelFilter='.NET 10'", result);
+        Assert.Contains("sourceRepoFilter='runtime'", result);
+        Assert.DoesNotContain("Subscription health for", result);
+    }
+
+    [Fact]
+    public void FormatSubscriptionHealth_WithCompact_ReturnsOneLinePerSubscription()
+    {
+        var results = new[]
+        {
+            CreateHealth(
+                source: "https://github.com/dotnet/runtime",
+                branch: "main",
+                channel: ".NET 10.0.1xx SDK",
+                stale: true,
+                buildsBehind: 7,
+                commitsBehind: 42,
+                trackedPr: new TrackedPrDiagnosis(TrackedPrState.Active, "https://github.com/dotnet/dotnet/pull/123", null)),
+            CreateHealth(source: "https://github.com/dotnet/arcade", branch: "release/10.0", stale: false)
+        };
+
+        var output = MaestroMcpTools.FormatSubscriptionHealth("https://github.com/dotnet/dotnet", results, compact: true);
+
+        Assert.Contains("Subscription health for **https://github.com/dotnet/dotnet**: 2 subscription(s), 1 stale", output);
+        Assert.Contains("⚠️ dotnet/runtime → main: 42 commits behind (PR: #123)", output);
+        Assert.Contains("✅ dotnet/arcade → release/10.0: current", output);
+        Assert.DoesNotContain("Last Applied:", output);
+        Assert.DoesNotContain("Latest Available:", output);
+    }
+
+    [Fact]
+    public void FormatSubscriptionHealth_WithCompact_RendersErroredSubscriptionsAsError()
+    {
+        var results = new[]
+        {
+            CreateHealth(source: "https://github.com/dotnet/runtime", stale: false, error: "health check failed")
+        };
+
+        var output = MaestroMcpTools.FormatSubscriptionHealth("https://github.com/dotnet/dotnet", results, compact: true);
+
+        Assert.Contains("❌ dotnet/runtime → main: error (PR: none; error: health check failed)", output);
+        Assert.DoesNotContain("dotnet/runtime → main: current", output);
+    }
+
+    [Fact]
+    public void ShortRepositoryName_WithGitHubUrl_ReturnsOwnerAndRepo()
+    {
+        var result = MaestroMcpTools.ShortRepositoryName("https://github.com/dotnet/runtime.git");
+
+        Assert.Equal("dotnet/runtime", result);
+    }
+
+    [Fact]
+    public void ShortRepositoryName_WithAzDoUrl_ReturnsOrgProjectAndRepo()
+    {
+        var result = MaestroMcpTools.ShortRepositoryName("https://dev.azure.com/dnceng/internal/_git/dotnet-runtime");
+
+        Assert.Equal("dnceng/internal/dotnet-runtime", result);
+    }
+
+    [Fact]
+    public void ShortRepositoryName_WithEdgeCaseRootUrl_ReturnsInput()
+    {
+        var result = MaestroMcpTools.ShortRepositoryName("https://example.com/");
+
+        Assert.Equal("https://example.com/", result);
+    }
+
+    [Fact]
+    public void FormatSubscriptionHealth_WithDetailedMode_PreservesMultiLineBlocks()
+    {
+        var results = new[] { CreateHealth(source: "https://github.com/dotnet/runtime", stale: true, buildsBehind: 3) };
+
+        var output = MaestroMcpTools.FormatSubscriptionHealth("https://github.com/dotnet/dotnet", results);
+
+        Assert.Contains("**https://github.com/dotnet/runtime** → main", output);
+        Assert.Contains("Channel: .NET 10.0.1xx SDK | Status: ⚠️ STALE (~3 builds behind)", output);
+        Assert.Contains("Last Applied: #100", output);
+        Assert.Contains("Latest Available: #110", output);
+    }
+
+    // ================================================================
+    // Flow graph perf defaults
+    // ================================================================
+
+    [Fact]
+    public async Task GetFlowGraph_WithoutDays_UsesThreeDayDefaultAndSkipsBuildTimes()
+    {
+        var graph = CreateFlowGraph();
+        _client.GetFlowGraphAsync(3, 42, true, false, false, null, Arg.Any<CancellationToken>())
+            .Returns(graph);
+
+        var result = await _tools.GetFlowGraph(channelId: 42);
+
+        Assert.Contains("last 3 days", result);
+        await _client.Received(1).GetFlowGraphAsync(3, 42, true, false, false, null, Arg.Any<CancellationToken>());
+        await _client.DidNotReceive().GetBuildAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData(7)]
+    [InlineData(14)]
+    public async Task GetFlowGraph_WithDaysParameter_PassesRequestedWindow(int days)
+    {
+        var graph = CreateFlowGraph();
+        _client.GetFlowGraphAsync(days, 42, true, false, false, null, Arg.Any<CancellationToken>())
+            .Returns(graph);
+
+        var result = await _tools.GetFlowGraph(channelId: 42, days: days);
+
+        Assert.Contains($"last {days} days", result);
+        await _client.Received(1).GetFlowGraphAsync(days, 42, true, false, false, null, Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(31)]
+    [InlineData(int.MaxValue)]
+    public async Task GetFlowGraph_WithOutOfRangeDays_ReturnsValidationError(int days)
+    {
+        var result = await _tools.GetFlowGraph(channelId: 42, days: days);
+
+        Assert.Contains("Invalid days", result);
+        Assert.Contains("between 1 and 30", result);
+        await _client.DidNotReceive().GetFlowGraphAsync(
+            Arg.Any<int>(),
+            Arg.Any<int>(),
+            Arg.Any<bool>(),
+            Arg.Any<bool>(),
+            Arg.Any<bool>(),
+            Arg.Any<List<string>?>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetFlowGraph_WithBuildTimesEnabled_PassesExpansionFlag()
+    {
+        var graph = CreateFlowGraph();
+        _client.GetFlowGraphAsync(7, 42, true, true, false, null, Arg.Any<CancellationToken>())
+            .Returns(graph);
+
+        var result = await _tools.GetFlowGraph(channelId: 42, days: 7, includeBuildTimes: true);
+
+        Assert.Contains("last 7 days", result);
+        await _client.Received(1).GetFlowGraphAsync(7, 42, true, true, false, null, Arg.Any<CancellationToken>());
     }
 
     // ================================================================

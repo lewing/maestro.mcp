@@ -97,12 +97,16 @@ public partial class MaestroMcpTools
         return Timestamp(noCache) + sb.ToString();
     }
     [McpServerTool(Name = "maestro_subscription_health", Title = "Subscription Health", ReadOnly = true, Idempotent = true)]
-    [Description("Check subscription health for a target repository. For each active subscription, compares the last applied build against the latest available build on the channel to detect stale subscriptions. Start here for most investigations. For listing/filtering subscriptions, use maestro_subscriptions.")]
+    [Description("Check subscription health for a target repository. Optional staleOnly includes stale or errored subscriptions; channelFilter and sourceRepoFilter do case-insensitive substring matching after cached health checks; compact returns one line per subscription.")]
     public async Task<string> GetSubscriptionHealth(
         [Description("Target repository URL (e.g. https://github.com/dotnet/dotnet)")] string targetRepository,
         [Description("Bypass cache and fetch fresh data")] bool noCache = false,
         [Description("Include recent commit details (SHA, message, author, date) for stale subscriptions")] bool includeCommitDetails = false,
         [Description("Cross-validate stale subscriptions against GitHub ground truth (PR activity, commit reachability). Slower but detects stuck bookkeeping.")] bool validate = false,
+        [Description("Only show stale or errored subscriptions; healthy subscriptions are omitted from output")] bool staleOnly = false,
+        [Description("Optional case-insensitive substring filter on channel name")] string? channelFilter = null,
+        [Description("Optional case-insensitive substring filter on source repository URL or short name (e.g. dotnet/runtime or runtime)")] string? sourceRepoFilter = null,
+        [Description("Return one line per subscription instead of the detailed multi-line block")] bool compact = false,
         CancellationToken cancellationToken = default)
     {
         var results = await _service.GetSubscriptionHealthAsync(targetRepository, noCache, includeCommitDetails, validate, cancellationToken);
@@ -110,12 +114,59 @@ public partial class MaestroMcpTools
         if (results.Count == 0)
             return $"No active subscriptions found targeting {targetRepository}.";
 
+        var filteredResults = FilterSubscriptionHealthResults(results, staleOnly, channelFilter, sourceRepoFilter).ToList();
+        if (filteredResults.Count == 0 && HasSubscriptionHealthFilters(staleOnly, channelFilter, sourceRepoFilter))
+            return Timestamp(noCache) + FormatSubscriptionHealthFilterMiss(staleOnly, channelFilter, sourceRepoFilter);
+
+        return Timestamp(noCache) + FormatSubscriptionHealth(targetRepository, filteredResults, compact);
+    }
+
+    internal static bool HasSubscriptionHealthFilters(bool staleOnly, string? channelFilter, string? sourceRepoFilter) =>
+        staleOnly || !string.IsNullOrWhiteSpace(channelFilter) || !string.IsNullOrWhiteSpace(sourceRepoFilter);
+
+    internal static string FormatSubscriptionHealthFilterMiss(bool staleOnly, string? channelFilter, string? sourceRepoFilter) =>
+        $"No subscriptions matched the provided filters: staleOnly={staleOnly}, channelFilter='{channelFilter ?? string.Empty}', sourceRepoFilter='{sourceRepoFilter ?? string.Empty}'.";
+
+    internal static IEnumerable<SubscriptionHealthResult> FilterSubscriptionHealthResults(
+        IEnumerable<SubscriptionHealthResult> results,
+        bool staleOnly = false,
+        string? channelFilter = null,
+        string? sourceRepoFilter = null)
+    {
+        var filtered = results;
+
+        if (staleOnly)
+            filtered = filtered.Where(r => r.IsStale || r.Error != null);
+
+        if (!string.IsNullOrWhiteSpace(channelFilter))
+        {
+            filtered = filtered.Where(r => r.ChannelName.Contains(channelFilter, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (!string.IsNullOrWhiteSpace(sourceRepoFilter))
+        {
+            filtered = filtered.Where(r =>
+                r.SourceRepository.Contains(sourceRepoFilter, StringComparison.OrdinalIgnoreCase) ||
+                ShortRepositoryName(r.SourceRepository).Contains(sourceRepoFilter, StringComparison.OrdinalIgnoreCase));
+        }
+
+        return filtered;
+    }
+
+    internal static string FormatSubscriptionHealth(string targetRepository, IReadOnlyList<SubscriptionHealthResult> results, bool compact = false)
+    {
         var sb = new StringBuilder();
         var staleCount = results.Count(r => r.IsStale);
         sb.AppendLine($"Subscription health for **{targetRepository}**: {results.Count} subscription(s), {staleCount} stale\n");
 
         foreach (var r in results)
         {
+            if (compact)
+            {
+                sb.AppendLine(FormatCompactSubscriptionHealthLine(r));
+                continue;
+            }
+
             string status;
             if (r.IsStale)
             {
@@ -214,7 +265,67 @@ public partial class MaestroMcpTools
             sb.AppendLine();
         }
 
-        return Timestamp(noCache) + sb.ToString();
+        return sb.ToString();
+    }
+
+    private static string FormatCompactSubscriptionHealthLine(SubscriptionHealthResult result)
+    {
+        var source = ShortRepositoryName(result.SourceRepository);
+        var status = result.Error != null
+            ? "error"
+            : result.IsStale
+                ? FormatCompactStaleStatus(result)
+                : "current";
+        var pr = CompactPrReference(result.TrackedPr?.PrUrl);
+        var prefix = result.Error != null ? "❌" : result.IsStale ? "⚠️" : "✅";
+        var error = result.Error != null ? $"; error: {result.Error}" : "";
+
+        return $"{prefix} {source} → {result.TargetBranch}: {status} (PR: {pr}{error})";
+    }
+
+    private static string CompactPrReference(string? prUrl)
+    {
+        if (string.IsNullOrWhiteSpace(prUrl))
+            return "none";
+
+        var trimmed = prUrl.Trim().TrimEnd('/');
+        var lastSegment = trimmed.Split('/').LastOrDefault();
+        return int.TryParse(lastSegment, out _) ? $"#{lastSegment}" : trimmed;
+    }
+
+    private static string FormatCompactStaleStatus(SubscriptionHealthResult result)
+    {
+        if (result.CommitsBehind.HasValue)
+            return $"{result.CommitsBehind.Value} commits behind";
+
+        return $"~{result.BuildsBehind} builds behind";
+    }
+
+    internal static string ShortRepositoryName(string repository)
+    {
+        var parsedAzDoUrl = MaestroService.ParseAzDoUrl(repository);
+        if (parsedAzDoUrl is { } azdo)
+        {
+            return $"{azdo.org}/{azdo.project}/{azdo.repo}";
+        }
+
+        var trimmed = repository.Trim().TrimEnd('/');
+        if (Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
+        {
+            trimmed = uri.AbsolutePath.Trim('/');
+        }
+
+        trimmed = trimmed.EndsWith(".git", StringComparison.OrdinalIgnoreCase)
+            ? trimmed[..^4]
+            : trimmed;
+
+        var parts = trimmed.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length switch
+        {
+            >= 2 => string.Join('/', parts[^2..]),
+            1 => parts[0],
+            _ => repository
+        };
     }
     [McpServerTool(Name = "maestro_trigger_subscription", Title = "Trigger Subscription", Idempotent = true)]
     [Description("Trigger a Maestro subscription. Provide buildId directly, or provide sourceRepository and channelName to auto-resolve the latest build. Use force=true to force-trigger (overwrites existing PR branch) for stale backflow PR remediation.")]
