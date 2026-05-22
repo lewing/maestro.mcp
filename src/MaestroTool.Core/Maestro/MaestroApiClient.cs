@@ -159,9 +159,9 @@ public class MaestroApiClient : IMaestroApiClient
         return _api.Channels.GetChannelAsync(id, cancellationToken);
     }
 
-    public Task<List<Channel>> ListChannelsAsync(CancellationToken cancellationToken = default)
+    public Task<List<Channel>> ListChannelsAsync(CancellationToken cancellationToken = default, string? classification = null)
     {
-        return _api.Channels.ListChannelsAsync(cancellationToken: cancellationToken);
+        return _api.Channels.ListChannelsAsync(classification: classification, cancellationToken: cancellationToken);
     }
 
     public Task<List<DefaultChannel>> ListDefaultChannelsAsync(

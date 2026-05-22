@@ -421,6 +421,37 @@ public class MaestroServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GetChannels_WithClassification_PassesThroughToApi()
+    {
+        var channels = new List<Channel> { CreateChannel(1, ".NET 10") };
+        _client.ListChannelsAsync(Arg.Any<CancellationToken>(), "product")
+            .Returns(channels);
+
+        var result = await _service.GetChannelsAsync(classification: "product");
+
+        Assert.Single(result);
+        await _client.Received(1).ListChannelsAsync(Arg.Any<CancellationToken>(), "product");
+    }
+
+    [Fact]
+    public async Task GetChannels_WithFilter_FiltersByNameCaseInsensitive()
+    {
+        var channels = new List<Channel>
+        {
+            CreateChannel(1, ".NET 10.0.1xx SDK"),
+            CreateChannel(2, ".NET 9.0.1xx SDK"),
+            CreateChannel(3, "VS 17.14")
+        };
+        _client.ListChannelsAsync(Arg.Any<CancellationToken>())
+            .Returns(channels);
+
+        var result = await _service.GetChannelsAsync(filter: "net 10");
+
+        var channel = Assert.Single(result);
+        Assert.Equal(1, channel.Id);
+    }
+
+    [Fact]
     public async Task GetChannelByName_FindsMatchingChannel()
     {
         var channels = new List<Channel>

@@ -196,6 +196,56 @@ public class MaestroMcpToolsTests : IDisposable
         Assert.Contains("invalid", result, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task GetChannels_WithFilter_ReturnsOnlyMatchingChannels()
+    {
+        var channels = new List<Channel>
+        {
+            CreateChannel(id: 1, name: ".NET 10.0.1xx SDK"),
+            CreateChannel(id: 2, name: ".NET 9.0.1xx SDK"),
+            CreateChannel(id: 3, name: "VS 17.14")
+        };
+        _client.ListChannelsAsync(Arg.Any<CancellationToken>())
+            .Returns(channels);
+
+        var result = await _tools.GetChannels(filter: "net 10");
+
+        Assert.Contains(".NET 10.0.1xx SDK", result);
+        Assert.DoesNotContain(".NET 9.0.1xx SDK", result);
+        Assert.DoesNotContain("VS 17.14", result);
+    }
+
+    [Fact]
+    public async Task GetChannels_WithClassification_PassesThroughToService()
+    {
+        var channels = new List<Channel> { CreateChannel(id: 1, name: ".NET 10.0.1xx SDK") };
+        _client.ListChannelsAsync(Arg.Any<CancellationToken>(), "product")
+            .Returns(channels);
+
+        var result = await _tools.GetChannels(classification: "product");
+
+        Assert.Contains(".NET 10.0.1xx SDK", result);
+        await _client.Received(1).ListChannelsAsync(Arg.Any<CancellationToken>(), "product");
+    }
+
+    [Fact]
+    public async Task GetChannels_WithCompact_ReturnsNameToIdLines()
+    {
+        var channels = new List<Channel>
+        {
+            CreateChannel(id: 10, name: ".NET 10.0.1xx SDK"),
+            CreateChannel(id: 20, name: "VS 17.14")
+        };
+        _client.ListChannelsAsync(Arg.Any<CancellationToken>())
+            .Returns(channels);
+
+        var result = await _tools.GetChannels(compact: true);
+
+        Assert.Contains(".NET 10.0.1xx SDK → 10", result);
+        Assert.Contains("VS 17.14 → 20", result);
+        Assert.DoesNotContain("- **", result);
+    }
+
     // ================================================================
     // Smart trigger_subscription - auto-resolve latest build
     // ================================================================

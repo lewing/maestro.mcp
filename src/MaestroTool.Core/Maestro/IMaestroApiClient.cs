@@ -48,7 +48,7 @@ public interface IMaestroApiClient
 
     Task<Channel> GetChannelAsync(int id, CancellationToken cancellationToken = default);
 
-    Task<List<Channel>> ListChannelsAsync(CancellationToken cancellationToken = default);
+    Task<List<Channel>> ListChannelsAsync(CancellationToken cancellationToken = default, string? classification = null);
 
     Task<List<DefaultChannel>> ListDefaultChannelsAsync(
         string? repository = null,

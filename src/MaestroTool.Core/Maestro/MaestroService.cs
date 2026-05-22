@@ -80,12 +80,27 @@ public class MaestroService
             LongTtl); // Builds are immutable
     }
 
-    public Task<List<Channel>> GetChannelsAsync(bool noCache = false, CancellationToken cancellationToken = default)
+    public async Task<List<Channel>> GetChannelsAsync(
+        bool noCache = false,
+        CancellationToken cancellationToken = default,
+        string? classification = null,
+        string? filter = null)
     {
-        if (noCache) _cache.Invalidate("channels");
-        return _cache.GetOrAddAsync("channels",
-            () => _client.ListChannelsAsync(cancellationToken),
+        var normalizedClassification = string.IsNullOrWhiteSpace(classification) ? null : classification.Trim();
+        var key = normalizedClassification is null ? "channels" : $"channels:{normalizedClassification}";
+        if (noCache) _cache.Invalidate(key);
+
+        var channels = await _cache.GetOrAddAsync(key,
+            () => _client.ListChannelsAsync(cancellationToken, normalizedClassification),
             MediumTtl);
+
+        if (string.IsNullOrWhiteSpace(filter))
+            return channels;
+
+        var normalizedFilter = filter.Trim();
+        return channels
+            .Where(c => c.Name.Contains(normalizedFilter, StringComparison.OrdinalIgnoreCase))
+            .ToList();
     }
 
     public Task<Channel> GetChannelAsync(int id, bool noCache = false, CancellationToken cancellationToken = default)
