@@ -51,7 +51,7 @@ public partial class MaestroMcpTools
     }
 
     [McpServerTool(Name = "maestro_channels", Title = "List Channels", ReadOnly = true, Idempotent = true)]
-    [Description("List Maestro channels. Optional filter does a case-insensitive substring match on channel name (e.g. '.NET 10', 'VS 17.', 'Aspire'); classification is passed to Maestro; compact returns 'name → id' lines.")]
+    [Description("List Maestro channels, optionally filtered by name substring or classification.")]
     public async Task<string> GetChannels(
         [Description("Bypass cache and fetch fresh data")] bool noCache = false,
         [Description("Optional case-insensitive substring filter for channel names (e.g. '.NET 10', 'VS 17.', 'Aspire')")] string? filter = null,

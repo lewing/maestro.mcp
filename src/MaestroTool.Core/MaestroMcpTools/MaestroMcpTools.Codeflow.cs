@@ -13,7 +13,7 @@ namespace MaestroTool.Core;
 public partial class MaestroMcpTools
 {
     [McpServerTool(Name = "maestro_trigger_daily_update", Title = "Trigger Daily Update", Idempotent = true)]
-    [Description("Trigger all daily-update subscriptions to run. This is a non-destructive action that initiates processing of all subscriptions configured for daily updates.")]
+    [Description("Trigger all daily-update subscriptions. Not for single subscriptions; use maestro_trigger_subscription for targeted triggers.")]
     public async Task<string> TriggerDailyUpdate(CancellationToken cancellationToken = default)
     {
         var dedupKey = "action:trigger-daily-update";
@@ -37,7 +37,7 @@ public partial class MaestroMcpTools
         }
     }
     [McpServerTool(Name = "maestro_codeflow_prs", Title = "Codeflow PRs", ReadOnly = true, Idempotent = true)]
-    [Description("List active codeflow (tracked) pull requests managed by Maestro. Optionally filter by channel name.")]
+    [Description("List active codeflow PRs managed by Maestro. For per-mapping health status, use maestro_codeflow_statuses.")]
     public async Task<string> GetCodeflowPrs(
         [Description("Filter by channel name (e.g. '.NET 10.0.1xx SDK')")] string? channelName = null,
         [Description("Bypass cache and fetch fresh data")] bool noCache = false,
@@ -121,7 +121,7 @@ public partial class MaestroMcpTools
         }
     }
     [McpServerTool(Name = "maestro_backflow_status", Title = "Backflow Status", ReadOnly = true, Idempotent = true)]
-    [Description("Get backflow status for a specific VMR build. Shows per-branch backflow status including commit distance and subscription details.")]
+    [Description("Get backflow status for a VMR build. Requires a VMR build ID; use maestro_builds to find one.")]
     public async Task<string> GetBackflowStatus(
         [Description("The VMR (dotnet/dotnet) BAR build ID to check backflow status for")] int vmrBuildId,
         [Description("Bypass cache and fetch fresh data")] bool noCache = false,
@@ -162,7 +162,7 @@ public partial class MaestroMcpTools
         return Timestamp(noCache) + sb.ToString();
     }
     [McpServerTool(Name = "maestro_flow_graph", Title = "Flow Graph", ReadOnly = true, Idempotent = true)]
-    [Description("Get the dependency flow graph for a channel. Defaults to a 3-day window and skips expensive build-time metrics; set days/includeBuildTimes for expanded investigations.")]
+    [Description("Get the dependency flow graph for a channel.")]
     public async Task<string> GetFlowGraph(
         [Description("The channel ID to get the flow graph for")] int channelId,
         [Description("Number of days to include in the flow graph analysis (default: 3, max: 30)")] int days = 3,
@@ -271,7 +271,7 @@ public partial class MaestroMcpTools
         return Timestamp(noCache) + sb.ToString();
     }
     [McpServerTool(Name = "maestro_codeflow_statuses", Title = "Codeflow Statuses", ReadOnly = true, Idempotent = true)]
-    [Description("Get codeflow status for a repository and branch. Shows forward flow and backflow subscription statuses, active PRs, and build staleness for each mapping. Defaults to the VMR (dotnet/dotnet, main).")]
+    [Description("Get codeflow status for a repository and branch. Defaults to the VMR (dotnet/dotnet, main).")]
     public async Task<string> GetCodeflowStatuses(
         [Description("Repository URL (default: https://github.com/dotnet/dotnet)")] string repositoryUrl = "https://github.com/dotnet/dotnet",
         [Description("Branch name (default: main)")] string branch = "main",
