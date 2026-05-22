@@ -75,6 +75,29 @@ public class MaestroMcpToolsTests : IDisposable
         return sub;
     }
 
+    private static SubscriptionHealthResult CreateHealth(
+        string source = "https://github.com/dotnet/runtime",
+        string branch = "main",
+        string channel = ".NET 10.0.1xx SDK",
+        bool stale = false,
+        int buildsBehind = 0,
+        int? commitsBehind = null,
+        TrackedPrDiagnosis? trackedPr = null) =>
+        new(
+            Guid.NewGuid(),
+            source,
+            "https://github.com/dotnet/dotnet",
+            branch,
+            channel,
+            stale,
+            buildsBehind,
+            100,
+            new DateTimeOffset(2026, 5, 1, 0, 0, 0, TimeSpan.Zero),
+            stale ? 110 : 100,
+            new DateTimeOffset(2026, 5, 2, 0, 0, 0, TimeSpan.Zero),
+            CommitsBehind: commitsBehind,
+            TrackedPr: trackedPr);
+
     // ================================================================
     // Channel name-or-ID resolution tests
     // ================================================================
@@ -244,6 +267,79 @@ public class MaestroMcpToolsTests : IDisposable
         Assert.Contains(".NET 10.0.1xx SDK → 10", result);
         Assert.Contains("VS 17.14 → 20", result);
         Assert.DoesNotContain("- **", result);
+    }
+
+    [Fact]
+    public void FilterSubscriptionHealthResults_WithStaleOnly_OmitsHealthySubscriptions()
+    {
+        var results = new[]
+        {
+            CreateHealth(source: "https://github.com/dotnet/runtime", stale: true, buildsBehind: 5),
+            CreateHealth(source: "https://github.com/dotnet/arcade", stale: false)
+        };
+
+        var filtered = MaestroMcpTools.FilterSubscriptionHealthResults(results, staleOnly: true).ToList();
+
+        var only = Assert.Single(filtered);
+        Assert.True(only.IsStale);
+        Assert.Equal("https://github.com/dotnet/runtime", only.SourceRepository);
+    }
+
+    [Fact]
+    public void FilterSubscriptionHealthResults_WithChannelAndSourceFilters_IsCaseInsensitive()
+    {
+        var results = new[]
+        {
+            CreateHealth(source: "https://github.com/dotnet/runtime", channel: ".NET 10.0.1xx SDK", stale: true),
+            CreateHealth(source: "https://github.com/dotnet/aspnetcore", channel: ".NET 9.0.1xx SDK", stale: true),
+            CreateHealth(source: "https://github.com/dotnet/arcade", channel: ".NET 10.0.1xx SDK", stale: true)
+        };
+
+        var filtered = MaestroMcpTools.FilterSubscriptionHealthResults(
+            results,
+            channelFilter: "net 10",
+            sourceRepoFilter: "RUNTIME").ToList();
+
+        var only = Assert.Single(filtered);
+        Assert.Equal("https://github.com/dotnet/runtime", only.SourceRepository);
+    }
+
+    [Fact]
+    public void FormatSubscriptionHealth_WithCompact_ReturnsOneLinePerSubscription()
+    {
+        var results = new[]
+        {
+            CreateHealth(
+                source: "https://github.com/dotnet/runtime",
+                branch: "main",
+                channel: ".NET 10.0.1xx SDK",
+                stale: true,
+                buildsBehind: 7,
+                commitsBehind: 42,
+                trackedPr: new TrackedPrDiagnosis(TrackedPrState.Active, "https://github.com/dotnet/dotnet/pull/123", null)),
+            CreateHealth(source: "https://github.com/dotnet/arcade", branch: "release/10.0", stale: false)
+        };
+
+        var output = MaestroMcpTools.FormatSubscriptionHealth("https://github.com/dotnet/dotnet", results, compact: true);
+
+        Assert.Contains("Subscription health for **https://github.com/dotnet/dotnet**: 2 subscription(s), 1 stale", output);
+        Assert.Contains("⚠️ dotnet/runtime → main: 42 commits behind (PR: #123)", output);
+        Assert.Contains("✅ dotnet/arcade → release/10.0: current", output);
+        Assert.DoesNotContain("Last Applied:", output);
+        Assert.DoesNotContain("Latest Available:", output);
+    }
+
+    [Fact]
+    public void FormatSubscriptionHealth_WithDetailedMode_PreservesMultiLineBlocks()
+    {
+        var results = new[] { CreateHealth(source: "https://github.com/dotnet/runtime", stale: true, buildsBehind: 3) };
+
+        var output = MaestroMcpTools.FormatSubscriptionHealth("https://github.com/dotnet/dotnet", results);
+
+        Assert.Contains("**https://github.com/dotnet/runtime** → main", output);
+        Assert.Contains("Channel: .NET 10.0.1xx SDK | Status: ⚠️ STALE (~3 builds behind)", output);
+        Assert.Contains("Last Applied: #100", output);
+        Assert.Contains("Latest Available: #110", output);
     }
 
     // ================================================================

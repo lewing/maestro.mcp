@@ -19,6 +19,15 @@
 
 ## Learnings
 
+### 2026-05-22: `maestro_subscription_health` stale filters and compact mode
+
+- Added opt-in MCP parameters `staleOnly`, `channelFilter`, `sourceRepoFilter`, and `compact`; no-arg output remains the same detailed per-subscription block.
+- Names are domain-specific rather than a generic `filter` because subscription health has two natural axes: channel and source repo; `staleOnly` matches the common "what is broken" workflow.
+- Filters apply after `GetSubscriptionHealthAsync` completes its parallel fan-out, preserving PR #20's concurrency and avoiding new cache/API-key dimensions for ad hoc substring searches.
+- Extracted formatter helpers so tests can target filtering and markdown rendering directly without PCS network calls.
+- Compact lines intentionally omit channel names and shorten PR URLs to `#N` to keep scanning dense: `⚠️ dotnet/runtime → main: 42 commits behind (PR: #123)`.
+- Live dotnet/dotnet measurement from local tool harness: detailed formatter 24,398 bytes for 93 subscriptions / 43 stale; `staleOnly + compact` 3,049 bytes (~87.5% smaller).
+
 ### 2026-05-22: `maestro_channels` low-cost filtering
 
 - Chose optional `filter`, `classification`, and `compact` parameters on `maestro_channels`; no-arg calls keep the previous full bulleted markdown output.

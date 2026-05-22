@@ -1,6 +1,13 @@
 # MCP Tool Filtering
 
+Confidence: high
+
 Use this pattern when a read-only MCP tool lists a small-but-noisy dataset and callers usually need a subset.
+
+## Examples
+
+- `maestro_channels`: `filter`, server-side `classification`, and `compact` name/id lines.
+- `maestro_subscription_health`: `staleOnly`, `channelFilter`, `sourceRepoFilter`, and `compact` one-line health summaries.
 
 ## Pattern
 
