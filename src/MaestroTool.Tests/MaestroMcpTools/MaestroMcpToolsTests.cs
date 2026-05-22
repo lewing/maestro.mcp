@@ -337,6 +337,45 @@ public class MaestroMcpToolsTests : IDisposable
     }
 
     [Fact]
+    public void FormatSubscriptionHealthFilterMiss_EchoesProvidedFilters()
+    {
+        var output = MaestroMcpTools.FormatSubscriptionHealthFilterMiss(
+            staleOnly: true,
+            channelFilter: ".NET 10",
+            sourceRepoFilter: "runtime");
+
+        Assert.Equal("No subscriptions matched the provided filters: staleOnly=True, channelFilter='.NET 10', sourceRepoFilter='runtime'.", output);
+    }
+
+    [Fact]
+    public async Task GetSubscriptionHealth_WhenFiltersRemoveAllResults_ReturnsFilterMissMessage()
+    {
+        var channel = CreateChannel(1, ".NET 10");
+        var build = CreateBuild(id: 100);
+        var sub = CreateSubscription(
+            target: "https://github.com/dotnet/dotnet",
+            channel: channel,
+            lastApplied: build);
+
+        _client.ListSubscriptionsAsync(null, "https://github.com/dotnet/dotnet", null, true, Arg.Any<CancellationToken>())
+            .Returns(new List<Subscription> { sub });
+        _client.GetLatestBuildAsync(sub.SourceRepository, channel.Id, Arg.Any<CancellationToken>())
+            .Returns(build);
+
+        var result = await _tools.GetSubscriptionHealth(
+            "https://github.com/dotnet/dotnet",
+            staleOnly: true,
+            channelFilter: ".NET 10",
+            sourceRepoFilter: "runtime");
+
+        Assert.Contains("No subscriptions matched the provided filters", result);
+        Assert.Contains("staleOnly=True", result);
+        Assert.Contains("channelFilter='.NET 10'", result);
+        Assert.Contains("sourceRepoFilter='runtime'", result);
+        Assert.DoesNotContain("Subscription health for", result);
+    }
+
+    [Fact]
     public void FormatSubscriptionHealth_WithCompact_ReturnsOneLinePerSubscription()
     {
         var results = new[]

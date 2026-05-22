@@ -19,6 +19,12 @@
 
 ## Learnings
 
+### 2026-05-22: PR #24 review fixes — filter-miss UX and CLI validation
+
+- Empty-after-filter results should distinguish backend emptiness from filter misses; when unfiltered data exists but `staleOnly`/`channelFilter`/`sourceRepoFilter` remove everything, echo the applied filters in the response.
+- CLI command handlers should validate user-supplied ranges before allocating timeout/cancellation resources or calling services that throw domain validation exceptions; print a clear error and exit non-zero.
+- Verification: `dotnet test --verbosity minimal` passed 208/208, and invalid `flow-graph --days 0` / `--timeout-seconds -1` now exit 1 with friendly errors.
+
 ### 2026-05-22: Issue #19 flow graph scope-reduction defaults
 
 - Changed `maestro_flow_graph` default scope from 7 days with eager build-time metrics to 3 days with `includeBuildTimes=false`, while keeping `days` and `includeBuildTimes` as opt-in expansion knobs.

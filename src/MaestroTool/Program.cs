@@ -833,6 +833,20 @@ public class Commands
     {
         if (TryPrintSchema<FlowGraph>(schema)) return;
 
+        if (days is < 1 or > 30)
+        {
+            Console.Error.WriteLine($"Error: Invalid days value '{days}'. Expected a value between 1 and 30.");
+            Environment.Exit(1);
+            return;
+        }
+
+        if (timeoutSeconds <= 0)
+        {
+            Console.Error.WriteLine($"Error: Invalid timeout-seconds value '{timeoutSeconds}'. Expected a positive number of seconds.");
+            Environment.Exit(1);
+            return;
+        }
+
         FlowGraph graph;
         try
         {

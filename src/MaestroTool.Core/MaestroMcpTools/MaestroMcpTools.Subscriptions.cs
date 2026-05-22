@@ -115,8 +115,17 @@ public partial class MaestroMcpTools
             return $"No active subscriptions found targeting {targetRepository}.";
 
         var filteredResults = FilterSubscriptionHealthResults(results, staleOnly, channelFilter, sourceRepoFilter).ToList();
+        if (filteredResults.Count == 0 && HasSubscriptionHealthFilters(staleOnly, channelFilter, sourceRepoFilter))
+            return Timestamp(noCache) + FormatSubscriptionHealthFilterMiss(staleOnly, channelFilter, sourceRepoFilter);
+
         return Timestamp(noCache) + FormatSubscriptionHealth(targetRepository, filteredResults, compact);
     }
+
+    internal static bool HasSubscriptionHealthFilters(bool staleOnly, string? channelFilter, string? sourceRepoFilter) =>
+        staleOnly || !string.IsNullOrWhiteSpace(channelFilter) || !string.IsNullOrWhiteSpace(sourceRepoFilter);
+
+    internal static string FormatSubscriptionHealthFilterMiss(bool staleOnly, string? channelFilter, string? sourceRepoFilter) =>
+        $"No subscriptions matched the provided filters: staleOnly={staleOnly}, channelFilter='{channelFilter ?? string.Empty}', sourceRepoFilter='{sourceRepoFilter ?? string.Empty}'.";
 
     internal static IEnumerable<SubscriptionHealthResult> FilterSubscriptionHealthResults(
         IEnumerable<SubscriptionHealthResult> results,
