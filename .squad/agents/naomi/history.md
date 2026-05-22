@@ -19,6 +19,14 @@
 
 ## Learnings
 
+### 2026-05-22: Issue #19 flow graph scope-reduction defaults
+
+- Changed `maestro_flow_graph` default scope from 7 days with eager build-time metrics to 3 days with `includeBuildTimes=false`, while keeping `days` and `includeBuildTimes` as opt-in expansion knobs.
+- Lowered the MCP flow graph timeout to 30 seconds so pathological default calls fail fast instead of consuming the old 2-minute budget.
+- PCS client gotcha: `IChannels.GetFlowGraphAsync` already accepts `includeBuildTimes`; passing `false` is the lazy-fetch behavior because PCS skips detailed build timestamp resolution for the whole graph.
+- Verification: `dotnet build --no-restore --verbosity minimal` succeeded and `dotnet test --no-restore --verbosity minimal` passed 193/193.
+- Perf spot-check: local CLI default flow graph call for `.NET 10.0.1xx SDK` channel returned in ~28s via the 30s guard; PCS did not complete the graph within the budget on that live channel.
+
 ### 2026-05-22: PR #23 reviewer fixes — error-state filtering and AzDO short names
 
 - `staleOnly`/"show broken" filters must include unknown or errored health states, not just explicit stale booleans; silently omitting error rows hides the highest-risk cases.

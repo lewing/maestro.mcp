@@ -8,6 +8,7 @@ Use this pattern when a read-only MCP tool lists a small-but-noisy dataset and c
 
 - `maestro_channels`: `filter`, server-side `classification`, and `compact` name/id lines.
 - `maestro_subscription_health`: `staleOnly`, `channelFilter`, `sourceRepoFilter`, and `compact` one-line health summaries.
+- `maestro_flow_graph`: narrower default `days=3` plus lazy `includeBuildTimes=false` to keep default graph calls within tool time budgets.
 
 ## Pattern
 

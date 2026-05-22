@@ -182,3 +182,18 @@ Per Holden's policy: pin exact versions, take HIGHER stable versions. Resolved c
 - Added `GetChannels_DifferentClassificationsUseIndependentCacheEntries` to verify null, `product`, and `infrastructure` channel classifications each get separate cache entries and cached results do not cross-contaminate.
 - NSubstitute pattern: configure distinct optional-argument calls with `_client.ListChannelsAsync(Arg.Any<CancellationToken>(), classification).Returns(...)`, then verify exact counts with `Received(1)` per classification; `Received.InOrder` is unnecessary for cache isolation because call count and result values are what matter.
 - Future cache-isolation tests should assert both the API invocation cardinality and a value-level discriminator in returned DTOs; cached SQLite round-trips may deserialize new instances, so avoid reference equality.
+## 2026-05-22: Issue #19 Flow Graph Perf Defaults Tests
+
+**Task:** Added anticipatory coverage for Holden's approved `maestro_flow_graph` perf defaults on `squad/19-flow-graph-perf-defaults`.
+
+**Coverage added:**
+- MCP default invocation uses a 3-day window and leaves build-time expansion disabled.
+- Explicit `days` values (7, 14) are passed through to MaestroService/client.
+- Invalid windows (0, negative, >30, int max) are rejected before client calls.
+- Lazy build-time behavior is verified via NSubstitute: default graph calls use `includeBuildTimes=false` and make zero `GetBuildAsync` detail calls; explicit expansion passes `includeBuildTimes=true`.
+
+**Mock quirks:**
+- Flow graph tests must set up `IMaestroApiClient.GetFlowGraphAsync` with the full optional-parameter signature, including `includedFrequencies: null` and `Arg.Any<CancellationToken>()`.
+- Counting lazy detail calls uses `_client.DidNotReceive().GetBuildAsync(...)`; the flow graph API itself is still the only client call for graph construction.
+
+**Verification:** `dotnet test --nologo` passed 205/205.

@@ -819,17 +819,17 @@ public class Commands
     }
 
     [Command("flow-graph")]
-    [Description("Get the dependency flow graph for a channel showing how builds flow through subscriptions between repositories.")]
+    [Description("Get the dependency flow graph for a channel. Defaults to 3 days and skips expensive build-time metrics.")]
     public async Task FlowGraph(
         [Argument] int channelId,
-        int days = 7,
+        int days = 3,
         bool includeArcade = true,
-        bool includeBuildTimes = true,
+        bool includeBuildTimes = false,
         bool includeDisabled = false,
         bool json = false,
         bool schema = false,
         bool noCache = false,
-        int timeoutSeconds = 120)
+        int timeoutSeconds = 30)
     {
         if (TryPrintSchema<FlowGraph>(schema)) return;
 

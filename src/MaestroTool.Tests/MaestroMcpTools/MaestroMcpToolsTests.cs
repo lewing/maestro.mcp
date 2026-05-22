@@ -100,6 +100,19 @@ public class MaestroMcpToolsTests : IDisposable
             CommitsBehind: commitsBehind,
             TrackedPr: trackedPr);
 
+    private static FlowGraph CreateFlowGraph() =>
+        new(
+            new List<FlowRef>
+            {
+                new(officialBuildTime: 0, prBuildTime: 0, onLongestBuildPath: false, bestCasePathTime: 0, worstCasePathTime: 0, goalTimeInMinutes: 0)
+                {
+                    Id = "runtime-main",
+                    Repository = "https://github.com/dotnet/runtime",
+                    Branch = "main"
+                }
+            },
+            new List<FlowEdge>());
+
     // ================================================================
     // Channel name-or-ID resolution tests
     // ================================================================
@@ -397,6 +410,73 @@ public class MaestroMcpToolsTests : IDisposable
         Assert.Contains("Channel: .NET 10.0.1xx SDK | Status: ⚠️ STALE (~3 builds behind)", output);
         Assert.Contains("Last Applied: #100", output);
         Assert.Contains("Latest Available: #110", output);
+    }
+
+    // ================================================================
+    // Flow graph perf defaults
+    // ================================================================
+
+    [Fact]
+    public async Task GetFlowGraph_WithoutDays_UsesThreeDayDefaultAndSkipsBuildTimes()
+    {
+        var graph = CreateFlowGraph();
+        _client.GetFlowGraphAsync(3, 42, true, false, false, null, Arg.Any<CancellationToken>())
+            .Returns(graph);
+
+        var result = await _tools.GetFlowGraph(channelId: 42);
+
+        Assert.Contains("last 3 days", result);
+        await _client.Received(1).GetFlowGraphAsync(3, 42, true, false, false, null, Arg.Any<CancellationToken>());
+        await _client.DidNotReceive().GetBuildAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData(7)]
+    [InlineData(14)]
+    public async Task GetFlowGraph_WithDaysParameter_PassesRequestedWindow(int days)
+    {
+        var graph = CreateFlowGraph();
+        _client.GetFlowGraphAsync(days, 42, true, false, false, null, Arg.Any<CancellationToken>())
+            .Returns(graph);
+
+        var result = await _tools.GetFlowGraph(channelId: 42, days: days);
+
+        Assert.Contains($"last {days} days", result);
+        await _client.Received(1).GetFlowGraphAsync(days, 42, true, false, false, null, Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(31)]
+    [InlineData(int.MaxValue)]
+    public async Task GetFlowGraph_WithOutOfRangeDays_ReturnsValidationError(int days)
+    {
+        var result = await _tools.GetFlowGraph(channelId: 42, days: days);
+
+        Assert.Contains("Invalid days", result);
+        Assert.Contains("between 1 and 30", result);
+        await _client.DidNotReceive().GetFlowGraphAsync(
+            Arg.Any<int>(),
+            Arg.Any<int>(),
+            Arg.Any<bool>(),
+            Arg.Any<bool>(),
+            Arg.Any<bool>(),
+            Arg.Any<List<string>?>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetFlowGraph_WithBuildTimesEnabled_PassesExpansionFlag()
+    {
+        var graph = CreateFlowGraph();
+        _client.GetFlowGraphAsync(7, 42, true, true, false, null, Arg.Any<CancellationToken>())
+            .Returns(graph);
+
+        var result = await _tools.GetFlowGraph(channelId: 42, days: 7, includeBuildTimes: true);
+
+        Assert.Contains("last 7 days", result);
+        await _client.Received(1).GetFlowGraphAsync(7, 42, true, true, false, null, Arg.Any<CancellationToken>());
     }
 
     // ================================================================
