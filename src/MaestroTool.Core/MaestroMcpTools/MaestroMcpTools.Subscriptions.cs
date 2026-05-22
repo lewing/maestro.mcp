@@ -97,13 +97,13 @@ public partial class MaestroMcpTools
         return Timestamp(noCache) + sb.ToString();
     }
     [McpServerTool(Name = "maestro_subscription_health", Title = "Subscription Health", ReadOnly = true, Idempotent = true)]
-    [Description("Check subscription health for a target repository. Optional staleOnly omits healthy subscriptions; channelFilter and sourceRepoFilter do case-insensitive substring matching after cached health checks; compact returns one line per subscription.")]
+    [Description("Check subscription health for a target repository. Optional staleOnly includes stale or errored subscriptions; channelFilter and sourceRepoFilter do case-insensitive substring matching after cached health checks; compact returns one line per subscription.")]
     public async Task<string> GetSubscriptionHealth(
         [Description("Target repository URL (e.g. https://github.com/dotnet/dotnet)")] string targetRepository,
         [Description("Bypass cache and fetch fresh data")] bool noCache = false,
         [Description("Include recent commit details (SHA, message, author, date) for stale subscriptions")] bool includeCommitDetails = false,
         [Description("Cross-validate stale subscriptions against GitHub ground truth (PR activity, commit reachability). Slower but detects stuck bookkeeping.")] bool validate = false,
-        [Description("Only show stale subscriptions; healthy subscriptions are omitted from output")] bool staleOnly = false,
+        [Description("Only show stale or errored subscriptions; healthy subscriptions are omitted from output")] bool staleOnly = false,
         [Description("Optional case-insensitive substring filter on channel name")] string? channelFilter = null,
         [Description("Optional case-insensitive substring filter on source repository URL or short name (e.g. dotnet/runtime or runtime)")] string? sourceRepoFilter = null,
         [Description("Return one line per subscription instead of the detailed multi-line block")] bool compact = false,
@@ -127,7 +127,7 @@ public partial class MaestroMcpTools
         var filtered = results;
 
         if (staleOnly)
-            filtered = filtered.Where(r => r.IsStale);
+            filtered = filtered.Where(r => r.IsStale || r.Error != null);
 
         if (!string.IsNullOrWhiteSpace(channelFilter))
         {
@@ -262,9 +262,11 @@ public partial class MaestroMcpTools
     private static string FormatCompactSubscriptionHealthLine(SubscriptionHealthResult result)
     {
         var source = ShortRepositoryName(result.SourceRepository);
-        var status = result.IsStale
-            ? FormatCompactStaleStatus(result)
-            : "current";
+        var status = result.Error != null
+            ? "error"
+            : result.IsStale
+                ? FormatCompactStaleStatus(result)
+                : "current";
         var pr = CompactPrReference(result.TrackedPr?.PrUrl);
         var prefix = result.Error != null ? "❌" : result.IsStale ? "⚠️" : "✅";
         var error = result.Error != null ? $"; error: {result.Error}" : "";
@@ -290,8 +292,14 @@ public partial class MaestroMcpTools
         return $"~{result.BuildsBehind} builds behind";
     }
 
-    private static string ShortRepositoryName(string repository)
+    internal static string ShortRepositoryName(string repository)
     {
+        var parsedAzDoUrl = MaestroService.ParseAzDoUrl(repository);
+        if (parsedAzDoUrl is { } azdo)
+        {
+            return $"{azdo.org}/{azdo.project}/{azdo.repo}";
+        }
+
         var trimmed = repository.Trim().TrimEnd('/');
         if (Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
         {

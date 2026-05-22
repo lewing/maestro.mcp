@@ -19,6 +19,12 @@
 
 ## Learnings
 
+### 2026-05-22: PR #23 reviewer fixes — error-state filtering and AzDO short names
+
+- `staleOnly`/"show broken" filters must include unknown or errored health states, not just explicit stale booleans; silently omitting error rows hides the highest-risk cases.
+- Compact health output should avoid mixed signals: errored rows render as `error`, not `current`, even when `IsStale` is false.
+- AzDO repository display/filter short names should reuse `MaestroService.ParseAzDoUrl`; `dev.azure.com/{org}/{project}/_git/{repo}` and legacy Visual Studio URLs parse to `(org, project, repo)`, which can be rendered consistently as `org/project/repo`.
+
 ### 2026-05-22: `maestro_subscription_health` stale filters and compact mode
 
 - Added opt-in MCP parameters `staleOnly`, `channelFilter`, `sourceRepoFilter`, and `compact`; no-arg output remains the same detailed per-subscription block.

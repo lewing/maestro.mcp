@@ -20,6 +20,7 @@ Use this pattern when a read-only MCP tool lists a small-but-noisy dataset and c
 4. Apply ad hoc substring filters after retrieving cached data so every search term does not create a new upstream API call.
 5. Update the `[Description]` on the tool and parameters so MCP hosts teach agents when to filter.
 6. Add tests at both service and MCP-tool layers: API pass-through, case-insensitive filtering, and compact formatting.
+7. For "show broken" filters (for example `staleOnly`), include errored/unknown states as non-healthy unless the parameter explicitly says otherwise.
 
 ## Avoid
 

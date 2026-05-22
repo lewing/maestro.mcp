@@ -82,6 +82,7 @@ public class MaestroMcpToolsTests : IDisposable
         bool stale = false,
         int buildsBehind = 0,
         int? commitsBehind = null,
+        string? error = null,
         TrackedPrDiagnosis? trackedPr = null) =>
         new(
             Guid.NewGuid(),
@@ -95,6 +96,7 @@ public class MaestroMcpToolsTests : IDisposable
             new DateTimeOffset(2026, 5, 1, 0, 0, 0, TimeSpan.Zero),
             stale ? 110 : 100,
             new DateTimeOffset(2026, 5, 2, 0, 0, 0, TimeSpan.Zero),
+            Error: error,
             CommitsBehind: commitsBehind,
             TrackedPr: trackedPr);
 
@@ -286,6 +288,23 @@ public class MaestroMcpToolsTests : IDisposable
     }
 
     [Fact]
+    public void FilterSubscriptionHealthResults_WithStaleOnly_IncludesErroredSubscriptions()
+    {
+        var results = new[]
+        {
+            CreateHealth(source: "https://github.com/dotnet/runtime", stale: false, error: "health check failed"),
+            CreateHealth(source: "https://github.com/dotnet/arcade", stale: false)
+        };
+
+        var filtered = MaestroMcpTools.FilterSubscriptionHealthResults(results, staleOnly: true).ToList();
+
+        var only = Assert.Single(filtered);
+        Assert.False(only.IsStale);
+        Assert.Equal("health check failed", only.Error);
+        Assert.Equal("https://github.com/dotnet/runtime", only.SourceRepository);
+    }
+
+    [Fact]
     public void FilterSubscriptionHealthResults_WithChannelAndSourceFilters_IsCaseInsensitive()
     {
         var results = new[]
@@ -327,6 +346,44 @@ public class MaestroMcpToolsTests : IDisposable
         Assert.Contains("✅ dotnet/arcade → release/10.0: current", output);
         Assert.DoesNotContain("Last Applied:", output);
         Assert.DoesNotContain("Latest Available:", output);
+    }
+
+    [Fact]
+    public void FormatSubscriptionHealth_WithCompact_RendersErroredSubscriptionsAsError()
+    {
+        var results = new[]
+        {
+            CreateHealth(source: "https://github.com/dotnet/runtime", stale: false, error: "health check failed")
+        };
+
+        var output = MaestroMcpTools.FormatSubscriptionHealth("https://github.com/dotnet/dotnet", results, compact: true);
+
+        Assert.Contains("❌ dotnet/runtime → main: error (PR: none; error: health check failed)", output);
+        Assert.DoesNotContain("dotnet/runtime → main: current", output);
+    }
+
+    [Fact]
+    public void ShortRepositoryName_WithGitHubUrl_ReturnsOwnerAndRepo()
+    {
+        var result = MaestroMcpTools.ShortRepositoryName("https://github.com/dotnet/runtime.git");
+
+        Assert.Equal("dotnet/runtime", result);
+    }
+
+    [Fact]
+    public void ShortRepositoryName_WithAzDoUrl_ReturnsOrgProjectAndRepo()
+    {
+        var result = MaestroMcpTools.ShortRepositoryName("https://dev.azure.com/dnceng/internal/_git/dotnet-runtime");
+
+        Assert.Equal("dnceng/internal/dotnet-runtime", result);
+    }
+
+    [Fact]
+    public void ShortRepositoryName_WithEdgeCaseRootUrl_ReturnsInput()
+    {
+        var result = MaestroMcpTools.ShortRepositoryName("https://example.com/");
+
+        Assert.Equal("https://example.com/", result);
     }
 
     [Fact]
