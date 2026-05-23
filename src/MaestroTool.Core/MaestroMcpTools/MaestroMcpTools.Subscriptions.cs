@@ -11,7 +11,7 @@ namespace MaestroTool.Core;
 public partial class MaestroMcpTools
 {
     [McpServerTool(Name = "maestro_subscriptions", Title = "List Subscriptions", ReadOnly = true, Idempotent = true)]
-    [Description("List Maestro subscriptions filtered by source/target repository and/or channel name. For health checks, use maestro_subscription_health. For details on a single subscription by ID, use maestro_subscription.")]
+    [Description("List Maestro subscriptions. For health checks, use maestro_subscription_health.")]
     public async Task<string> GetSubscriptions(
         [Description("Filter by source repository URL (e.g. https://github.com/dotnet/runtime)")] string? sourceRepository = null,
         [Description("Filter by target repository URL (e.g. https://github.com/dotnet/dotnet)")] string? targetRepository = null,
@@ -48,7 +48,7 @@ public partial class MaestroMcpTools
         return Timestamp(noCache) + sb.ToString();
     }
     [McpServerTool(Name = "maestro_subscription", Title = "Get Subscription", ReadOnly = true, Idempotent = true)]
-    [Description("Get a specific Maestro subscription by its GUID ID, including health diagnostic comparing last applied build to latest available. For batch health checks across a repository, use maestro_subscription_health instead.")]
+    [Description("Get a specific Maestro subscription by ID with health diagnostic. For batch health checks, use maestro_subscription_health.")]
     public async Task<string> GetSubscription(
         [Description("The subscription GUID")] string subscriptionId,
         [Description("Bypass cache and fetch fresh data")] bool noCache = false,
@@ -97,7 +97,7 @@ public partial class MaestroMcpTools
         return Timestamp(noCache) + sb.ToString();
     }
     [McpServerTool(Name = "maestro_subscription_health", Title = "Subscription Health", ReadOnly = true, Idempotent = true)]
-    [Description("Check subscription health for a target repository. Optional staleOnly includes stale or errored subscriptions; channelFilter and sourceRepoFilter do case-insensitive substring matching after cached health checks; compact returns one line per subscription.")]
+    [Description("Check subscription health for a target repository. For a single subscription, use maestro_subscription.")]
     public async Task<string> GetSubscriptionHealth(
         [Description("Target repository URL (e.g. https://github.com/dotnet/dotnet)")] string targetRepository,
         [Description("Bypass cache and fetch fresh data")] bool noCache = false,
@@ -328,7 +328,7 @@ public partial class MaestroMcpTools
         };
     }
     [McpServerTool(Name = "maestro_trigger_subscription", Title = "Trigger Subscription", Idempotent = true)]
-    [Description("Trigger a Maestro subscription. Provide buildId directly, or provide sourceRepository and channelName to auto-resolve the latest build. Use force=true to force-trigger (overwrites existing PR branch) for stale backflow PR remediation.")]
+    [Description("Trigger a Maestro subscription to process a build. Supports auto-resolving the latest build or force-triggering.")]
     public async Task<string> TriggerSubscription(
         [Description("The subscription GUID to trigger")] string subscriptionId,
         [Description("BAR build ID. If omitted, the latest build is resolved from sourceRepository and channelName.")] int? buildId = null,
@@ -396,7 +396,7 @@ public partial class MaestroMcpTools
         }
     }
     [McpServerTool(Name = "maestro_subscription_history", Title = "Subscription History", ReadOnly = true, Idempotent = true)]
-    [Description("Get the update history for a specific Maestro subscription. Shows timestamped actions, success/failure status, and error messages for failed updates.")]
+    [Description("Get update history for a Maestro subscription.")]
     public async Task<string> GetSubscriptionHistory(
         [Description("The subscription GUID")] string subscriptionId,
         [Description("Bypass cache and fetch fresh data")] bool noCache = false,

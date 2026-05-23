@@ -81,7 +81,7 @@ public partial class MaestroMcpTools
         return Timestamp(noCache) + sb.ToString();
     }
     [McpServerTool(Name = "maestro_build_freshness", Title = "Build Freshness", ReadOnly = true, Idempotent = true)]
-    [Description("Check build freshness for a channel by resolving aka.ms redirect URLs and checking the Last-Modified header of the published build artifacts.")]
+    [Description("Check build freshness for a channel via aka.ms artifact age. Niche — only works for aka.ms channels.")]
     public async Task<string> GetBuildFreshness(
         [Description("Channel short name for aka.ms URL (e.g. '10.0.1xx', '9.0.1xx')")] string channel,
         [Description("Bypass cache and fetch fresh data")] bool noCache = false,
@@ -110,7 +110,7 @@ public partial class MaestroMcpTools
         return Timestamp(noCache) + sb.ToString();
     }
     [McpServerTool(Name = "maestro_build_graph", Title = "Build Graph", ReadOnly = true, Idempotent = true)]
-    [Description("Get the full dependency graph for a build. Returns all builds in the dependency tree with their relationships.")]
+    [Description("Get the full dependency graph for a build.")]
     public async Task<string> GetBuildGraph(
         [Description("The BAR build ID to get the dependency graph for")] int buildId,
         [Description("Bypass cache and fetch fresh data")] bool noCache = false,

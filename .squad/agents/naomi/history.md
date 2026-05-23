@@ -19,6 +19,11 @@
 
 ## Learnings
 
+### 2026-06-11: MCP tool-description economy
+
+- Tool descriptions are always-loaded routing context: lead with a verb, keep them to 1–2 sentences, and let parameter `[Description]` attributes carry formats, defaults, valid values, and filter behavior.
+- Adding filters tempts re-explaining them in the tool description; resist that growth vector by moving filter semantics to parameter descriptions and keeping only brief cross-routing hints on the tool.
+
 ### 2026-05-22: PR #24 review fixes — filter-miss UX and CLI validation
 
 - Empty-after-filter results should distinguish backend emptiness from filter misses; when unfiltered data exists but `staleOnly`/`channelFilter`/`sourceRepoFilter` remove everything, echo the applied filters in the response.

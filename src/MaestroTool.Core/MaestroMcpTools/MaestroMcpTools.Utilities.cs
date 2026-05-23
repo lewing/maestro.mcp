@@ -10,7 +10,7 @@ namespace MaestroTool.Core;
 public partial class MaestroMcpTools
 {
     [McpServerTool(Name = "maestro_clear_cache", Title = "Clear Cache", Destructive = true, Idempotent = true)]
-    [Description("Clear all cached Maestro data (shared across all mstro instances). Use after performing actions or when you need guaranteed fresh data from all tools.")]
+    [Description("Clear all cached Maestro data. Use when you need guaranteed fresh data from all tools.")]
     public string ClearCache()
     {
         _cache.Clear();
