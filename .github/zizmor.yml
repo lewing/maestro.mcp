@@ -1,0 +1,21 @@
+# zizmor configuration — https://docs.zizmor.sh/configuration/
+# Hardening policy for GitHub Actions, enforced in CI by .github/workflows/zizmor.yml
+
+rules:
+  # Require every `uses:` reference to be pinned to a full commit SHA.
+  # This is the primary defense against supply-chain attacks that hijack
+  # mutable tags/branches (e.g. the tj-actions style compromises).
+  unpinned-uses:
+    config:
+      policies:
+        "*": hash-pin
+
+  # The release/promotion workflows below run `git push` / create releases and
+  # therefore legitimately need the checkout's credentials to persist. This is
+  # an accepted, reviewed risk rather than an oversight.
+  artipacked:
+    ignore:
+      - squad-promote.yml # git push origin preview/main
+      - squad-release.yml # release step pushes tags / creates releases
+      - squad-insider-release.yml # insider release step pushes tags / creates releases
+
