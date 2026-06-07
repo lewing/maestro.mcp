@@ -1,0 +1,47 @@
+name: Action Pin Check
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+  push:
+    branches: [master, main]
+    paths:
+      - ".github/workflows/**"
+
+permissions:
+  contents: read
+
+jobs:
+  verify-pinned:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: Ensure all action references are pinned to a 40-char commit SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          fail=0
+          while IFS= read -r -d '' file; do
+            # Strip comments, then find `uses:` lines that reference a remote action.
+            while IFS= read -r line; do
+              ref="${line#*@}"          # everything after the first @
+              ref="${ref%% *}"          # drop trailing inline comment / whitespace
+              if [[ ! "$ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+                echo "::error file=$file::Unpinned action reference (must be a 40-char commit SHA): ${line## }"
+                fail=1
+              fi
+            done < <(grep -nE '^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*[^.][^ ]+@' "$file" \
+                       | sed 's/#.*$//' \
+                       | grep -vE 'uses:[[:space:]]*\./' || true)
+          done < <(find .github/workflows -type f \( -name '*.yml' -o -name '*.yaml' \) -print0)
+
+          if [[ "$fail" -ne 0 ]]; then
+            echo ""
+            echo "Pin every action to a full commit SHA, e.g.:"
+            echo "  uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3"
+            exit 1
+          fi
+          echo "All action references in .github/workflows are SHA-pinned. ✅"
