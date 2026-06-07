@@ -5,14 +5,16 @@ on:
   push:
     branches: [insider]
 
-permissions:
-  contents: write
+# Deny all by default; each job opts into what it needs.
+permissions: {}
 
 jobs:
   release:
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-depth: 0
 
