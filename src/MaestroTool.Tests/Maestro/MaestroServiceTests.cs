@@ -2856,4 +2856,42 @@ public class MaestroServiceTests : IDisposable
         Assert.NotNull(result.VmrConsumedCommit);
         Assert.Equal("abc1234567890", result.VmrConsumedCommit);
     }
+
+    [Fact]
+    public async Task GetSubscriptionOutcomesAsync_WithSubscriptionId_ReturnsOutcomes()
+    {
+        // Arrange
+        var subId = Guid.NewGuid();
+        var outcome = new SubscriptionTriggerOutcome(
+            operationId: "op123",
+            subscriptionId: subId,
+            buildId: 100,
+            date: DateTimeOffset.UtcNow,
+            message: "Updated successfully",
+            type: OutcomeType.Updated,
+            sourceRepository: "https://github.com/dotnet/runtime",
+            targetRepository: "https://github.com/dotnet/dotnet",
+            targetBranch: "main",
+            prUrl: "https://github.com/dotnet/dotnet/pull/12345");
+        
+        _client.ListSubscriptionOutcomesAsync(
+            Arg.Any<int>(),
+            Arg.Any<DateTimeOffset?>(),
+            Arg.Any<DateTimeOffset?>(),
+            Arg.Any<int?>(),
+            Arg.Any<string?>(),
+            Arg.Any<string?>(),
+            Arg.Is<string?>(s => s == subId.ToString()),
+            Arg.Any<string?>(),
+            Arg.Any<CancellationToken>())
+            .Returns(new List<SubscriptionTriggerOutcome> { outcome });
+
+        // Act
+        var result = await _service.GetSubscriptionOutcomesAsync(subscriptionId: subId, count: 10);
+
+        // Assert
+        Assert.Single(result);
+        Assert.Equal("op123", result[0].OperationId);
+        Assert.Equal(OutcomeType.Updated, result[0].Type);
+    }
 }

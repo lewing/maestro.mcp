@@ -530,6 +530,34 @@ public class MaestroService
     }
 
     /// <summary>
+    /// Get subscription trigger outcomes.
+    /// </summary>
+    public async Task<List<SubscriptionTriggerOutcome>> GetSubscriptionOutcomesAsync(
+        Guid? subscriptionId = null,
+        int? buildId = null,
+        DateTimeOffset? after = null,
+        DateTimeOffset? before = null,
+        string? outcomeType = null,
+        int? count = null,
+        bool noCache = false,
+        CancellationToken cancellationToken = default)
+    {
+        var limit = count ?? 20;
+        var key = $"sub-outcomes:{subscriptionId}:{buildId}:{after}:{before}:{outcomeType}:{limit}";
+        if (noCache) _cache.Invalidate(key);
+        return await _cache.GetOrAddAsync(key,
+            () => _client.ListSubscriptionOutcomesAsync(
+                limit: limit,
+                after: after,
+                before: before,
+                buildId: buildId,
+                subscriptionId: subscriptionId?.ToString(),
+                subscriptionOutcomeType: outcomeType,
+                cancellationToken: cancellationToken),
+            ShortTtl);
+    }
+
+    /// <summary>
     /// Cross-validate a stale subscription against GitHub ground truth.
     /// Checks commit reachability and searches for merged codeflow PRs.
     /// </summary>
