@@ -189,10 +189,32 @@ public class MaestroService
             var buildsBehind = 0;
             int? commitsBehind = null;
             IReadOnlyList<CommitInfo>? recentCommits = null;
+            string? latestOutcomeType = null;
+            string? latestOutcomeMessage = null;
 
             if (isStale && latestBuild != null && lastApplied != null)
             {
                 buildsBehind = latestBuild.Id - lastApplied.Id; // Approximate
+
+                // Fetch latest outcome for stale subscriptions
+                try
+                {
+                    var outcomes = await _client.ListSubscriptionOutcomesAsync(
+                        limit: 1,
+                        subscriptionId: sub.Id.ToString(),
+                        cancellationToken: cancellationToken);
+                    var latestOutcome = outcomes.FirstOrDefault();
+                    if (latestOutcome != null)
+                    {
+                        latestOutcomeType = latestOutcome.Type.ToString();
+                        latestOutcomeMessage = latestOutcome.Message;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Endpoint may 404 on subs with zero outcomes; not an error
+                    Console.Error.WriteLine($"[maestro-mcp] Could not fetch latest outcome for {sub.Id}: {ex.Message}");
+                }
 
                 // For GitHub-hosted source repos, use GitHub compare API for accurate commit distance
                 if (_gitHubClient != null && IsGitHubRepository(sub.SourceRepository))
@@ -331,7 +353,9 @@ public class MaestroService
                 Oscillation: oscillation,
                 TrackedPr: trackedPrDiagnosis,
                 VmrConsumedCommit: vmrConsumedCommit,
-                VmrConsumedDate: vmrConsumedDate
+                VmrConsumedDate: vmrConsumedDate,
+                LatestOutcomeType: latestOutcomeType,
+                LatestOutcomeMessage: latestOutcomeMessage
             );
         }
         catch (Exception ex)
@@ -348,7 +372,9 @@ public class MaestroService
                 LastAppliedDate: sub.LastAppliedBuild?.DateProduced,
                 LatestBuildId: null,
                 LatestBuildDate: null,
-                Error: ex.Message
+                Error: ex.Message,
+                LatestOutcomeType: null,
+                LatestOutcomeMessage: null
             );
         }
         finally
@@ -925,7 +951,9 @@ public record SubscriptionHealthResult(
     OscillationResult? Oscillation = null,
     TrackedPrDiagnosis? TrackedPr = null,
     string? VmrConsumedCommit = null,
-    DateTimeOffset? VmrConsumedDate = null
+    DateTimeOffset? VmrConsumedDate = null,
+    string? LatestOutcomeType = null,
+    string? LatestOutcomeMessage = null
 );
 
 public record OscillationResult(
