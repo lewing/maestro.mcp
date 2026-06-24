@@ -8,6 +8,16 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.8" />
+    <!--
+      Transitive pins for CVE-2025-6965 / GHSA-2m69-gcr7-jv3q (high).
+      Microsoft.Data.Sqlite 10.0.8 still pulls SQLitePCLRaw.lib.e_sqlite3 2.1.x,
+      which has no backported fix; the patch shipped only in SQLitePCLRaw 3.x.
+      TODO: remove these pins once Microsoft.Data.Sqlite ships with SQLitePCLRaw 3.x natively.
+    -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
+    <PackageReference Include="SQLitePCLRaw.core" Version="3.0.3" />
+    <PackageReference Include="SQLitePCLRaw.provider.e_sqlite3" Version="3.0.3" />
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.50.3" />
     <PackageReference Include="Microsoft.DotNet.ProductConstructionService.Client" Version="1.1.0-beta.26271.2" />
     <PackageReference Include="ModelContextProtocol" Version="1.3.0" />
   </ItemGroup>
