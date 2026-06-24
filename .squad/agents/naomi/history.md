@@ -277,3 +277,45 @@
 **Incident:** Shared repository environment caused git branch contention during concurrent execution with alex-1 and amos. Mitigation: ran entire workflow (checkout → edits → build → test → commit) atomically within single bash session.
 
 **Team recommendation:** Future parallel fan-outs use SQUAD_WORKTREES=1 to isolate agent worktrees.
+
+## 2026-06-24: PR feat/subscription-outcomes — SubscriptionTriggerOutcomes API integration
+
+**Branch:** `feat/subscription-outcomes`  
+**Commits:** `3095e72`, `be26c7a`, `b3fe77b`  
+**Date:** 2026-06-24
+
+**Shipped:**
+- **Step A:** Bumped PCS client `1.1.0-beta.26271.2` → `1.1.0-beta.26324.1` (adds `ISubscriptionTriggerOutcomes` API)
+  - Also bumped `Microsoft.Extensions.DependencyInjection` `10.0.8` → `10.0.9` (transitive dependency from PCS)
+  - Build: 0 warnings, 0 errors; Tests: 208/208 passed ✅
+- **Step B:** Added `maestro_subscription_outcomes` MCP tool
+  - Exposed PCS `ISubscriptionTriggerOutcomes.ListSubscriptionOutcomesAsync` via `IMaestroApiClient`
+  - Added `MaestroService.GetSubscriptionOutcomesAsync` with ShortTtl caching
+  - MCP tool filters: `subscriptionId`, `buildId`, `outcomeType`, `after`/`before` dates, `count` (default 20, max 100)
+  - Markdown output with emoji indicators: ✅ Updated, ❌ Failure, 🔀 HasConflict, ⚠️ UserError, etc.
+  - Added unit test; Tests: 209/209 passed ✅
+- **Step C:** Integrated latest outcome into `maestro_subscription_health`
+  - Added `LatestOutcomeType` and `LatestOutcomeMessage` fields to `SubscriptionHealthResult`
+  - For stale subscriptions, fetch latest outcome (limit: 1) from PCS outcomes API
+  - Surface in formatted output with emoji + type + message
+  - Gracefully handle 404 for subs with zero outcomes (non-error stderr log)
+  - Added TODO comment near oscillation detection for future replacement consideration
+  - Existing heuristics (oscillation, trackedPr, validation) preserved
+
+**PCS API gotchas discovered:**
+- `limit` parameter is **required and positional** (first parameter), not optional
+- `subscriptionId` is **`string`**, not `Guid` — must call `.ToString()` on Guid
+- `subscriptionOutcomeType` is **`string`**, not `OutcomeType` enum — pass enum name as string
+- Parameter order is alphabetical-ish after `limit`; use named arguments for safety
+- `LatestOutcome` property is **NOT on `Subscription`** — it's on `CodeflowSubscriptionStatus` / `CodeflowStatus` (not used in this PR)
+- Property accessor: `_api.SubscriptionTriggerOutcomes.ListSubscriptionOutcomesAsync(...)` (confirmed via `strings | grep get_SubscriptionTriggerOutcomes`)
+
+**Patterns:**
+- **Enum-to-emoji surfacing in MCP markdown:** Used pattern matching on enum `.ToString()` to map outcome types to emoji indicators, making categorized statuses scannable in agent output. Reusable for other status/outcome enumerations.
+- **Graceful API 404 handling:** Wrapped outcome fetch in try/catch with stderr log; 404 is expected for subscriptions with no trigger history. Avoids polluting health results with non-critical errors.
+
+**Verification:**
+- Build: 0 warnings, 0 errors (all 3 commits)
+- Tests: 209/209 passed (1 new test for GetSubscriptionOutcomesAsync)
+- Branch pushed to origin: `feat/subscription-outcomes`
+

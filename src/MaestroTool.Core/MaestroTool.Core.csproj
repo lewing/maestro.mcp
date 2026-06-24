@@ -19,7 +19,7 @@
     <PackageReference Include="SQLitePCLRaw.provider.e_sqlite3" Version="3.0.3" />
     <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.50.3" />
     <PackageReference Include="Microsoft.DotNet.ProductConstructionService.Client" Version="1.1.0-beta.26324.1" />
-    <PackageReference Include="ModelContextProtocol" Version="1.3.0" />
+    <PackageReference Include="ModelContextProtocol" Version="1.4.0" />
   </ItemGroup>
 
   <ItemGroup>
