@@ -1,4 +1,5 @@
 using System.Net;
+using System.Reflection;
 using System.Text;
 using MaestroTool.Core;
 using Xunit;
@@ -7,6 +8,44 @@ namespace MaestroTool.Tests;
 
 public class HttpClientConfigurationTests
 {
+    [Fact]
+    public void MaestroToolUserAgent_InitializeFromAssembly_UsesInformationalVersion()
+    {
+        // Arrange
+        var assembly = typeof(MaestroToolUserAgent).Assembly;
+        
+        // Act
+        MaestroToolUserAgent.Initialize(assembly);
+        var productIdentifier = MaestroToolUserAgent.ProductIdentifier;
+
+        // Assert
+        // Should be "maestro.mcp/X.Y.Z" (3-part semver from InformationalVersion),
+        // not "maestro.mcp/X.Y.Z.0" (4-part AssemblyVersion)
+        Assert.StartsWith("maestro.mcp/", productIdentifier);
+        // Should not have a 4th zero component like "1.0.0.0"
+        var version = productIdentifier.Substring("maestro.mcp/".Length);
+        var parts = version.Split('.');
+        // Either 3 parts (X.Y.Z) or more parts if prerelease/metadata, but never ending in .0
+        Assert.True(parts.Length >= 3, $"Expected at least 3 version parts, got: {version}");
+        // If it's exactly 4 parts and 4th is "0", that's the AssemblyVersion pattern we want to avoid
+        if (parts.Length == 4 && parts[3] == "0")
+        {
+            Assert.Fail($"Version appears to be 4-part AssemblyVersion ({version}); should use 3-part InformationalVersion");
+        }
+    }
+    
+    [Fact]
+    public void MaestroToolUserAgent_InitializeFromString_StripsGitShaSuffix()
+    {
+        // Arrange & Act
+        MaestroToolUserAgent.Initialize("1.2.3+abc123def");
+        var productIdentifier = MaestroToolUserAgent.ProductIdentifier;
+
+        // Assert
+        Assert.Equal("maestro.mcp/1.2.3", productIdentifier);
+        Assert.DoesNotContain("+", productIdentifier);
+    }
+
     [Fact]
     public void MaestroToolUserAgent_IncludesToolNameAndVersion()
     {

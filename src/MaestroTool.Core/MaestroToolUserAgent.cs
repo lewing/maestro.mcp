@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using System.Reflection;
 
 namespace MaestroTool.Core;
 
@@ -12,7 +13,21 @@ public static class MaestroToolUserAgent
 
     public static void Initialize(string version)
     {
+        // Strip +gitsha suffix from SourceLink informational version
+        var plusIndex = version.IndexOf('+');
+        if (plusIndex > 0)
+            version = version[..plusIndex];
+        
         ProductIdentifier = $"{ToolName}/{version}";
+    }
+    
+    public static void Initialize(Assembly assembly)
+    {
+        var version =
+            assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+            ?? assembly.GetName().Version?.ToString()
+            ?? "unknown";
+        Initialize(version);
     }
 
     public static void Apply(HttpClient client)

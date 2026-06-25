@@ -164,36 +164,50 @@ public class MaestroService
         // Filter out subscriptions with no channel
         var validSubscriptions = subscriptions.Where(s => s.Channel?.Id != null).ToList();
         
-        progress?.Report(new ProgressUpdate(0, validSubscriptions.Count, $"Checking {validSubscriptions.Count} subscription(s)..."));
+        var total = validSubscriptions.Count;
+        var step = ProgressReporter.ItemStep(total);  // ~10 updates total
+        var completed = 0;
+        
+        progress?.Report(new ProgressUpdate(0, total, $"Checking {total} subscription(s)..."));
 
         // Parallelize subscription health checks with concurrency limit
-        var results = new SubscriptionHealthResult[validSubscriptions.Count];
-        var tasks = validSubscriptions.Select(async (sub, idx) =>
+        var tasks = validSubscriptions.Select(async sub =>
         {
             var result = await CheckSubscriptionHealthAsync(sub, noCache, includeCommitDetails, validate, cancellationToken);
-            results[idx] = result;
             
-            // Report progress after each subscription completes
-            var completed = idx + 1;
-            progress?.Report(new ProgressUpdate(
-                completed,
-                validSubscriptions.Count,
-                $"Checked {completed} of {validSubscriptions.Count}: {FormatRepoName(sub.SourceRepository)} → {FormatRepoName(sub.TargetRepository)}"));
+            // Thread-safe progress tracking - emit at step intervals and final completion
+            var done = System.Threading.Interlocked.Increment(ref completed);
+            if (done == total || done % step == 0)
+            {
+                progress?.Report(new ProgressUpdate(done, total, $"Checked {done} of {total} subscriptions"));
+            }
             
             return result;
         });
         
-        await Task.WhenAll(tasks);
+        var results = await Task.WhenAll(tasks);
 
         return results.ToList();
     }
     
-    private static string FormatRepoName(string repoUrl)
+    private static string FormatRepoName(string? repository)
     {
-        // Extract just the org/repo from the URL for compact progress messages
-        var uri = new Uri(repoUrl);
-        var segments = uri.AbsolutePath.Trim('/').Split('/');
-        return segments.Length >= 2 ? $"{segments[^2]}/{segments[^1]}" : repoUrl;
+        if (string.IsNullOrEmpty(repository)) return "<unknown>";
+        
+        try
+        {
+            if (Uri.TryCreate(repository, UriKind.Absolute, out var uri))
+            {
+                var segments = uri.AbsolutePath.Trim('/').Split('/');
+                return segments.Length >= 2 ? $"{segments[^2]}/{segments[^1]}" : uri.AbsolutePath.Trim('/');
+            }
+        }
+        catch
+        {
+            // Best-effort formatting; progress is cosmetic and must never fail the health check
+        }
+        
+        return repository;
     }
 
     private async Task<SubscriptionHealthResult> CheckSubscriptionHealthAsync(

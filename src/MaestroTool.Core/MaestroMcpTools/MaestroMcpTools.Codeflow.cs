@@ -173,15 +173,16 @@ public partial class MaestroMcpTools
         IProgress<ModelContextProtocol.ProgressNotificationValue>? progress = null,
         CancellationToken cancellationToken = default)
     {
+        // Validate before emitting any progress
+        if (days is < 1 or > 30)
+            return $"Invalid days value '{days}'. Expected a value between 1 and 30.";
+        
         progress?.Report(new ModelContextProtocol.ProgressNotificationValue
         {
             Progress = 0,
             Total = 2,
             Message = $"Computing flow graph (days={days}, includeArcade={includeArcade}, includeBuildTimes={includeBuildTimes})..."
         });
-        
-        if (days is < 1 or > 30)
-            return $"Invalid days value '{days}'. Expected a value between 1 and 30.";
 
         FlowGraph graph;
         try

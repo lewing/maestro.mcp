@@ -2955,4 +2955,76 @@ public class MaestroServiceTests : IDisposable
         Assert.Single(result);
         Assert.Equal(OutcomeType.Updated, result[0].Type);
     }
+    
+    // --- Progress reporting ---
+    
+    [Fact]
+    public async Task GetSubscriptionHealthAsync_WithProgress_ReportsMonotonicallyIncreasingProgress()
+    {
+        // Arrange - create multiple subscriptions to ensure parallel completion
+        var channel = CreateChannel();
+        var subscriptions = Enumerable.Range(1, 10)
+            .Select(i => CreateSubscription(source: $"https://github.com/dotnet/repo{i}", channel: channel))
+            .ToList();
+        
+        _client.ListSubscriptionsAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<int?>(), Arg.Any<bool?>(), Arg.Any<CancellationToken>())
+            .Returns(subscriptions);
+        
+        // Return empty outcomes for all subscriptions
+        _client.ListSubscriptionOutcomesAsync(
+            Arg.Any<int>(),
+            Arg.Any<DateTimeOffset?>(),
+            Arg.Any<DateTimeOffset?>(),
+            Arg.Any<int?>(),
+            Arg.Any<string?>(),
+            Arg.Any<string?>(),
+            Arg.Any<string?>(),
+            Arg.Any<string?>(),
+            Arg.Any<CancellationToken>())
+            .Returns(new List<SubscriptionTriggerOutcome>());
+        
+        var progressUpdates = new List<ProgressUpdate>();
+        var progress = new Progress<ProgressUpdate>(u => progressUpdates.Add(u));
+        
+        // Act
+        await _service.GetSubscriptionHealthAsync(
+            "https://github.com/dotnet/runtime",
+            validate: true,
+            progress: progress);
+        
+        // Assert - progress should be monotonically increasing (never decrease)
+        for (int i = 1; i < progressUpdates.Count; i++)
+        {
+            Assert.True(progressUpdates[i].Current >= progressUpdates[i - 1].Current,
+                $"Progress decreased from {progressUpdates[i - 1].Current} to {progressUpdates[i].Current}");
+        }
+        
+        // Final progress should match total
+        if (progressUpdates.Any())
+        {
+            var lastUpdate = progressUpdates.Last();
+            Assert.Equal(lastUpdate.Total, lastUpdate.Current);
+        }
+    }
+    
+    [Theory]
+    [InlineData("https://github.com/dotnet/runtime", "dotnet/runtime")]
+    [InlineData("dotnet/runtime", "dotnet/runtime")]  // relative path should not throw
+    [InlineData("", "<unknown>")]
+    [InlineData(null, "<unknown>")]
+    [InlineData("not-a-uri", "not-a-uri")]  // malformed URI should not throw
+    [InlineData("http://github.com/single", "single")]  // single segment
+    public void FormatRepoName_HandlesVariousInputs(string? input, string expected)
+    {
+        // Use reflection to access private method
+        var method = typeof(MaestroService).GetMethod("FormatRepoName",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+        
+        // Act
+        var result = method.Invoke(null, new object?[] { input }) as string;
+        
+        // Assert
+        Assert.Equal(expected, result);
+    }
 }

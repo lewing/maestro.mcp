@@ -10,7 +10,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
 
-MaestroToolUserAgent.Initialize(typeof(Commands).Assembly.GetName().Version?.ToString() ?? "0.0.0");
+MaestroToolUserAgent.Initialize(typeof(Commands).Assembly);
 
 // DI setup (shared by both CLI and MCP)
 var services = new ServiceCollection();

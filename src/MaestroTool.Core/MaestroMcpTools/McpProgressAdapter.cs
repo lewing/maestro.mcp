@@ -1,4 +1,3 @@
-using MaestroTool.Core;
 using ModelContextProtocol;
 
 namespace MaestroTool.Core;

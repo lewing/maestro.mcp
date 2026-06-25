@@ -2,7 +2,7 @@ using System.Reflection;
 using MaestroTool.Core;
 using ModelContextProtocol.Server;
 
-MaestroToolUserAgent.Initialize(Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.0.0");
+MaestroToolUserAgent.Initialize(Assembly.GetExecutingAssembly());
 
 var builder = WebApplication.CreateBuilder(args);
 
