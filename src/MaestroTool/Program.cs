@@ -96,9 +96,22 @@ public class Commands
             .AddMcpServer(options =>
             {
                 options.ServerInfo = new() { Name = "maestro", Version = "0.15.0" };
+                
+                // Add filters for better parameter validation and error messages
+                options.AddBindingErrorFilter()
+                       .AddUnknownParameterFilter(typeof(MaestroMcpTools).Assembly);
             })
             .WithStdioServerTransport()
-            .WithToolsFromAssembly(typeof(MaestroMcpTools).Assembly);
+            .WithToolsFromAssembly(typeof(MaestroMcpTools).Assembly, new System.Text.Json.JsonSerializerOptions
+            {
+                // Reject unknown parameters at binding time so callers get a structured error
+                // instead of silent data loss. The AddBindingErrorFilter above catches the resulting
+                // ArgumentException(paramName:"arguments") and wraps it as McpException.
+                UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow,
+                // Required: SDK calls MakeReadOnly() on options before schema gen; without a
+                // TypeInfoResolver set, CreateJsonSchemaCore tries to assign one post-lock → InvalidOperationException.
+                TypeInfoResolver = new System.Text.Json.Serialization.Metadata.DefaultJsonTypeInfoResolver(),
+            });
 
         await builder.Build().RunAsync();
     }
