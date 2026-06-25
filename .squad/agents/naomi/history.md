@@ -380,3 +380,53 @@
 - `git diff origin/master...HEAD -- global.json`: empty (confirmed no SDK workaround leaked)
 
 **Pattern Learned**: Always check `git diff origin/master...HEAD -- <workaround-files>` before pushing to catch accidental commits of transient changes.
+
+### 2026-06-24: MCP UX hardening patterns from helix.mcp
+
+Adopted three UX hardening patterns from helix.mcp into maestro.mcp as a single coherent PR on branch `feat/mcp-ux-hardening`.
+
+**User-Agent identifier (helix.mcp PR #73)**
+- Created `MaestroToolUserAgent.cs` with version-aware UA string (`maestro.mcp/{version}`) and custom `X-Maestro-Mcp-Tool` header
+- Applied to AzDoApiClient and GitHubApiClient static HttpClients via `MaestroToolUserAgent.Apply(client)`
+- Initialized version from assembly metadata in both `MaestroTool.Mcp/Program.cs` and `MaestroTool/Program.cs` entry points
+- PCS client: skipped (no easy policy hook like helix's HelixApiOptions.AddPolicy)
+- Tests: HttpClientConfigurationTests covering UA application and deduplication
+
+**Strict unknown-parameter rejection + did-you-mean (helix.mcp PRs #83 + #84)**
+- Stage A: `JsonUnmappedMemberHandling.Disallow` passed to `WithToolsFromAssembly` via JsonSerializerOptions
+  - Rejects unknown params at binding time with ArgumentException(paramName:"arguments")
+- Stage B: `McpServerOptionsExtensions.AddUnknownParameterFilter`
+  - Pre-SDK dispatch: inspects incoming arguments against tool schema (built once at startup via McpServerTool.Create + InputSchema introspection)
+  - Suggests closest match (Levenshtein threshold: 6) with "Did you mean: X?" message
+  - Full allowed-params list always shown for discoverability
+- Filter pipeline: AddBindingErrorFilter → AddUnknownParameterFilter → SDK dispatch
+- Wired in both Program.cs files, tests cover Levenshtein distance, schema extraction, and end-to-end filter behavior
+
+**Progress notifications on slow tools (helix.mcp PR #48)**
+- Created `ProgressUpdate.cs`: transport-agnostic progress record (Current, Total, Message)
+- Created `ProgressReporter.cs`: ItemStep helper for coarse-grained updates (~10 per operation)
+- Created `McpProgressAdapter.cs`: adapts IProgress<ProgressUpdate> → IProgress<ProgressNotificationValue>
+- Instrumented `maestro_subscription_health` with per-subscription progress during parallel fan-out ("Checked N of M: source → target")
+- Instrumented `maestro_flow_graph` with start + completion progress ("Computing flow graph..." → "Resolving X nodes/edges...")
+- MCP SDK auto-injects IProgress<ProgressNotificationValue> when client supplies progress token; adapter translates at tool boundary
+- Service layer remains MCP-agnostic: `GetSubscriptionHealthAsync` accepts `IProgress<ProgressUpdate>?` parameter
+
+**Key learnings:**
+- UA setup: Apply after HttpClient creation but before auth cascade; ensure idempotency for multiple Apply() calls
+- MCP CallToolFilter pattern: Build filter chain via `options.Filters.Request.CallToolFilters.Add(next => async (request, ct) => ...)`
+- IProgress<T> auto-injection: MCP SDK automatically injects IProgress<ProgressNotificationValue> when method signature includes it
+  - Hidden from JSON schema (not a user-facing parameter)
+  - Adapter at tool boundary keeps service layer transport-agnostic
+- UnmappedMemberHandling.Disallow: Must be passed to WithToolsFromAssembly, not set on McpServerOptions.JsonSerializerOptions (property doesn't exist)
+- TypeInfoResolver requirement: Must set `new DefaultJsonTypeInfoResolver()` when using custom JsonSerializerOptions to avoid InvalidOperationException from SDK's MakeReadOnly() call
+
+**Commits:**
+- eb2a6fe: Add MCP User-Agent identifier for maestro.mcp
+- 481cb2e: Add strict unknown-parameter rejection with did-you-mean hints
+- b539076: Add progress notifications for slow MCP tools
+
+**Tests:** 231/231 passed (up from 215 baseline)
+
+**Verification:**
+- Build: 0 warnings, 0 errors
+- global.json: unchanged before all commits and before final push
