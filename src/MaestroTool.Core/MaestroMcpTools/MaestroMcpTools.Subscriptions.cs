@@ -179,8 +179,9 @@ public partial class MaestroMcpTools
                 if (!string.IsNullOrEmpty(r.LatestOutcomeType))
                 {
                     var emoji = GetOutcomeEmoji(r.LatestOutcomeType);
-                    var msg = string.IsNullOrWhiteSpace(r.LatestOutcomeMessage) ? "" : $" — {r.LatestOutcomeMessage}";
-                    status += $"\n  Latest outcome: {emoji} {r.LatestOutcomeType}{msg}";
+                    var msg = NormalizeOutcomeMessage(r.LatestOutcomeMessage);
+                    var msgSuffix = !string.IsNullOrWhiteSpace(msg) ? $" — {msg}" : "";
+                    status += $"\n  Latest outcome: {emoji} {r.LatestOutcomeType}{msgSuffix}";
                 }
             }
             else
@@ -488,9 +489,12 @@ public partial class MaestroMcpTools
 
         if (!string.IsNullOrEmpty(outcomeType))
         {
-            var validTypes = new[] { "Updated", "NoUpdate", "NotUpdatable", "Failure", "UserError", "HasConflict", "Rescheduled" };
-            if (!validTypes.Contains(outcomeType, StringComparer.OrdinalIgnoreCase))
-                return $"Invalid outcome type '{outcomeType}'. Valid types: {string.Join(", ", validTypes)}.";
+            var normalized = NormalizeOutcomeType(outcomeType);
+            if (normalized == null)
+            {
+                return $"Invalid outcome type '{outcomeType}'. Valid types: {string.Join(", ", CanonicalOutcomeTypes)}.";
+            }
+            outcomeType = normalized;
         }
 
         if (count.HasValue && (count.Value < 1 || count.Value > 100))
@@ -518,19 +522,36 @@ public partial class MaestroMcpTools
         foreach (var outcome in outcomes)
         {
             var emoji = GetOutcomeEmoji(outcome.Type.ToString());
-            var message = outcome.Message ?? "";
-            // Collapse newlines and truncate to 80 chars
-            message = message.Replace("\r\n", " ").Replace("\n", " ").Replace("\r", " ");
-            if (message.Length > 80)
-                message = message.Substring(0, 77) + "…";
-            
+            var message = NormalizeOutcomeMessage(outcome.Message);
             var prUrl = !string.IsNullOrWhiteSpace(outcome.PrUrl) ? outcome.PrUrl : "—";
             var subIdShort = outcome.SubscriptionId.ToString()[..8];
+            var dateUtc = outcome.Date.ToUniversalTime();
             
-            sb.AppendLine($"{outcome.Date:yyyy-MM-dd HH:mm}Z {emoji}{outcome.Type,-14} #{outcome.BuildId,-6} sub:{subIdShort} {prUrl,-45} {message}");
+            sb.AppendLine($"{dateUtc:yyyy-MM-dd HH:mm}Z {emoji}{outcome.Type,-14} #{outcome.BuildId,-6} sub:{subIdShort} {prUrl,-45} {message}");
         }
 
         return Timestamp(noCache) + sb.ToString();
+    }
+
+    private static readonly string[] CanonicalOutcomeTypes =
+        { "Updated", "NoUpdate", "NotUpdatable", "Failure", "UserError", "HasConflict", "Rescheduled" };
+
+    private static string? NormalizeOutcomeType(string? input)
+    {
+        if (string.IsNullOrWhiteSpace(input)) return null;
+        var trimmed = input.Trim();
+        return CanonicalOutcomeTypes.FirstOrDefault(
+            c => string.Equals(c, trimmed, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string NormalizeOutcomeMessage(string? message)
+    {
+        if (string.IsNullOrWhiteSpace(message)) return "";
+        // Collapse newlines and truncate to 80 chars
+        var normalized = message.Replace("\r\n", " ").Replace("\n", " ").Replace("\r", " ").Trim();
+        if (normalized.Length > 80)
+            normalized = normalized.Substring(0, 77) + "…";
+        return normalized;
     }
 
     private static string GetOutcomeEmoji(string outcomeType) => outcomeType switch

@@ -2908,4 +2908,51 @@ public class MaestroServiceTests : IDisposable
         Assert.Equal("op123", result[0].OperationId);
         Assert.Equal(OutcomeType.Updated, result[0].Type);
     }
+
+    [Fact]
+    public async Task GetSubscriptionOutcomesAsync_WithOutcomeType_PassesThrough()
+    {
+        // Arrange - test that service passes outcomeType through to API
+        var outcomes = new List<SubscriptionTriggerOutcome>
+        {
+            new(
+                operationId: "op1",
+                subscriptionId: Guid.NewGuid(),
+                buildId: 123,
+                date: DateTimeOffset.UtcNow,
+                message: "Updated",
+                type: OutcomeType.Updated,
+                sourceRepository: "https://github.com/dotnet/runtime",
+                targetRepository: "https://github.com/dotnet/dotnet",
+                targetBranch: "main",
+                prUrl: null)
+        };
+
+        _client.ListSubscriptionOutcomesAsync(
+            Arg.Is<int>(l => l == 20),
+            Arg.Any<DateTimeOffset?>(),
+            Arg.Any<DateTimeOffset?>(),
+            Arg.Any<int?>(),
+            Arg.Any<string?>(),
+            Arg.Any<string?>(),
+            Arg.Any<string?>(),
+            Arg.Is<string?>(s => s == "Updated"),
+            Arg.Any<CancellationToken>())
+            .Returns(outcomes);
+
+        // Act - service passes outcomeType as-is (normalization happens in MCP tool layer)
+        var result = await _service.GetSubscriptionOutcomesAsync(
+            subscriptionId: null,
+            buildId: null,
+            after: null,
+            before: null,
+            outcomeType: "Updated",  // Already normalized
+            count: null,
+            noCache: false,
+            cancellationToken: CancellationToken.None);
+
+        // Assert
+        Assert.Single(result);
+        Assert.Equal(OutcomeType.Updated, result[0].Type);
+    }
 }
