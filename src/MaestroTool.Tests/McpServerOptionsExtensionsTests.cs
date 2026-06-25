@@ -163,7 +163,7 @@ public class McpServerOptionsExtensionsTests
     }
 
     [Fact]
-    public async Task AddUnknownParameterFilter_NoUnknownParams_DoesNotThrow()
+    public void AddUnknownParameterFilter_NoUnknownParams_DoesNotThrow()
     {
         // This test just verifies that the filter doesn't reject valid parameters
         // We don't need to actually invoke the tool - just verify the filter passes it through

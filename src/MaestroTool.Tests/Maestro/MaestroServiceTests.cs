@@ -2983,8 +2983,9 @@ public class MaestroServiceTests : IDisposable
             Arg.Any<CancellationToken>())
             .Returns(new List<SubscriptionTriggerOutcome>());
         
-        var progressUpdates = new List<ProgressUpdate>();
-        var progress = new Progress<ProgressUpdate>(u => progressUpdates.Add(u));
+        // Use synchronous IProgress for deterministic test - Progress<T> delivers callbacks
+        // asynchronously via SynchronizationContext, causing races with List<T>.Add.
+        var progress = new SyncProgress<ProgressUpdate>();
         
         // Act
         await _service.GetSubscriptionHealthAsync(
@@ -2993,38 +2994,32 @@ public class MaestroServiceTests : IDisposable
             progress: progress);
         
         // Assert - progress should be monotonically increasing (never decrease)
-        for (int i = 1; i < progressUpdates.Count; i++)
+        var updates = progress.Reports;
+        for (int i = 1; i < updates.Count; i++)
         {
-            Assert.True(progressUpdates[i].Current >= progressUpdates[i - 1].Current,
-                $"Progress decreased from {progressUpdates[i - 1].Current} to {progressUpdates[i].Current}");
+            Assert.True(updates[i].Current >= updates[i - 1].Current,
+                $"Progress decreased from {updates[i - 1].Current} to {updates[i].Current}");
         }
         
         // Final progress should match total
-        if (progressUpdates.Any())
+        if (updates.Any())
         {
-            var lastUpdate = progressUpdates.Last();
+            var lastUpdate = updates.Last();
             Assert.Equal(lastUpdate.Total, lastUpdate.Current);
         }
     }
     
-    [Theory]
-    [InlineData("https://github.com/dotnet/runtime", "dotnet/runtime")]
-    [InlineData("dotnet/runtime", "dotnet/runtime")]  // relative path should not throw
-    [InlineData("", "<unknown>")]
-    [InlineData(null, "<unknown>")]
-    [InlineData("not-a-uri", "not-a-uri")]  // malformed URI should not throw
-    [InlineData("http://github.com/single", "single")]  // single segment
-    public void FormatRepoName_HandlesVariousInputs(string? input, string expected)
+    /// <summary>
+    /// Synchronous IProgress for tests - avoids race conditions from async Progress<T> delivery.
+    /// </summary>
+    private sealed class SyncProgress<T> : IProgress<T>
     {
-        // Use reflection to access private method
-        var method = typeof(MaestroService).GetMethod("FormatRepoName",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-        Assert.NotNull(method);
+        private readonly object _lock = new();
+        public List<T> Reports { get; } = new();
         
-        // Act
-        var result = method.Invoke(null, new object?[] { input }) as string;
-        
-        // Assert
-        Assert.Equal(expected, result);
+        public void Report(T value)
+        {
+            lock (_lock) { Reports.Add(value); }
+        }
     }
 }

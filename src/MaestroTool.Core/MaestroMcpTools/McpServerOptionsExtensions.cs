@@ -2,7 +2,6 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
@@ -250,7 +249,4 @@ public static class McpServerOptionsExtensions
 
         return d[m, n];
     }
-
-    private static ILogger? CreateLogger(IServiceProvider? services)
-        => services?.GetService<ILoggerFactory>()?.CreateLogger(typeof(McpServerOptionsExtensions));
 }

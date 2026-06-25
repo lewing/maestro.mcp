@@ -1,6 +1,3 @@
-using System.Net;
-using System.Reflection;
-using System.Text;
 using MaestroTool.Core;
 using Xunit;
 
@@ -108,20 +105,5 @@ public class HttpClientConfigurationTests
         // This ensures the tool is identifiable even in misconfigured scenarios
         var productIdentifier = MaestroToolUserAgent.ProductIdentifier;
         Assert.StartsWith("maestro.mcp/", productIdentifier);
-    }
-
-    private class FakeHttpMessageHandler : HttpMessageHandler
-    {
-        public HttpStatusCode StatusCode { get; set; } = HttpStatusCode.OK;
-        public string ResponseContent { get; set; } = "{}";
-
-        protected override Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request, CancellationToken ct)
-        {
-            return Task.FromResult(new HttpResponseMessage(StatusCode)
-            {
-                Content = new StringContent(ResponseContent, Encoding.UTF8, "application/json")
-            });
-        }
     }
 }

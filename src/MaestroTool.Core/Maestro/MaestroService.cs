@@ -189,26 +189,6 @@ public class MaestroService
 
         return results.ToList();
     }
-    
-    private static string FormatRepoName(string? repository)
-    {
-        if (string.IsNullOrEmpty(repository)) return "<unknown>";
-        
-        try
-        {
-            if (Uri.TryCreate(repository, UriKind.Absolute, out var uri))
-            {
-                var segments = uri.AbsolutePath.Trim('/').Split('/');
-                return segments.Length >= 2 ? $"{segments[^2]}/{segments[^1]}" : uri.AbsolutePath.Trim('/');
-            }
-        }
-        catch
-        {
-            // Best-effort formatting; progress is cosmetic and must never fail the health check
-        }
-        
-        return repository;
-    }
 
     private async Task<SubscriptionHealthResult> CheckSubscriptionHealthAsync(
         Subscription sub,
