@@ -156,15 +156,48 @@ public class MaestroService
         bool noCache = false,
         bool includeCommitDetails = false,
         bool validate = false,
+        IProgress<ProgressUpdate>? progress = null,
         CancellationToken cancellationToken = default)
     {
         var subscriptions = await GetSubscriptionsAsync(targetRepository: targetRepository, noCache: noCache, cancellationToken: cancellationToken);
 
         // Filter out subscriptions with no channel
         var validSubscriptions = subscriptions.Where(s => s.Channel?.Id != null).ToList();
+        
+        var total = validSubscriptions.Count;
+        var step = ProgressReporter.ItemStep(total);  // ~10 updates total
+        var completed = 0;
+        var lastReported = 0;
+        var reportLock = new object();
+        
+        progress?.Report(new ProgressUpdate(0, total, $"Checking {total} subscription(s)..."));
 
         // Parallelize subscription health checks with concurrency limit
-        var tasks = validSubscriptions.Select(sub => CheckSubscriptionHealthAsync(sub, noCache, includeCommitDetails, validate, cancellationToken));
+        var tasks = validSubscriptions.Select(async sub =>
+        {
+            var result = await CheckSubscriptionHealthAsync(sub, noCache, includeCommitDetails, validate, cancellationToken);
+            
+            // Thread-safe progress tracking with monotonic guard:
+            // Interlocked.Increment ensures unique 'done' values, but Report calls
+            // can race (task with done=N+1 may Report before task with done=N).
+            // Lock + lastReported check drops out-of-order reports so the MCP
+            // client only ever sees monotonically increasing progress.
+            var done = System.Threading.Interlocked.Increment(ref completed);
+            if (progress != null && (done == total || done % step == 0))
+            {
+                lock (reportLock)
+                {
+                    if (done > lastReported)
+                    {
+                        progress.Report(new ProgressUpdate(done, total, $"Checked {done} of {total} subscriptions"));
+                        lastReported = done;
+                    }
+                }
+            }
+            
+            return result;
+        });
+        
         var results = await Task.WhenAll(tasks);
 
         return results.ToList();

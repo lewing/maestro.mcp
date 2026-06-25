@@ -2955,4 +2955,72 @@ public class MaestroServiceTests : IDisposable
         Assert.Single(result);
         Assert.Equal(OutcomeType.Updated, result[0].Type);
     }
+    
+    // --- Progress reporting ---
+    
+    [Fact]
+    public async Task GetSubscriptionHealthAsync_WithProgress_ReportsMonotonicallyIncreasingProgress()
+    {
+        // Arrange — use a high subscription count (20) to exercise the parallel fan-out
+        // and shake out any out-of-order progress emission (the round-3 fix).
+        var channel = CreateChannel();
+        var subscriptions = Enumerable.Range(1, 20)
+            .Select(i => CreateSubscription(source: $"https://github.com/dotnet/repo{i}", channel: channel))
+            .ToList();
+        
+        _client.ListSubscriptionsAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<int?>(), Arg.Any<bool?>(), Arg.Any<CancellationToken>())
+            .Returns(subscriptions);
+        
+        // Return empty outcomes for all subscriptions
+        _client.ListSubscriptionOutcomesAsync(
+            Arg.Any<int>(),
+            Arg.Any<DateTimeOffset?>(),
+            Arg.Any<DateTimeOffset?>(),
+            Arg.Any<int?>(),
+            Arg.Any<string?>(),
+            Arg.Any<string?>(),
+            Arg.Any<string?>(),
+            Arg.Any<string?>(),
+            Arg.Any<CancellationToken>())
+            .Returns(new List<SubscriptionTriggerOutcome>());
+        
+        // Synchronous IProgress for deterministic test — Progress<T> delivers callbacks
+        // asynchronously via SynchronizationContext, causing races with List<T>.Add.
+        var progress = new SyncProgress<ProgressUpdate>();
+        
+        // Act
+        await _service.GetSubscriptionHealthAsync(
+            "https://github.com/dotnet/runtime",
+            validate: true,
+            progress: progress);
+        
+        // Assert — progress must be STRICTLY monotonically increasing (no duplicates,
+        // no decreases). The round-3 lock + lastReported guard drops out-of-order reports.
+        var updates = progress.Reports;
+        Assert.NotEmpty(updates);
+        for (int i = 1; i < updates.Count; i++)
+        {
+            Assert.True(updates[i].Current > updates[i - 1].Current,
+                $"Progress not strictly increasing: {updates[i - 1].Current} -> {updates[i].Current}");
+        }
+        
+        // Final progress must equal total (the done == total branch always emits).
+        var lastUpdate = updates.Last();
+        Assert.Equal(lastUpdate.Total, lastUpdate.Current);
+        Assert.Equal(20, lastUpdate.Total);
+    }
+    
+    /// <summary>
+    /// Synchronous IProgress for tests - avoids race conditions from async Progress<T> delivery.
+    /// </summary>
+    private sealed class SyncProgress<T> : IProgress<T>
+    {
+        private readonly object _lock = new();
+        public List<T> Reports { get; } = new();
+        
+        public void Report(T value)
+        {
+            lock (_lock) { Reports.Add(value); }
+        }
+    }
 }

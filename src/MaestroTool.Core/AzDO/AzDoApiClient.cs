@@ -16,7 +16,7 @@ public class AzDoApiClient : IAzDoApiClient
     private static HttpClient CreateHttpClient()
     {
         var client = new HttpClient();
-        client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("maestro-mcp", "1.0"));
+        MaestroToolUserAgent.Apply(client);
         client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         
         // Auth cascade: 1. AZDO_TOKEN env var, 2. az CLI, 3. anonymous

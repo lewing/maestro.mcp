@@ -107,9 +107,16 @@ public partial class MaestroMcpTools
         [Description("Optional case-insensitive substring filter on channel name")] string? channelFilter = null,
         [Description("Optional case-insensitive substring filter on source repository URL or short name (e.g. dotnet/runtime or runtime)")] string? sourceRepoFilter = null,
         [Description("Return one line per subscription instead of the detailed multi-line block")] bool compact = false,
+        IProgress<ModelContextProtocol.ProgressNotificationValue>? progress = null,
         CancellationToken cancellationToken = default)
     {
-        var results = await _service.GetSubscriptionHealthAsync(targetRepository, noCache, includeCommitDetails, validate, cancellationToken);
+        var results = await _service.GetSubscriptionHealthAsync(
+            targetRepository, 
+            noCache, 
+            includeCommitDetails, 
+            validate,
+            McpProgressAdapter.Wrap(progress),
+            cancellationToken);
 
         if (results.Count == 0)
             return $"No active subscriptions found targeting {targetRepository}.";
