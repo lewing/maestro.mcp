@@ -226,6 +226,12 @@ public partial class MaestroMcpTools
         if (graph.FlowRefs == null || graph.FlowRefs.Count == 0)
         {
             sb.AppendLine("No flow nodes found in the dependency graph.");
+            progress?.Report(new ModelContextProtocol.ProgressNotificationValue
+            {
+                Progress = 2,
+                Total = 2,
+                Message = "Flow graph complete (empty)."
+            });
             return Timestamp(noCache) + sb.ToString();
         }
 
