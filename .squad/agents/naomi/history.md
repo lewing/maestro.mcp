@@ -430,3 +430,48 @@ Adopted three UX hardening patterns from helix.mcp into maestro.mcp as a single 
 **Verification:**
 - Build: 0 warnings, 0 errors
 - global.json: unchanged before all commits and before final push
+
+### 2026-06-24: PR #34 review fixes
+
+**Fixed 6 issues from PR #34 review:**
+
+1. **🔴 Concurrent progress reporting bug** in `MaestroService.GetSubscriptionHealthAsync`:
+   - BEFORE: Used LINQ enumeration index (`Select(async (sub, idx) => ...)`) — tasks complete out of order, progress jumps backward
+   - AFTER: Use `int completed = 0` + `Interlocked.Increment(ref completed)` for thread-safe monotonic counter
+   - Emit at step intervals: `if (done == total || done % step == 0) progress?.Report(...)`
+   - Reduced chattiness: ~10 updates per operation via `ProgressReporter.ItemStep(total)`
+   - Simplified message: `$"Checked {done} of {total} subscriptions"` (removed per-repo names)
+
+2. **🔴 FormatRepoName can throw** on malformed/relative URIs:
+   - BEFORE: `new Uri(...)` throws `UriFormatException` on `"dotnet/runtime"` or malformed strings
+   - AFTER: Wrap in try/catch with `Uri.TryCreate`, return raw input on failure
+   - Progress is best-effort cosmetics — must **never** fail the operation
+
+3. **🔴 flow_graph validation order** — early return without completion update:
+   - BEFORE: Emits first progress update, then validates `days` parameter → client UI stuck on validation failure
+   - AFTER: Validate FIRST (`if (days is < 1 or > 30) return ...`), THEN emit progress
+
+4. **🟡 Use AssemblyInformationalVersion** instead of AssemblyVersion:
+   - BEFORE: Read `Assembly.GetName().Version` → 4-part like `"0.17.0.0"`
+   - AFTER: Read `AssemblyInformationalVersionAttribute.InformationalVersion` → 3-part semver like `"0.17.0"` or `"0.17.0+abc123"`
+   - Strip `+gitsha` suffix: `version = version[..version.IndexOf('+')]`
+   - Fallback to AssemblyVersion if InformationalVersion not present
+   - Added Initialize(Assembly) overload to simplify entry point calls
+
+5. **🟢 Remove redundant using** in McpProgressAdapter.cs:
+   - File declares `namespace MaestroTool.Core;` but also had `using MaestroTool.Core;`
+
+6. **Add tests** for concurrent progress + FormatRepoName robustness:
+   - `GetSubscriptionHealthAsync_WithProgress_ReportsMonotonicallyIncreasingProgress`: Creates 10 subscriptions, verifies progress never decreases
+   - `FormatRepoName_HandlesVariousInputs`: Theory test with 6 cases (null, empty, relative path, malformed URI, single segment, full URL)
+   - Updated UA test to verify 3-part version format (no 4th zero)
+
+**Commit:** 0a3d295  
+**Tests:** 240/240 passed (up from 231 baseline)  
+**Verification:** `git diff origin/master...HEAD -- global.json` empty ✅
+
+**Key learning:**
+- **NEVER use LINQ index for progress in parallel Task.WhenAll** — tasks complete out of order
+- **Always validate BEFORE emitting first progress** — prevents stuck UI on validation failures
+- **Read InformationalVersion, strip +gitsha** — semver > 4-part version for UA strings
+- **Progress formatting must be exception-safe** — wrap URI parsing in try/catch
