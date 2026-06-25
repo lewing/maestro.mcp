@@ -163,17 +163,17 @@ public class McpServerOptionsExtensionsTests
     }
 
     [Fact]
-    public void AddUnknownParameterFilter_NoUnknownParams_DoesNotThrow()
+    public void AddUnknownParameterFilter_RegistersFilter()
     {
-        // This test just verifies that the filter doesn't reject valid parameters
-        // We don't need to actually invoke the tool - just verify the filter passes it through
+        // Verifies the filter pair is wired into the options object.
+        // Pass-through behavior (filter does not throw on valid params) is
+        // exercised end-to-end by the other tests in this file that invoke
+        // the composed handler with valid arguments.
         var tools = CreateMaestroTools(out _, out _);
         var options = new McpServerOptions()
             .AddBindingErrorFilter()
             .AddUnknownParameterFilter(typeof(MaestroMcpTools).Assembly);
         
-        // The filter should pass through without throwing for valid params
-        // We'll just test that the filter chain is built without error
         Assert.Equal(2, options.Filters.Request.CallToolFilters.Count);
     }
 

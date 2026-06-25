@@ -180,6 +180,7 @@ public static class McpServerOptionsExtensions
             var hint = FindClosestMatch(unknowns[0], paramInfo.CanonicalSet);
             if (hint is not null)
                 sb.Append($"\nDid you mean: {hint}?");
+            sb.AppendLine();
         }
         else
         {

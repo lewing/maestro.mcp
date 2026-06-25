@@ -2961,9 +2961,10 @@ public class MaestroServiceTests : IDisposable
     [Fact]
     public async Task GetSubscriptionHealthAsync_WithProgress_ReportsMonotonicallyIncreasingProgress()
     {
-        // Arrange - create multiple subscriptions to ensure parallel completion
+        // Arrange — use a high subscription count (20) to exercise the parallel fan-out
+        // and shake out any out-of-order progress emission (the round-3 fix).
         var channel = CreateChannel();
-        var subscriptions = Enumerable.Range(1, 10)
+        var subscriptions = Enumerable.Range(1, 20)
             .Select(i => CreateSubscription(source: $"https://github.com/dotnet/repo{i}", channel: channel))
             .ToList();
         
@@ -2983,7 +2984,7 @@ public class MaestroServiceTests : IDisposable
             Arg.Any<CancellationToken>())
             .Returns(new List<SubscriptionTriggerOutcome>());
         
-        // Use synchronous IProgress for deterministic test - Progress<T> delivers callbacks
+        // Synchronous IProgress for deterministic test — Progress<T> delivers callbacks
         // asynchronously via SynchronizationContext, causing races with List<T>.Add.
         var progress = new SyncProgress<ProgressUpdate>();
         
@@ -2993,20 +2994,20 @@ public class MaestroServiceTests : IDisposable
             validate: true,
             progress: progress);
         
-        // Assert - progress should be monotonically increasing (never decrease)
+        // Assert — progress must be STRICTLY monotonically increasing (no duplicates,
+        // no decreases). The round-3 lock + lastReported guard drops out-of-order reports.
         var updates = progress.Reports;
+        Assert.NotEmpty(updates);
         for (int i = 1; i < updates.Count; i++)
         {
-            Assert.True(updates[i].Current >= updates[i - 1].Current,
-                $"Progress decreased from {updates[i - 1].Current} to {updates[i].Current}");
+            Assert.True(updates[i].Current > updates[i - 1].Current,
+                $"Progress not strictly increasing: {updates[i - 1].Current} -> {updates[i].Current}");
         }
         
-        // Final progress should match total
-        if (updates.Any())
-        {
-            var lastUpdate = updates.Last();
-            Assert.Equal(lastUpdate.Total, lastUpdate.Current);
-        }
+        // Final progress must equal total (the done == total branch always emits).
+        var lastUpdate = updates.Last();
+        Assert.Equal(lastUpdate.Total, lastUpdate.Current);
+        Assert.Equal(20, lastUpdate.Total);
     }
     
     /// <summary>

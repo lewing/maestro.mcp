@@ -167,6 +167,8 @@ public class MaestroService
         var total = validSubscriptions.Count;
         var step = ProgressReporter.ItemStep(total);  // ~10 updates total
         var completed = 0;
+        var lastReported = 0;
+        var reportLock = new object();
         
         progress?.Report(new ProgressUpdate(0, total, $"Checking {total} subscription(s)..."));
 
@@ -175,11 +177,22 @@ public class MaestroService
         {
             var result = await CheckSubscriptionHealthAsync(sub, noCache, includeCommitDetails, validate, cancellationToken);
             
-            // Thread-safe progress tracking - emit at step intervals and final completion
+            // Thread-safe progress tracking with monotonic guard:
+            // Interlocked.Increment ensures unique 'done' values, but Report calls
+            // can race (task with done=N+1 may Report before task with done=N).
+            // Lock + lastReported check drops out-of-order reports so the MCP
+            // client only ever sees monotonically increasing progress.
             var done = System.Threading.Interlocked.Increment(ref completed);
-            if (done == total || done % step == 0)
+            if (progress != null && (done == total || done % step == 0))
             {
-                progress?.Report(new ProgressUpdate(done, total, $"Checked {done} of {total} subscriptions"));
+                lock (reportLock)
+                {
+                    if (done > lastReported)
+                    {
+                        progress.Report(new ProgressUpdate(done, total, $"Checked {done} of {total} subscriptions"));
+                        lastReported = done;
+                    }
+                }
             }
             
             return result;
