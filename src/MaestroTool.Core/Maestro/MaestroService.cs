@@ -156,18 +156,44 @@ public class MaestroService
         bool noCache = false,
         bool includeCommitDetails = false,
         bool validate = false,
+        IProgress<ProgressUpdate>? progress = null,
         CancellationToken cancellationToken = default)
     {
         var subscriptions = await GetSubscriptionsAsync(targetRepository: targetRepository, noCache: noCache, cancellationToken: cancellationToken);
 
         // Filter out subscriptions with no channel
         var validSubscriptions = subscriptions.Where(s => s.Channel?.Id != null).ToList();
+        
+        progress?.Report(new ProgressUpdate(0, validSubscriptions.Count, $"Checking {validSubscriptions.Count} subscription(s)..."));
 
         // Parallelize subscription health checks with concurrency limit
-        var tasks = validSubscriptions.Select(sub => CheckSubscriptionHealthAsync(sub, noCache, includeCommitDetails, validate, cancellationToken));
-        var results = await Task.WhenAll(tasks);
+        var results = new SubscriptionHealthResult[validSubscriptions.Count];
+        var tasks = validSubscriptions.Select(async (sub, idx) =>
+        {
+            var result = await CheckSubscriptionHealthAsync(sub, noCache, includeCommitDetails, validate, cancellationToken);
+            results[idx] = result;
+            
+            // Report progress after each subscription completes
+            var completed = idx + 1;
+            progress?.Report(new ProgressUpdate(
+                completed,
+                validSubscriptions.Count,
+                $"Checked {completed} of {validSubscriptions.Count}: {FormatRepoName(sub.SourceRepository)} → {FormatRepoName(sub.TargetRepository)}"));
+            
+            return result;
+        });
+        
+        await Task.WhenAll(tasks);
 
         return results.ToList();
+    }
+    
+    private static string FormatRepoName(string repoUrl)
+    {
+        // Extract just the org/repo from the URL for compact progress messages
+        var uri = new Uri(repoUrl);
+        var segments = uri.AbsolutePath.Trim('/').Split('/');
+        return segments.Length >= 2 ? $"{segments[^2]}/{segments[^1]}" : repoUrl;
     }
 
     private async Task<SubscriptionHealthResult> CheckSubscriptionHealthAsync(

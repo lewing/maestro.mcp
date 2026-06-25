@@ -170,8 +170,16 @@ public partial class MaestroMcpTools
         [Description("Include build time metrics; expensive, so enable only when expanding a scoped graph")] bool includeBuildTimes = false,
         [Description("Include disabled subscriptions in the graph")] bool includeDisabledSubscriptions = false,
         [Description("Bypass cache and fetch fresh data")] bool noCache = false,
+        IProgress<ModelContextProtocol.ProgressNotificationValue>? progress = null,
         CancellationToken cancellationToken = default)
     {
+        progress?.Report(new ModelContextProtocol.ProgressNotificationValue
+        {
+            Progress = 0,
+            Total = 2,
+            Message = $"Computing flow graph (days={days}, includeArcade={includeArcade}, includeBuildTimes={includeBuildTimes})..."
+        });
+        
         if (days is < 1 or > 30)
             return $"Invalid days value '{days}'. Expected a value between 1 and 30.";
 
@@ -181,6 +189,13 @@ public partial class MaestroMcpTools
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             cts.CancelAfter(TimeSpan.FromSeconds(30));
             graph = await _service.GetFlowGraphAsync(days, channelId, includeArcade, includeBuildTimes, includeDisabledSubscriptions, null, noCache, cts.Token);
+            
+            progress?.Report(new ModelContextProtocol.ProgressNotificationValue
+            {
+                Progress = 1,
+                Total = 2,
+                Message = $"Resolving {graph.FlowRefs?.Count ?? 0} nodes and {graph.FlowEdges?.Count ?? 0} edges..."
+            });
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -267,6 +282,13 @@ public partial class MaestroMcpTools
         {
             sb.AppendLine("\n⚡ **Longest Build Path:** " + string.Join(" → ", longestPathNodes.Select(n => n.Repository)));
         }
+        
+        progress?.Report(new ModelContextProtocol.ProgressNotificationValue
+        {
+            Progress = 2,
+            Total = 2,
+            Message = "Flow graph complete."
+        });
 
         return Timestamp(noCache) + sb.ToString();
     }
