@@ -61,6 +61,278 @@
 - Deferred pagination: channels is small and hierarchical, and the prior audit found markdown tools do not fit `LimitedResults<T>` cleanly.
 - Live measurement on 168 channels: current full MCP-style markdown is 6,392 bytes; compact is 5,048 bytes (1,344 bytes / 21% saved). Filtering `.NET 10` reduces the list to 30 channels: 1,289 bytes full, 1,049 bytes compact.
 
+## 2026-06-24: PR feat/subscription-outcomes — SubscriptionTriggerOutcomes API integration
+
+**Branch:** `feat/subscription-outcomes`  
+**Commits:** `3095e72`, `be26c7a`, `b3fe77b`  
+**Date:** 2026-06-24
+
+**Shipped:**
+- **Step A:** Bumped PCS client `1.1.0-beta.26271.2` → `1.1.0-beta.26324.1` (adds `ISubscriptionTriggerOutcomes` API)
+  - Also bumped `Microsoft.Extensions.DependencyInjection` `10.0.8` → `10.0.9` (transitive dependency from PCS)
+  - Build: 0 warnings, 0 errors; Tests: 208/208 passed ✅
+- **Step B:** Added `maestro_subscription_outcomes` MCP tool
+  - Exposed PCS `ISubscriptionTriggerOutcomes.ListSubscriptionOutcomesAsync` via `IMaestroApiClient`
+  - Added `MaestroService.GetSubscriptionOutcomesAsync` with ShortTtl caching
+  - MCP tool filters: `subscriptionId`, `buildId`, `outcomeType`, `after`/`before` dates, `count` (default 20, max 100)
+  - Markdown output with emoji indicators: ✅ Updated, ❌ Failure, 🔀 HasConflict, ⚠️ UserError, etc.
+  - Added unit test; Tests: 209/209 passed ✅
+- **Step C:** Integrated latest outcome into `maestro_subscription_health`
+  - Added `LatestOutcomeType` and `LatestOutcomeMessage` fields to `SubscriptionHealthResult`
+  - For stale subscriptions, fetch latest outcome (limit: 1) from PCS outcomes API
+  - Surface in formatted output with emoji + type + message
+  - Gracefully handle 404 for subs with zero outcomes (non-error stderr log)
+  - Added TODO comment near oscillation detection for future replacement consideration
+  - Existing heuristics (oscillation, trackedPr, validation) preserved
+
+**PCS API gotchas discovered:**
+- `limit` parameter is **required and positional** (first parameter), not optional
+- `subscriptionId` is **`string`**, not `Guid` — must call `.ToString()` on Guid
+- `subscriptionOutcomeType` is **`string`**, not `OutcomeType` enum — pass enum name as string
+- Parameter order is alphabetical-ish after `limit`; use named arguments for safety
+- `LatestOutcome` property is **NOT on `Subscription`** — it's on `CodeflowSubscriptionStatus` / `CodeflowStatus` (not used in this PR)
+- Property accessor: `_api.SubscriptionTriggerOutcomes.ListSubscriptionOutcomesAsync(...)` (confirmed via `strings | grep get_SubscriptionTriggerOutcomes`)
+
+**Patterns:**
+- **Enum-to-emoji surfacing in MCP markdown:** Used pattern matching on enum `.ToString()` to map outcome types to emoji indicators, making categorized statuses scannable in agent output. Reusable for other status/outcome enumerations.
+- **Graceful API 404 handling:** Wrapped outcome fetch in try/catch with stderr log; 404 is expected for subscriptions with no trigger history. Avoids polluting health results with non-critical errors.
+
+**Verification:**
+- Build: 0 warnings, 0 errors (all 3 commits)
+- Tests: 209/209 passed (1 new test for GetSubscriptionOutcomesAsync)
+- Branch pushed to origin: `feat/subscription-outcomes`
+
+
+## PR #31 Review Fixes (2026-06-15)
+
+**Context**: Copilot pull-request-reviewer flagged 4 valid issues after initial implementation.
+
+**Fixed Issues**:
+
+1. **Count validation missing**: Tool description advertised 1–100 range but accepted any int. Added explicit validation in `GetSubscriptionOutcomes` MCP tool:
+   ```csharp
+   if (count < 1 || count > 100)
+       return $"Invalid count '{count}'. Expected a value between 1 and 100.";
+   ```
+
+2. **Service bounds + 404 handling**: `GetSubscriptionOutcomesAsync` needed defensive clamping and graceful 404 handling for subs with zero outcomes:
+   - Clamp `count` to 20 if null/<=0 (don't enforce tool bounds in service layer, just default sanely)
+   - Wrap PCS call in `try/catch` for `RestApiException` with 404 status → return empty list instead of throwing
+
+3. **Duplicated API wiring**: `CheckSubscriptionHealthAsync` was calling `_api.SubscriptionTriggerOutcomes.ListSubscriptionOutcomesAsync(...)` directly. Replaced with `GetSubscriptionOutcomesAsync(subscriptionId: sub.Id, count: 1, noCache, cancellationToken)` to benefit from centralized caching and 404 handling.
+
+4. **🔴 Real bug — outcome data never rendered**: `LatestOutcomeType`/`LatestOutcomeMessage` were gathered in `SubscriptionHealthResult` but the formatters in `MaestroMcpTools.Subscriptions.cs` never referenced them.
+   - Extracted `GetOutcomeEmoji(string outcomeType)` static helper to share emoji mapping between `maestro_subscription_outcomes` tool and health formatters
+   - Updated **detailed formatter**: renders `Latest outcome: {emoji} {type} — {message}` inline with staleness message for stale subs with outcome data
+   - Updated **compact formatter**: includes outcome emoji+type in the status line after last applied date
+
+**Test Impact**: Added global mock for `ListSubscriptionOutcomesAsync` in test constructor (returns empty list) to handle new service layer call path. All 209 tests passed after fixes.
+
+**Pattern Learned**: Always validate MCP tool formatters actually render new data fields by checking formatted output, not just that the service layer gathers them. This was a silent no-op until the reviewer caught it.
+
+## Second PR Review Fixes (2026-06-24)
+
+**Context**: Second review pass identified 5 refinement issues with the initial PR review fixes.
+
+**Fixed Issues**:
+
+1. **Service count upper bound + culture-stable cache keys**:
+   - Added `if (limit > 100) limit = 100;` to cap count at 100 (tool validates 1-100, but service should be defensively robust)
+   - Replaced `after` and `before` in cache key from `.ToString()` (culture-dependent) to `.ToString("O", CultureInfo.InvariantCulture)` for round-trip ISO 8601 format
+   - Cache keys now stable across cultures and unambiguous for date parsing
+
+2. **🔴 Brittle 404 detection** (real bug):
+   - Replaced `catch (Exception ex) when (ex.GetType().Name == "RestApiException" && ex.Message.Contains("404"))` with typed catch:
+     ```csharp
+     catch (Microsoft.DotNet.ProductConstructionService.Client.RestApiException ex) when (ex.Response.Status == 404)
+     ```
+   - Direct property access is immune to typos, localization, and message format changes
+
+3. **Named arguments in tool service call**:
+   - Replaced `GetSubscriptionOutcomesAsync(parsedSubId, buildId, parsedAfter, parsedBefore, outcomeType, maxCount, noCache, cancellationToken)` with named arguments for clarity and maintainability
+
+4. **Test comment misleading**:
+   - Rephrased from "Mock handles 404 gracefully" (implied the mock was doing error handling) to "Default outcomes mock returns empty so tests not focused on outcomes don't need per-test setup" (accurate: it's just a default to reduce boilerplate)
+
+5. **Duplicate mock setup in test helper**:
+   - Removed redundant `ListSubscriptionOutcomesAsync` mock from `SetupStaleGitHubSubscription` helper — the constructor default applies globally, no need to repeat
+
+**Verification**:
+- Build: 0 warnings, 0 errors
+- Tests: 209/209 passed ✅
+- `git diff origin/master...HEAD -- global.json`: empty (confirmed no SDK workaround leaked)
+
+**Pattern Learned**: Always check `git diff origin/master...HEAD -- <workaround-files>` before pushing to catch accidental commits of transient changes.
+
+### 2026-06-24: MCP UX hardening patterns from helix.mcp
+
+Adopted three UX hardening patterns from helix.mcp into maestro.mcp as a single coherent PR on branch `feat/mcp-ux-hardening`.
+
+**User-Agent identifier (helix.mcp PR #73)**
+- Created `MaestroToolUserAgent.cs` with version-aware UA string (`maestro.mcp/{version}`) and custom `X-Maestro-Mcp-Tool` header
+- Applied to AzDoApiClient and GitHubApiClient static HttpClients via `MaestroToolUserAgent.Apply(client)`
+- Initialized version from assembly metadata in both `MaestroTool.Mcp/Program.cs` and `MaestroTool/Program.cs` entry points
+- PCS client: skipped (no easy policy hook like helix's HelixApiOptions.AddPolicy)
+- Tests: HttpClientConfigurationTests covering UA application and deduplication
+
+**Strict unknown-parameter rejection + did-you-mean (helix.mcp PRs #83 + #84)**
+- Stage A: `JsonUnmappedMemberHandling.Disallow` passed to `WithToolsFromAssembly` via JsonSerializerOptions
+  - Rejects unknown params at binding time with ArgumentException(paramName:"arguments")
+- Stage B: `McpServerOptionsExtensions.AddUnknownParameterFilter`
+  - Pre-SDK dispatch: inspects incoming arguments against tool schema (built once at startup via McpServerTool.Create + InputSchema introspection)
+  - Suggests closest match (Levenshtein threshold: 6) with "Did you mean: X?" message
+  - Full allowed-params list always shown for discoverability
+- Filter pipeline: AddBindingErrorFilter → AddUnknownParameterFilter → SDK dispatch
+- Wired in both Program.cs files, tests cover Levenshtein distance, schema extraction, and end-to-end filter behavior
+
+**Progress notifications on slow tools (helix.mcp PR #48)**
+- Created `ProgressUpdate.cs`: transport-agnostic progress record (Current, Total, Message)
+- Created `ProgressReporter.cs`: ItemStep helper for coarse-grained updates (~10 per operation)
+- Created `McpProgressAdapter.cs`: adapts IProgress<ProgressUpdate> → IProgress<ProgressNotificationValue>
+- Instrumented `maestro_subscription_health` with per-subscription progress during parallel fan-out ("Checked N of M: source → target")
+- Instrumented `maestro_flow_graph` with start + completion progress ("Computing flow graph..." → "Resolving X nodes/edges...")
+- MCP SDK auto-injects IProgress<ProgressNotificationValue> when client supplies progress token; adapter translates at tool boundary
+- Service layer remains MCP-agnostic: `GetSubscriptionHealthAsync` accepts `IProgress<ProgressUpdate>?` parameter
+
+**Key learnings:**
+- UA setup: Apply after HttpClient creation but before auth cascade; ensure idempotency for multiple Apply() calls
+- MCP CallToolFilter pattern: Build filter chain via `options.Filters.Request.CallToolFilters.Add(next => async (request, ct) => ...)`
+- IProgress<T> auto-injection: MCP SDK automatically injects IProgress<ProgressNotificationValue> when method signature includes it
+  - Hidden from JSON schema (not a user-facing parameter)
+  - Adapter at tool boundary keeps service layer transport-agnostic
+- UnmappedMemberHandling.Disallow: Must be passed to WithToolsFromAssembly, not set on McpServerOptions.JsonSerializerOptions (property doesn't exist)
+- TypeInfoResolver requirement: Must set `new DefaultJsonTypeInfoResolver()` when using custom JsonSerializerOptions to avoid InvalidOperationException from SDK's MakeReadOnly() call
+
+**Commits:**
+- eb2a6fe: Add MCP User-Agent identifier for maestro.mcp
+- 481cb2e: Add strict unknown-parameter rejection with did-you-mean hints
+- b539076: Add progress notifications for slow MCP tools
+
+**Tests:** 231/231 passed (up from 215 baseline)
+
+**Verification:**
+- Build: 0 warnings, 0 errors
+- global.json: unchanged before all commits and before final push
+
+### 2026-06-24: PR #34 review fixes
+
+**Fixed 6 issues from PR #34 review:**
+
+1. **🔴 Concurrent progress reporting bug** in `MaestroService.GetSubscriptionHealthAsync`:
+   - BEFORE: Used LINQ enumeration index (`Select(async (sub, idx) => ...)`) — tasks complete out of order, progress jumps backward
+   - AFTER: Use `int completed = 0` + `Interlocked.Increment(ref completed)` for thread-safe monotonic counter
+   - Emit at step intervals: `if (done == total || done % step == 0) progress?.Report(...)`
+   - Reduced chattiness: ~10 updates per operation via `ProgressReporter.ItemStep(total)`
+   - Simplified message: `$"Checked {done} of {total} subscriptions"` (removed per-repo names)
+
+2. **🔴 FormatRepoName can throw** on malformed/relative URIs:
+   - BEFORE: `new Uri(...)` throws `UriFormatException` on `"dotnet/runtime"` or malformed strings
+   - AFTER: Wrap in try/catch with `Uri.TryCreate`, return raw input on failure
+   - Progress is best-effort cosmetics — must **never** fail the operation
+
+3. **🔴 flow_graph validation order** — early return without completion update:
+   - BEFORE: Emits first progress update, then validates `days` parameter → client UI stuck on validation failure
+   - AFTER: Validate FIRST (`if (days is < 1 or > 30) return ...`), THEN emit progress
+
+4. **🟡 Use AssemblyInformationalVersion** instead of AssemblyVersion:
+   - BEFORE: Read `Assembly.GetName().Version` → 4-part like `"0.17.0.0"`
+   - AFTER: Read `AssemblyInformationalVersionAttribute.InformationalVersion` → 3-part semver like `"0.17.0"` or `"0.17.0+abc123"`
+   - Strip `+gitsha` suffix: `version = version[..version.IndexOf('+')]`
+   - Fallback to AssemblyVersion if InformationalVersion not present
+   - Added Initialize(Assembly) overload to simplify entry point calls
+
+5. **🟢 Remove redundant using** in McpProgressAdapter.cs:
+   - File declares `namespace MaestroTool.Core;` but also had `using MaestroTool.Core;`
+
+6. **Add tests** for concurrent progress + FormatRepoName robustness:
+   - `GetSubscriptionHealthAsync_WithProgress_ReportsMonotonicallyIncreasingProgress`: Creates 10 subscriptions, verifies progress never decreases
+   - `FormatRepoName_HandlesVariousInputs`: Theory test with 6 cases (null, empty, relative path, malformed URI, single segment, full URL)
+   - Updated UA test to verify 3-part version format (no 4th zero)
+
+**Commit:** 0a3d295  
+**Tests:** 240/240 passed (up from 231 baseline)  
+**Verification:** `git diff origin/master...HEAD -- global.json` empty ✅
+
+**Key learning:**
+- **NEVER use LINQ index for progress in parallel Task.WhenAll** — tasks complete out of order
+- **Always validate BEFORE emitting first progress** — prevents stuck UI on validation failures
+- **Read InformationalVersion, strip +gitsha** — semver > 4-part version for UA strings
+- **Progress formatting must be exception-safe** — wrap URI parsing in try/catch
+
+## Evening Shipping Spree — 2026-06-24 → 2026-06-25
+
+**PRs Shipped:** #29, #30, #31, #32, #33, #34 (6 PRs in one session)
+
+### 5-Review-Round Pattern: PR #31 + PR #34
+
+Both PR #31 (SubscriptionTriggerOutcomes) and PR #34 (MCP UX Hardening) required 5 review rounds. This was **not a sign of friction** — Copilot bot reviewer caught **real edge cases** that manual testing missed:
+
+**PR #31 Review Rounds:**
+1. Count validation (state machine logic)
+2. Typed RestApiException 404 handling
+3. ISO 8601 culture-invariant date parsing (bug: local timezone creep in CI)
+4. **Case-sensitivity gotcha**: PCS returns MixedCase outcomeType, not PascalCase. Silent zero-result bug.
+5. UTC date rendering + shared message-normalize helper
+
+**PR #34 Review Rounds:**
+1. **Concurrent progress race**: `Interlocked.Increment` alone insufficient; needed reportLock + lastReported monotonic guard.
+2. FormatRepoName dead code removal
+3. CS1998 async-without-await
+4. Progress<T> async-delivery race in test
+5. AssemblyInformationalVersion vs AssemblyName.Version (UA string formatting)
+6. Missing newline in single-unknown error
+7. flow_graph empty-graph path missing final 100% report
+8. ProgressReporter.ItemStep ceiling division
+
+**Team takeaway:** Multiple review rounds indicate thorough vetting, not poor code quality. The bot catches concurrency races, type safety holes, and culture-sensitivity bugs that don't surface in single-pass manual reviews.
+
+### Critical Learning: Global.json Workaround Commits
+
+**Incident:** During PR #31 development, Naomi committed the SDK rollForward workaround to global.json **twice** (rounds 2 and 5). Coordinator had to revert one.
+
+**Root cause:** The workaround is transient (only needed during active PCS client upgrades); it's easy to forget it's already committed and accidentally re-commit.
+
+**New Rule (Going Forward):**
+```bash
+# BEFORE every commit:
+git diff -- global.json
+# Verify the only change is business logic, not the transient SDK workaround.
+```
+
+**Why it matters:** Committing workarounds pollutes the history and can be missed in future rebases.
+
+### Critical Learning: Mid-Edit Corruption and File Syntax
+
+**Incident:** During PR #34 review round 3, Naomi was editing test files and encountered syntax errors from bad appends. Session stopped mid-edit without pushing.
+
+**Root cause:** Editing by appending to existing lines without full-file context caused bracket/brace mismatches.
+
+**Recovery:** Coordinator reviewed remaining feedback, cleaned up test file syntax, and completed the PR.
+
+**New Rule (Going Forward):**
+- **Before stopping a session mid-PR:** Verify file syntax (at least `dotnet build` or IDE parse check).
+- **When editing in progress callbacks:** Always view the full file before appending to ensure nesting is correct.
+- **Before session boundary:** Push a commit or communicate status to the next agent.
+
+**Why it matters:** Mid-edit corruption wastes time on cleanup and delays shipping.
+
+### Session Metrics
+
+- **PRs shipped:** 6 (feature #31 + #34, dependency #29 + #30, release #32, docs #33)
+- **Review efficiency:** 5-round reviews on #31 and #34 = thorough bot vetting
+- **Test coverage:** 208/208 pass; 0 new warnings
+- **Velocity:** Dependency work (#29, #30) shipped in single pass; feature work and release ceremony went cleanly
+
+### Next Session Watching Points
+
+1. **global.json** — Always verify no transient workaround commits before pushing.
+2. **Mid-edit status** — Never stop session without validating file syntax and pushing commits.
+3. **PCS API contracts** — Enum/field casing can differ (e.g., MixedCase vs PascalCase); use `StringComparison.OrdinalIgnoreCase`.
+
+---
+
+## Archived Sessions — Pre-2026-06-11
+
 ## 2026-05-21: PR #20 — Parallelize subscription_health GitHub fan-out
 
 **PR:** https://github.com/lewing/maestro.mcp/pull/20  
@@ -278,200 +550,3 @@
 
 **Team recommendation:** Future parallel fan-outs use SQUAD_WORKTREES=1 to isolate agent worktrees.
 
-## 2026-06-24: PR feat/subscription-outcomes — SubscriptionTriggerOutcomes API integration
-
-**Branch:** `feat/subscription-outcomes`  
-**Commits:** `3095e72`, `be26c7a`, `b3fe77b`  
-**Date:** 2026-06-24
-
-**Shipped:**
-- **Step A:** Bumped PCS client `1.1.0-beta.26271.2` → `1.1.0-beta.26324.1` (adds `ISubscriptionTriggerOutcomes` API)
-  - Also bumped `Microsoft.Extensions.DependencyInjection` `10.0.8` → `10.0.9` (transitive dependency from PCS)
-  - Build: 0 warnings, 0 errors; Tests: 208/208 passed ✅
-- **Step B:** Added `maestro_subscription_outcomes` MCP tool
-  - Exposed PCS `ISubscriptionTriggerOutcomes.ListSubscriptionOutcomesAsync` via `IMaestroApiClient`
-  - Added `MaestroService.GetSubscriptionOutcomesAsync` with ShortTtl caching
-  - MCP tool filters: `subscriptionId`, `buildId`, `outcomeType`, `after`/`before` dates, `count` (default 20, max 100)
-  - Markdown output with emoji indicators: ✅ Updated, ❌ Failure, 🔀 HasConflict, ⚠️ UserError, etc.
-  - Added unit test; Tests: 209/209 passed ✅
-- **Step C:** Integrated latest outcome into `maestro_subscription_health`
-  - Added `LatestOutcomeType` and `LatestOutcomeMessage` fields to `SubscriptionHealthResult`
-  - For stale subscriptions, fetch latest outcome (limit: 1) from PCS outcomes API
-  - Surface in formatted output with emoji + type + message
-  - Gracefully handle 404 for subs with zero outcomes (non-error stderr log)
-  - Added TODO comment near oscillation detection for future replacement consideration
-  - Existing heuristics (oscillation, trackedPr, validation) preserved
-
-**PCS API gotchas discovered:**
-- `limit` parameter is **required and positional** (first parameter), not optional
-- `subscriptionId` is **`string`**, not `Guid` — must call `.ToString()` on Guid
-- `subscriptionOutcomeType` is **`string`**, not `OutcomeType` enum — pass enum name as string
-- Parameter order is alphabetical-ish after `limit`; use named arguments for safety
-- `LatestOutcome` property is **NOT on `Subscription`** — it's on `CodeflowSubscriptionStatus` / `CodeflowStatus` (not used in this PR)
-- Property accessor: `_api.SubscriptionTriggerOutcomes.ListSubscriptionOutcomesAsync(...)` (confirmed via `strings | grep get_SubscriptionTriggerOutcomes`)
-
-**Patterns:**
-- **Enum-to-emoji surfacing in MCP markdown:** Used pattern matching on enum `.ToString()` to map outcome types to emoji indicators, making categorized statuses scannable in agent output. Reusable for other status/outcome enumerations.
-- **Graceful API 404 handling:** Wrapped outcome fetch in try/catch with stderr log; 404 is expected for subscriptions with no trigger history. Avoids polluting health results with non-critical errors.
-
-**Verification:**
-- Build: 0 warnings, 0 errors (all 3 commits)
-- Tests: 209/209 passed (1 new test for GetSubscriptionOutcomesAsync)
-- Branch pushed to origin: `feat/subscription-outcomes`
-
-
-## PR #31 Review Fixes (2026-06-15)
-
-**Context**: Copilot pull-request-reviewer flagged 4 valid issues after initial implementation.
-
-**Fixed Issues**:
-
-1. **Count validation missing**: Tool description advertised 1–100 range but accepted any int. Added explicit validation in `GetSubscriptionOutcomes` MCP tool:
-   ```csharp
-   if (count < 1 || count > 100)
-       return $"Invalid count '{count}'. Expected a value between 1 and 100.";
-   ```
-
-2. **Service bounds + 404 handling**: `GetSubscriptionOutcomesAsync` needed defensive clamping and graceful 404 handling for subs with zero outcomes:
-   - Clamp `count` to 20 if null/<=0 (don't enforce tool bounds in service layer, just default sanely)
-   - Wrap PCS call in `try/catch` for `RestApiException` with 404 status → return empty list instead of throwing
-
-3. **Duplicated API wiring**: `CheckSubscriptionHealthAsync` was calling `_api.SubscriptionTriggerOutcomes.ListSubscriptionOutcomesAsync(...)` directly. Replaced with `GetSubscriptionOutcomesAsync(subscriptionId: sub.Id, count: 1, noCache, cancellationToken)` to benefit from centralized caching and 404 handling.
-
-4. **🔴 Real bug — outcome data never rendered**: `LatestOutcomeType`/`LatestOutcomeMessage` were gathered in `SubscriptionHealthResult` but the formatters in `MaestroMcpTools.Subscriptions.cs` never referenced them.
-   - Extracted `GetOutcomeEmoji(string outcomeType)` static helper to share emoji mapping between `maestro_subscription_outcomes` tool and health formatters
-   - Updated **detailed formatter**: renders `Latest outcome: {emoji} {type} — {message}` inline with staleness message for stale subs with outcome data
-   - Updated **compact formatter**: includes outcome emoji+type in the status line after last applied date
-
-**Test Impact**: Added global mock for `ListSubscriptionOutcomesAsync` in test constructor (returns empty list) to handle new service layer call path. All 209 tests passed after fixes.
-
-**Pattern Learned**: Always validate MCP tool formatters actually render new data fields by checking formatted output, not just that the service layer gathers them. This was a silent no-op until the reviewer caught it.
-
-## Second PR Review Fixes (2026-06-24)
-
-**Context**: Second review pass identified 5 refinement issues with the initial PR review fixes.
-
-**Fixed Issues**:
-
-1. **Service count upper bound + culture-stable cache keys**:
-   - Added `if (limit > 100) limit = 100;` to cap count at 100 (tool validates 1-100, but service should be defensively robust)
-   - Replaced `after` and `before` in cache key from `.ToString()` (culture-dependent) to `.ToString("O", CultureInfo.InvariantCulture)` for round-trip ISO 8601 format
-   - Cache keys now stable across cultures and unambiguous for date parsing
-
-2. **🔴 Brittle 404 detection** (real bug):
-   - Replaced `catch (Exception ex) when (ex.GetType().Name == "RestApiException" && ex.Message.Contains("404"))` with typed catch:
-     ```csharp
-     catch (Microsoft.DotNet.ProductConstructionService.Client.RestApiException ex) when (ex.Response.Status == 404)
-     ```
-   - Direct property access is immune to typos, localization, and message format changes
-
-3. **Named arguments in tool service call**:
-   - Replaced `GetSubscriptionOutcomesAsync(parsedSubId, buildId, parsedAfter, parsedBefore, outcomeType, maxCount, noCache, cancellationToken)` with named arguments for clarity and maintainability
-
-4. **Test comment misleading**:
-   - Rephrased from "Mock handles 404 gracefully" (implied the mock was doing error handling) to "Default outcomes mock returns empty so tests not focused on outcomes don't need per-test setup" (accurate: it's just a default to reduce boilerplate)
-
-5. **Duplicate mock setup in test helper**:
-   - Removed redundant `ListSubscriptionOutcomesAsync` mock from `SetupStaleGitHubSubscription` helper — the constructor default applies globally, no need to repeat
-
-**Verification**:
-- Build: 0 warnings, 0 errors
-- Tests: 209/209 passed ✅
-- `git diff origin/master...HEAD -- global.json`: empty (confirmed no SDK workaround leaked)
-
-**Pattern Learned**: Always check `git diff origin/master...HEAD -- <workaround-files>` before pushing to catch accidental commits of transient changes.
-
-### 2026-06-24: MCP UX hardening patterns from helix.mcp
-
-Adopted three UX hardening patterns from helix.mcp into maestro.mcp as a single coherent PR on branch `feat/mcp-ux-hardening`.
-
-**User-Agent identifier (helix.mcp PR #73)**
-- Created `MaestroToolUserAgent.cs` with version-aware UA string (`maestro.mcp/{version}`) and custom `X-Maestro-Mcp-Tool` header
-- Applied to AzDoApiClient and GitHubApiClient static HttpClients via `MaestroToolUserAgent.Apply(client)`
-- Initialized version from assembly metadata in both `MaestroTool.Mcp/Program.cs` and `MaestroTool/Program.cs` entry points
-- PCS client: skipped (no easy policy hook like helix's HelixApiOptions.AddPolicy)
-- Tests: HttpClientConfigurationTests covering UA application and deduplication
-
-**Strict unknown-parameter rejection + did-you-mean (helix.mcp PRs #83 + #84)**
-- Stage A: `JsonUnmappedMemberHandling.Disallow` passed to `WithToolsFromAssembly` via JsonSerializerOptions
-  - Rejects unknown params at binding time with ArgumentException(paramName:"arguments")
-- Stage B: `McpServerOptionsExtensions.AddUnknownParameterFilter`
-  - Pre-SDK dispatch: inspects incoming arguments against tool schema (built once at startup via McpServerTool.Create + InputSchema introspection)
-  - Suggests closest match (Levenshtein threshold: 6) with "Did you mean: X?" message
-  - Full allowed-params list always shown for discoverability
-- Filter pipeline: AddBindingErrorFilter → AddUnknownParameterFilter → SDK dispatch
-- Wired in both Program.cs files, tests cover Levenshtein distance, schema extraction, and end-to-end filter behavior
-
-**Progress notifications on slow tools (helix.mcp PR #48)**
-- Created `ProgressUpdate.cs`: transport-agnostic progress record (Current, Total, Message)
-- Created `ProgressReporter.cs`: ItemStep helper for coarse-grained updates (~10 per operation)
-- Created `McpProgressAdapter.cs`: adapts IProgress<ProgressUpdate> → IProgress<ProgressNotificationValue>
-- Instrumented `maestro_subscription_health` with per-subscription progress during parallel fan-out ("Checked N of M: source → target")
-- Instrumented `maestro_flow_graph` with start + completion progress ("Computing flow graph..." → "Resolving X nodes/edges...")
-- MCP SDK auto-injects IProgress<ProgressNotificationValue> when client supplies progress token; adapter translates at tool boundary
-- Service layer remains MCP-agnostic: `GetSubscriptionHealthAsync` accepts `IProgress<ProgressUpdate>?` parameter
-
-**Key learnings:**
-- UA setup: Apply after HttpClient creation but before auth cascade; ensure idempotency for multiple Apply() calls
-- MCP CallToolFilter pattern: Build filter chain via `options.Filters.Request.CallToolFilters.Add(next => async (request, ct) => ...)`
-- IProgress<T> auto-injection: MCP SDK automatically injects IProgress<ProgressNotificationValue> when method signature includes it
-  - Hidden from JSON schema (not a user-facing parameter)
-  - Adapter at tool boundary keeps service layer transport-agnostic
-- UnmappedMemberHandling.Disallow: Must be passed to WithToolsFromAssembly, not set on McpServerOptions.JsonSerializerOptions (property doesn't exist)
-- TypeInfoResolver requirement: Must set `new DefaultJsonTypeInfoResolver()` when using custom JsonSerializerOptions to avoid InvalidOperationException from SDK's MakeReadOnly() call
-
-**Commits:**
-- eb2a6fe: Add MCP User-Agent identifier for maestro.mcp
-- 481cb2e: Add strict unknown-parameter rejection with did-you-mean hints
-- b539076: Add progress notifications for slow MCP tools
-
-**Tests:** 231/231 passed (up from 215 baseline)
-
-**Verification:**
-- Build: 0 warnings, 0 errors
-- global.json: unchanged before all commits and before final push
-
-### 2026-06-24: PR #34 review fixes
-
-**Fixed 6 issues from PR #34 review:**
-
-1. **🔴 Concurrent progress reporting bug** in `MaestroService.GetSubscriptionHealthAsync`:
-   - BEFORE: Used LINQ enumeration index (`Select(async (sub, idx) => ...)`) — tasks complete out of order, progress jumps backward
-   - AFTER: Use `int completed = 0` + `Interlocked.Increment(ref completed)` for thread-safe monotonic counter
-   - Emit at step intervals: `if (done == total || done % step == 0) progress?.Report(...)`
-   - Reduced chattiness: ~10 updates per operation via `ProgressReporter.ItemStep(total)`
-   - Simplified message: `$"Checked {done} of {total} subscriptions"` (removed per-repo names)
-
-2. **🔴 FormatRepoName can throw** on malformed/relative URIs:
-   - BEFORE: `new Uri(...)` throws `UriFormatException` on `"dotnet/runtime"` or malformed strings
-   - AFTER: Wrap in try/catch with `Uri.TryCreate`, return raw input on failure
-   - Progress is best-effort cosmetics — must **never** fail the operation
-
-3. **🔴 flow_graph validation order** — early return without completion update:
-   - BEFORE: Emits first progress update, then validates `days` parameter → client UI stuck on validation failure
-   - AFTER: Validate FIRST (`if (days is < 1 or > 30) return ...`), THEN emit progress
-
-4. **🟡 Use AssemblyInformationalVersion** instead of AssemblyVersion:
-   - BEFORE: Read `Assembly.GetName().Version` → 4-part like `"0.17.0.0"`
-   - AFTER: Read `AssemblyInformationalVersionAttribute.InformationalVersion` → 3-part semver like `"0.17.0"` or `"0.17.0+abc123"`
-   - Strip `+gitsha` suffix: `version = version[..version.IndexOf('+')]`
-   - Fallback to AssemblyVersion if InformationalVersion not present
-   - Added Initialize(Assembly) overload to simplify entry point calls
-
-5. **🟢 Remove redundant using** in McpProgressAdapter.cs:
-   - File declares `namespace MaestroTool.Core;` but also had `using MaestroTool.Core;`
-
-6. **Add tests** for concurrent progress + FormatRepoName robustness:
-   - `GetSubscriptionHealthAsync_WithProgress_ReportsMonotonicallyIncreasingProgress`: Creates 10 subscriptions, verifies progress never decreases
-   - `FormatRepoName_HandlesVariousInputs`: Theory test with 6 cases (null, empty, relative path, malformed URI, single segment, full URL)
-   - Updated UA test to verify 3-part version format (no 4th zero)
-
-**Commit:** 0a3d295  
-**Tests:** 240/240 passed (up from 231 baseline)  
-**Verification:** `git diff origin/master...HEAD -- global.json` empty ✅
-
-**Key learning:**
-- **NEVER use LINQ index for progress in parallel Task.WhenAll** — tasks complete out of order
-- **Always validate BEFORE emitting first progress** — prevents stuck UI on validation failures
-- **Read InformationalVersion, strip +gitsha** — semver > 4-part version for UA strings
-- **Progress formatting must be exception-safe** — wrap URI parsing in try/catch

@@ -328,3 +328,81 @@ The following do not need my review:
 ### Decision 4: 🔴 Pre-release holds — confirmed
 
 NSubstitute 6.0.0-rc.1 and xunit.runner.visualstudio 4.0.0-pre.4 stay on hold until stable releases. No action needed.
+
+---
+
+## Amos — Issue #19 Flow Graph Days Bounds — 2026-06-24
+
+**Author:** Amos  
+**Status:** Shipped (PR #33 docs update included scope notes)
+
+### Decision
+
+`maestro_flow_graph` default scope reduced from 7 days to 3 days. Callers may widen the window via `days` parameter (1-30, bounds-enforced).
+
+### Rationale
+
+A 30-day upper bound prevents accidental pathological graph queries while preserving opt-in paths for deeper investigation. Bounds validated in test suite before API calls; negative, zero, and >30 values are rejected before MCP tool invocation.
+
+---
+
+## Naomi — `maestro_channels` Filter Parameters — 2026-05-22
+
+**Author:** Naomi  
+**Status:** Shipped (PR #23)
+
+### Decision
+
+Add optional parameters to `maestro_channels`:
+
+- `filter`: case-insensitive substring match on channel name.
+- `classification`: passed through to PCS.
+- `compact`: bool flag returning `name → id` lines instead of markdown.
+
+No-argument calls preserve full bulleted list. `classification` receives distinct cache entry; `filter` applied post-cache for ad hoc searches.
+
+### Deferred
+
+Pagination (channels is small dataset), and similar filters for `default_channels` and `subscriptions` (have natural API filters).
+
+---
+
+## Naomi — MCP Description Trim Result — 2026-06-11
+
+**Author:** Naomi  
+**Status:** Complete (PR #16)
+
+### Achieved Metrics
+
+Trimmed tool descriptions from ~430 words / ~559 tokens to ~280 words / ~364 tokens. Measured result:
+
+| File | Before words | After words | Savings |
+|---|---:|---:|---:|
+| Total | **413** | **251** | **162 words, 211 tokens saved** |
+
+### Rationale
+
+Descriptions are always-loaded routing context. Holden's audit rules applied: lead with a verb, keep to 1-2 sentences, move filter semantics to parameter `[Description]` attributes.
+
+---
+
+## Naomi — Subscription Health Filtering and Compact Output — 2026-05-22
+
+**Author:** Naomi  
+**Status:** Shipped (PR #20)
+
+### Decision
+
+Add opt-in filtering to `maestro_subscription_health`:
+
+- `staleOnly`: omits healthy subscriptions.
+- `channelFilter`: case-insensitive channel name match.
+- `sourceRepoFilter`: case-insensitive repo URL or short name match.
+- `compact`: one line per subscription.
+
+All optional; no-argument output unchanged. Filters applied post-computation (preserves parallel fan-out perf).
+
+### Measurement
+
+For dotnet/dotnet VMR data: detailed output 24,398 bytes (93 subscriptions / 43 stale); `staleOnly + compact` output 3,049 bytes (~87.5% reduction).
+
