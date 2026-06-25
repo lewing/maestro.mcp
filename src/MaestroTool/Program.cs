@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using ConsoleAppFramework;
@@ -8,6 +9,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
+
+MaestroToolUserAgent.Initialize(typeof(Commands).Assembly.GetName().Version?.ToString() ?? "0.0.0");
 
 // DI setup (shared by both CLI and MCP)
 var services = new ServiceCollection();

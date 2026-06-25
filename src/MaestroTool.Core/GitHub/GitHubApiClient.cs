@@ -16,7 +16,7 @@ public class GitHubApiClient : IGitHubApiClient
     private static HttpClient CreateHttpClient()
     {
         var client = new HttpClient();
-        client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("maestro-mcp", "1.0"));
+        MaestroToolUserAgent.Apply(client);
         client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github.v3+json"));
         
         // Auth cascade: 1. GITHUB_TOKEN env var, 2. gh auth token, 3. anonymous
