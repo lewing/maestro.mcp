@@ -174,6 +174,14 @@ public partial class MaestroMcpTools
                     status = $"⚠️ STALE ({r.CommitsBehind.Value} commits behind)";
                 else
                     status = $"⚠️ STALE (~{r.BuildsBehind} builds behind)";
+
+                // Surface latest outcome if available
+                if (!string.IsNullOrEmpty(r.LatestOutcomeType))
+                {
+                    var emoji = GetOutcomeEmoji(r.LatestOutcomeType);
+                    var msg = string.IsNullOrWhiteSpace(r.LatestOutcomeMessage) ? "" : $" — {r.LatestOutcomeMessage}";
+                    status += $"\n  Latest outcome: {emoji} {r.LatestOutcomeType}{msg}";
+                }
             }
             else
             {

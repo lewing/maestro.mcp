@@ -319,3 +319,30 @@
 - Tests: 209/209 passed (1 new test for GetSubscriptionOutcomesAsync)
 - Branch pushed to origin: `feat/subscription-outcomes`
 
+
+## PR #31 Review Fixes (2026-06-15)
+
+**Context**: Copilot pull-request-reviewer flagged 4 valid issues after initial implementation.
+
+**Fixed Issues**:
+
+1. **Count validation missing**: Tool description advertised 1–100 range but accepted any int. Added explicit validation in `GetSubscriptionOutcomes` MCP tool:
+   ```csharp
+   if (count < 1 || count > 100)
+       return $"Invalid count '{count}'. Expected a value between 1 and 100.";
+   ```
+
+2. **Service bounds + 404 handling**: `GetSubscriptionOutcomesAsync` needed defensive clamping and graceful 404 handling for subs with zero outcomes:
+   - Clamp `count` to 20 if null/<=0 (don't enforce tool bounds in service layer, just default sanely)
+   - Wrap PCS call in `try/catch` for `RestApiException` with 404 status → return empty list instead of throwing
+
+3. **Duplicated API wiring**: `CheckSubscriptionHealthAsync` was calling `_api.SubscriptionTriggerOutcomes.ListSubscriptionOutcomesAsync(...)` directly. Replaced with `GetSubscriptionOutcomesAsync(subscriptionId: sub.Id, count: 1, noCache, cancellationToken)` to benefit from centralized caching and 404 handling.
+
+4. **🔴 Real bug — outcome data never rendered**: `LatestOutcomeType`/`LatestOutcomeMessage` were gathered in `SubscriptionHealthResult` but the formatters in `MaestroMcpTools.Subscriptions.cs` never referenced them.
+   - Extracted `GetOutcomeEmoji(string outcomeType)` static helper to share emoji mapping between `maestro_subscription_outcomes` tool and health formatters
+   - Updated **detailed formatter**: renders `Latest outcome: {emoji} {type} — {message}` inline with staleness message for stale subs with outcome data
+   - Updated **compact formatter**: includes outcome emoji+type in the status line after last applied date
+
+**Test Impact**: Added global mock for `ListSubscriptionOutcomesAsync` in test constructor (returns empty list) to handle new service layer call path. All 209 tests passed after fixes.
+
+**Pattern Learned**: Always validate MCP tool formatters actually render new data fields by checking formatted output, not just that the service layer gathers them. This was a silent no-op until the reviewer caught it.
