@@ -19,6 +19,19 @@ public class MaestroServiceTests : IDisposable
         _client = Substitute.For<IMaestroApiClient>();
         _cache = new CacheService(_dbPath);
         _service = new MaestroService(_client, _cache);
+
+        // Mock ListSubscriptionOutcomesAsync globally to return empty list (handles 404 gracefully)
+        _client.ListSubscriptionOutcomesAsync(
+            Arg.Any<int>(),
+            Arg.Any<DateTimeOffset?>(),
+            Arg.Any<DateTimeOffset?>(),
+            Arg.Any<int?>(),
+            Arg.Any<string?>(),
+            Arg.Any<string?>(),
+            Arg.Any<string?>(),
+            Arg.Any<string?>(),
+            Arg.Any<CancellationToken>())
+            .Returns(new List<SubscriptionTriggerOutcome>());
     }
 
     public void Dispose()
@@ -2535,6 +2548,19 @@ public class MaestroServiceTests : IDisposable
             .Returns(new List<Subscription> { sub });
         _client.GetLatestBuildAsync(sub.SourceRepository, channel.Id, Arg.Any<CancellationToken>())
             .Returns(latestBuild);
+
+        // Mock ListSubscriptionOutcomesAsync to return empty list (handles 404 gracefully)
+        _client.ListSubscriptionOutcomesAsync(
+            Arg.Any<int>(),
+            Arg.Any<DateTimeOffset?>(),
+            Arg.Any<DateTimeOffset?>(),
+            Arg.Any<int?>(),
+            Arg.Any<string?>(),
+            Arg.Any<string?>(),
+            Arg.Any<string?>(),
+            Arg.Any<string?>(),
+            Arg.Any<CancellationToken>())
+            .Returns(new List<SubscriptionTriggerOutcome>());
 
         return (service, sub, channel, lastApplied, latestBuild);
     }

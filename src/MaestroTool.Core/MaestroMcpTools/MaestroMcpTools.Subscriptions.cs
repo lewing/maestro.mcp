@@ -279,8 +279,11 @@ public partial class MaestroMcpTools
         var pr = CompactPrReference(result.TrackedPr?.PrUrl);
         var prefix = result.Error != null ? "❌" : result.IsStale ? "⚠️" : "✅";
         var error = result.Error != null ? $"; error: {result.Error}" : "";
+        var outcome = result.IsStale && !string.IsNullOrEmpty(result.LatestOutcomeType)
+            ? $"; outcome: {GetOutcomeEmoji(result.LatestOutcomeType)} {result.LatestOutcomeType}"
+            : "";
 
-        return $"{prefix} {source} → {result.TargetBranch}: {status} (PR: {pr}{error})";
+        return $"{prefix} {source} → {result.TargetBranch}: {status} (PR: {pr}{error}{outcome})";
     }
 
     private static string CompactPrReference(string? prUrl)
@@ -470,7 +473,10 @@ public partial class MaestroMcpTools
                 return $"Invalid outcome type '{outcomeType}'. Valid types: {string.Join(", ", validTypes)}.";
         }
 
-        var maxCount = count.HasValue ? Math.Min(count.Value, 100) : 20;
+        if (count.HasValue && (count.Value < 1 || count.Value > 100))
+            return $"Invalid count '{count.Value}'. Expected a value between 1 and 100.";
+
+        var maxCount = count ?? 20;
 
         var outcomes = await _service.GetSubscriptionOutcomesAsync(
             parsedSubId, buildId, parsedAfter, parsedBefore, outcomeType, maxCount, noCache, cancellationToken);
@@ -483,17 +489,7 @@ public partial class MaestroMcpTools
 
         foreach (var outcome in outcomes)
         {
-            var emoji = outcome.Type.ToString() switch
-            {
-                "Updated" => "✅",
-                "NoUpdate" => "⏭️",
-                "Failure" => "❌",
-                "UserError" => "⚠️",
-                "HasConflict" => "🔀",
-                "Rescheduled" => "🕒",
-                "NotUpdatable" => "🚫",
-                _ => "•"
-            };
+            var emoji = GetOutcomeEmoji(outcome.Type.ToString());
 
             var prInfo = !string.IsNullOrEmpty(outcome.PrUrl) ? $" | PR: {outcome.PrUrl}" : "";
             sb.AppendLine($"{emoji} **{outcome.Type}** — {outcome.Date:u} | {outcome.SourceRepository} → {outcome.TargetRepository} ({outcome.TargetBranch}){prInfo}");
@@ -504,4 +500,16 @@ public partial class MaestroMcpTools
 
         return Timestamp(noCache) + sb.ToString();
     }
+
+    private static string GetOutcomeEmoji(string outcomeType) => outcomeType switch
+    {
+        "Updated" => "✅",
+        "NoUpdate" => "⏭️",
+        "Failure" => "❌",
+        "UserError" => "⚠️",
+        "HasConflict" => "🔀",
+        "Rescheduled" => "🕒",
+        "NotUpdatable" => "🚫",
+        _ => "•"
+    };
 }

@@ -197,23 +197,16 @@ public class MaestroService
                 buildsBehind = latestBuild.Id - lastApplied.Id; // Approximate
 
                 // Fetch latest outcome for stale subscriptions
-                try
+                var outcomes = await GetSubscriptionOutcomesAsync(
+                    subscriptionId: sub.Id,
+                    count: 1,
+                    noCache: noCache,
+                    cancellationToken: cancellationToken);
+                var latestOutcome = outcomes.FirstOrDefault();
+                if (latestOutcome != null)
                 {
-                    var outcomes = await _client.ListSubscriptionOutcomesAsync(
-                        limit: 1,
-                        subscriptionId: sub.Id.ToString(),
-                        cancellationToken: cancellationToken);
-                    var latestOutcome = outcomes.FirstOrDefault();
-                    if (latestOutcome != null)
-                    {
-                        latestOutcomeType = latestOutcome.Type.ToString();
-                        latestOutcomeMessage = latestOutcome.Message;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    // Endpoint may 404 on subs with zero outcomes; not an error
-                    Console.Error.WriteLine($"[maestro-mcp] Could not fetch latest outcome for {sub.Id}: {ex.Message}");
+                    latestOutcomeType = latestOutcome.Type.ToString();
+                    latestOutcomeMessage = latestOutcome.Message;
                 }
 
                 // For GitHub-hosted source repos, use GitHub compare API for accurate commit distance
@@ -568,18 +561,30 @@ public class MaestroService
         bool noCache = false,
         CancellationToken cancellationToken = default)
     {
-        var limit = count ?? 20;
+        // Clamp count defensively; tool should validate, but guard against null/invalid
+        var limit = count is > 0 ? count.Value : 20;
         var key = $"sub-outcomes:{subscriptionId}:{buildId}:{after}:{before}:{outcomeType}:{limit}";
         if (noCache) _cache.Invalidate(key);
         return await _cache.GetOrAddAsync(key,
-            () => _client.ListSubscriptionOutcomesAsync(
-                limit: limit,
-                after: after,
-                before: before,
-                buildId: buildId,
-                subscriptionId: subscriptionId?.ToString(),
-                subscriptionOutcomeType: outcomeType,
-                cancellationToken: cancellationToken),
+            async () =>
+            {
+                try
+                {
+                    return await _client.ListSubscriptionOutcomesAsync(
+                        limit: limit,
+                        after: after,
+                        before: before,
+                        buildId: buildId,
+                        subscriptionId: subscriptionId?.ToString(),
+                        subscriptionOutcomeType: outcomeType,
+                        cancellationToken: cancellationToken);
+                }
+                catch (Exception ex) when (ex.GetType().Name == "RestApiException" && ex.Message.Contains("404"))
+                {
+                    // 404 is expected for subscriptions with zero outcomes
+                    return new List<SubscriptionTriggerOutcome>();
+                }
+            },
             ShortTtl);
     }
 
