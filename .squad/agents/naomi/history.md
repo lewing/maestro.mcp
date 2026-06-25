@@ -346,3 +346,37 @@
 **Test Impact**: Added global mock for `ListSubscriptionOutcomesAsync` in test constructor (returns empty list) to handle new service layer call path. All 209 tests passed after fixes.
 
 **Pattern Learned**: Always validate MCP tool formatters actually render new data fields by checking formatted output, not just that the service layer gathers them. This was a silent no-op until the reviewer caught it.
+
+## Second PR Review Fixes (2026-06-24)
+
+**Context**: Second review pass identified 5 refinement issues with the initial PR review fixes.
+
+**Fixed Issues**:
+
+1. **Service count upper bound + culture-stable cache keys**:
+   - Added `if (limit > 100) limit = 100;` to cap count at 100 (tool validates 1-100, but service should be defensively robust)
+   - Replaced `after` and `before` in cache key from `.ToString()` (culture-dependent) to `.ToString("O", CultureInfo.InvariantCulture)` for round-trip ISO 8601 format
+   - Cache keys now stable across cultures and unambiguous for date parsing
+
+2. **🔴 Brittle 404 detection** (real bug):
+   - Replaced `catch (Exception ex) when (ex.GetType().Name == "RestApiException" && ex.Message.Contains("404"))` with typed catch:
+     ```csharp
+     catch (Microsoft.DotNet.ProductConstructionService.Client.RestApiException ex) when (ex.Response.Status == 404)
+     ```
+   - Direct property access is immune to typos, localization, and message format changes
+
+3. **Named arguments in tool service call**:
+   - Replaced `GetSubscriptionOutcomesAsync(parsedSubId, buildId, parsedAfter, parsedBefore, outcomeType, maxCount, noCache, cancellationToken)` with named arguments for clarity and maintainability
+
+4. **Test comment misleading**:
+   - Rephrased from "Mock handles 404 gracefully" (implied the mock was doing error handling) to "Default outcomes mock returns empty so tests not focused on outcomes don't need per-test setup" (accurate: it's just a default to reduce boilerplate)
+
+5. **Duplicate mock setup in test helper**:
+   - Removed redundant `ListSubscriptionOutcomesAsync` mock from `SetupStaleGitHubSubscription` helper — the constructor default applies globally, no need to repeat
+
+**Verification**:
+- Build: 0 warnings, 0 errors
+- Tests: 209/209 passed ✅
+- `git diff origin/master...HEAD -- global.json`: empty (confirmed no SDK workaround leaked)
+
+**Pattern Learned**: Always check `git diff origin/master...HEAD -- <workaround-files>` before pushing to catch accidental commits of transient changes.

@@ -461,16 +461,28 @@ public partial class MaestroMcpTools
         DateTimeOffset? parsedAfter = null;
         if (!string.IsNullOrEmpty(after))
         {
-            if (!DateTimeOffset.TryParse(after, out var date))
-                return "Invalid 'after' date format. Use ISO 8601 (e.g., '2026-06-01T00:00:00Z').";
+            if (!DateTimeOffset.TryParse(
+                    after,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
+                    out var date))
+            {
+                return $"Invalid `after` value '{after}'. Expected ISO 8601 (e.g. '2026-06-20T14:30:00Z').";
+            }
             parsedAfter = date;
         }
 
         DateTimeOffset? parsedBefore = null;
         if (!string.IsNullOrEmpty(before))
         {
-            if (!DateTimeOffset.TryParse(before, out var date))
-                return "Invalid 'before' date format. Use ISO 8601 (e.g., '2026-06-24T00:00:00Z').";
+            if (!DateTimeOffset.TryParse(
+                    before,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
+                    out var date))
+            {
+                return $"Invalid `before` value '{before}'. Expected ISO 8601 (e.g. '2026-06-20T14:30:00Z').";
+            }
             parsedBefore = date;
         }
 
@@ -500,17 +512,22 @@ public partial class MaestroMcpTools
             return "No subscription outcomes found matching the criteria.";
 
         var sb = new StringBuilder();
-        sb.AppendLine($"Found {outcomes.Count} outcome(s):\n");
+        sb.AppendLine($"**Subscription Outcomes** ({outcomes.Count} result{(outcomes.Count == 1 ? "" : "s")})");
+        sb.AppendLine();
 
         foreach (var outcome in outcomes)
         {
             var emoji = GetOutcomeEmoji(outcome.Type.ToString());
-
-            var prInfo = !string.IsNullOrEmpty(outcome.PrUrl) ? $" | PR: {outcome.PrUrl}" : "";
-            sb.AppendLine($"{emoji} **{outcome.Type}** — {outcome.Date:u} | {outcome.SourceRepository} → {outcome.TargetRepository} ({outcome.TargetBranch}){prInfo}");
-            if (!string.IsNullOrEmpty(outcome.Message))
-                sb.AppendLine($"   {outcome.Message}");
-            sb.AppendLine();
+            var message = outcome.Message ?? "";
+            // Collapse newlines and truncate to 80 chars
+            message = message.Replace("\r\n", " ").Replace("\n", " ").Replace("\r", " ");
+            if (message.Length > 80)
+                message = message.Substring(0, 77) + "…";
+            
+            var prUrl = !string.IsNullOrWhiteSpace(outcome.PrUrl) ? outcome.PrUrl : "—";
+            var subIdShort = outcome.SubscriptionId.ToString()[..8];
+            
+            sb.AppendLine($"{outcome.Date:yyyy-MM-dd HH:mm}Z {emoji}{outcome.Type,-14} #{outcome.BuildId,-6} sub:{subIdShort} {prUrl,-45} {message}");
         }
 
         return Timestamp(noCache) + sb.ToString();
