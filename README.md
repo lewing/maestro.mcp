@@ -233,7 +233,7 @@ Future versions may include destructive actions (delete subscription, remove def
 
 ## Available Tools
 
-The server registers **20 MCP tools** for querying and triggering Maestro/BAR operations:
+The server registers **21 MCP tools** for querying and triggering Maestro/BAR operations:
 
 | Tool Name | Description | Key Parameters |
 |-----------|-------------|-----------------|
@@ -245,7 +245,7 @@ The server registers **20 MCP tools** for querying and triggering Maestro/BAR op
 | `maestro_channels` | List all channels | `noCache`: bypass cache |
 | `maestro_channel` | Get a specific channel by ID or name | `channelId`: channel ID (integer) or channel name (string); `noCache`: bypass cache |
 | `maestro_default_channels` | Get default channels for a repository | `repository`: source repository URL; `noCache`: bypass cache |
-| `maestro_subscription_health` | Check subscription health for a target repository — detects stale subscriptions | `targetRepository`: repo URL; `noCache`, `includeCommitDetails`, `validate` (optional bools) |
+| `maestro_subscription_health` | Check subscription health for a target repository — detects stale subscriptions and surfaces the latest trigger outcome (Updated/Failure/HasConflict/UserError/…) inline | `targetRepository`: repo URL; `noCache`, `includeCommitDetails`, `validate` (optional bools) |
 | `maestro_build_freshness` | Check build freshness for a channel via aka.ms redirect | `channel`: channel short name (e.g. '10.0.1xx'); `noCache`: bypass cache |
 | `maestro_trigger_subscription` | Trigger a subscription — provide `buildId` directly, or `sourceRepository` + `channelName` to auto-resolve | `subscriptionId`: UUID; `buildId` (optional); `sourceRepository`, `channelName` (optional, for auto-resolve); `force` (optional bool) |
 | `maestro_trigger_daily_update` | Trigger all daily-update subscriptions | None |
@@ -253,8 +253,9 @@ The server registers **20 MCP tools** for querying and triggering Maestro/BAR op
 | `maestro_codeflow_pr` | Get the tracked PR for a specific subscription | `subscriptionId`: UUID; `noCache`: bypass cache |
 | `maestro_backflow_status` | Get backflow status for a VMR build | `vmrBuildId`: build ID; `noCache`: bypass cache |
 | `maestro_subscription_history` | Get update history for a subscription — shows timestamped actions and errors | `subscriptionId`: UUID; `noCache`: bypass cache |
+| `maestro_subscription_outcomes` | List recent subscription trigger outcomes from PCS (Updated / NoUpdate / NotUpdatable / Failure / UserError / HasConflict / Rescheduled), one outcome per line with emoji, build ID, PR URL, and message | `subscriptionId`, `buildId`, `outcomeType`, `after`, `before`, `count` (all optional; ISO 8601 for dates, 1–100 for count); `noCache`: bypass cache |
 | `maestro_build_graph` | Get the full dependency graph for a build | `buildId`: BAR build ID; `noCache`: bypass cache |
-| `maestro_flow_graph` | Get the dependency flow graph for a channel | `channelId`: channel ID; `days`: lookback (default 7); `includeArcade`, `includeBuildTimes`, `includeDisabledSubscriptions` (optional bools); `noCache`: bypass cache |
+| `maestro_flow_graph` | Get the dependency flow graph for a channel | `channelId`: channel ID; `days`: lookback (default 3, max 30); `includeArcade`, `includeBuildTimes`, `includeDisabledSubscriptions` (optional bools); `noCache`: bypass cache |
 | `maestro_codeflow_statuses` | Get codeflow status (forward flow and backflow) for a repository and branch | `repositoryUrl`: repo URL (default: VMR); `branch`: branch name (default: main); `noCache`: bypass cache |
 | `maestro_clear_cache` | Clear the shared SQLite cache | None |
 
