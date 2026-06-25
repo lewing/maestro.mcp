@@ -561,9 +561,12 @@ public class MaestroService
         bool noCache = false,
         CancellationToken cancellationToken = default)
     {
-        // Clamp count defensively; tool should validate, but guard against null/invalid
+        // Defensive clamping: if count is null or non-positive, default to 20; cap at 100
         var limit = count is > 0 ? count.Value : 20;
-        var key = $"sub-outcomes:{subscriptionId}:{buildId}:{after}:{before}:{outcomeType}:{limit}";
+        if (limit > 100)
+            limit = 100;
+
+        var key = $"sub-outcomes:{subscriptionId}:{buildId}:{after?.ToString("O", System.Globalization.CultureInfo.InvariantCulture)}:{before?.ToString("O", System.Globalization.CultureInfo.InvariantCulture)}:{outcomeType}:{limit}";
         if (noCache) _cache.Invalidate(key);
         return await _cache.GetOrAddAsync(key,
             async () =>
@@ -579,9 +582,9 @@ public class MaestroService
                         subscriptionOutcomeType: outcomeType,
                         cancellationToken: cancellationToken);
                 }
-                catch (Exception ex) when (ex.GetType().Name == "RestApiException" && ex.Message.Contains("404"))
+                catch (Microsoft.DotNet.ProductConstructionService.Client.RestApiException ex) when (ex.Response.Status == 404)
                 {
-                    // 404 is expected for subscriptions with zero outcomes
+                    // Subscriptions with zero trigger outcomes return 404 - this is expected
                     return new List<SubscriptionTriggerOutcome>();
                 }
             },

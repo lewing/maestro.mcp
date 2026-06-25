@@ -487,7 +487,14 @@ public partial class MaestroMcpTools
         var maxCount = count ?? 20;
 
         var outcomes = await _service.GetSubscriptionOutcomesAsync(
-            parsedSubId, buildId, parsedAfter, parsedBefore, outcomeType, maxCount, noCache, cancellationToken);
+            subscriptionId: parsedSubId,
+            buildId: buildId,
+            after: parsedAfter,
+            before: parsedBefore,
+            outcomeType: outcomeType,
+            count: maxCount,
+            noCache: noCache,
+            cancellationToken: cancellationToken);
 
         if (outcomes.Count == 0)
             return "No subscription outcomes found matching the criteria.";
