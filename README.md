@@ -245,7 +245,7 @@ The server registers **21 MCP tools** for querying and triggering Maestro/BAR op
 | `maestro_channels` | List all channels | `noCache`: bypass cache |
 | `maestro_channel` | Get a specific channel by ID or name | `channelId`: channel ID (integer) or channel name (string); `noCache`: bypass cache |
 | `maestro_default_channels` | Get default channels for a repository | `repository`: source repository URL; `noCache`: bypass cache |
-| `maestro_subscription_health` | Check subscription health for a target repository — detects stale subscriptions and surfaces the latest trigger outcome (Updated/Failure/HasConflict/UserError/…) inline | `targetRepository`: repo URL; `noCache`, `includeCommitDetails`, `validate` (optional bools) |
+| `maestro_subscription_health` | Check subscription health for a target repository — detects stale subscriptions and surfaces the latest trigger outcome (Updated/Failure/HasConflict/UserError/…) inline | `targetRepository`: repo URL; `noCache`, `includeCommitDetails`, `validate`, `staleOnly`, `compact` (optional bools); `channelFilter`, `sourceRepoFilter` (optional strings) |
 | `maestro_build_freshness` | Check build freshness for a channel via aka.ms redirect | `channel`: channel short name (e.g. '10.0.1xx'); `noCache`: bypass cache |
 | `maestro_trigger_subscription` | Trigger a subscription — provide `buildId` directly, or `sourceRepository` + `channelName` to auto-resolve | `subscriptionId`: UUID; `buildId` (optional); `sourceRepository`, `channelName` (optional, for auto-resolve); `force` (optional bool) |
 | `maestro_trigger_daily_update` | Trigger all daily-update subscriptions | None |
