@@ -189,10 +189,25 @@ public class MaestroService
             var buildsBehind = 0;
             int? commitsBehind = null;
             IReadOnlyList<CommitInfo>? recentCommits = null;
+            string? latestOutcomeType = null;
+            string? latestOutcomeMessage = null;
 
             if (isStale && latestBuild != null && lastApplied != null)
             {
                 buildsBehind = latestBuild.Id - lastApplied.Id; // Approximate
+
+                // Fetch latest outcome for stale subscriptions
+                var outcomes = await GetSubscriptionOutcomesAsync(
+                    subscriptionId: sub.Id,
+                    count: 1,
+                    noCache: noCache,
+                    cancellationToken: cancellationToken);
+                var latestOutcome = outcomes.FirstOrDefault();
+                if (latestOutcome != null)
+                {
+                    latestOutcomeType = latestOutcome.Type.ToString();
+                    latestOutcomeMessage = latestOutcome.Message;
+                }
 
                 // For GitHub-hosted source repos, use GitHub compare API for accurate commit distance
                 if (_gitHubClient != null && IsGitHubRepository(sub.SourceRepository))
@@ -331,7 +346,9 @@ public class MaestroService
                 Oscillation: oscillation,
                 TrackedPr: trackedPrDiagnosis,
                 VmrConsumedCommit: vmrConsumedCommit,
-                VmrConsumedDate: vmrConsumedDate
+                VmrConsumedDate: vmrConsumedDate,
+                LatestOutcomeType: latestOutcomeType,
+                LatestOutcomeMessage: latestOutcomeMessage
             );
         }
         catch (Exception ex)
@@ -348,7 +365,9 @@ public class MaestroService
                 LastAppliedDate: sub.LastAppliedBuild?.DateProduced,
                 LatestBuildId: null,
                 LatestBuildDate: null,
-                Error: ex.Message
+                Error: ex.Message,
+                LatestOutcomeType: null,
+                LatestOutcomeMessage: null
             );
         }
         finally
@@ -526,6 +545,49 @@ public class MaestroService
         if (noCache) _cache.Invalidate(key);
         return _cache.GetOrAddAsync(key,
             () => _client.GetCodeflowStatusesAsync(repositoryUrl, branch, cancellationToken),
+            ShortTtl);
+    }
+
+    /// <summary>
+    /// Get subscription trigger outcomes.
+    /// </summary>
+    public async Task<List<SubscriptionTriggerOutcome>> GetSubscriptionOutcomesAsync(
+        Guid? subscriptionId = null,
+        int? buildId = null,
+        DateTimeOffset? after = null,
+        DateTimeOffset? before = null,
+        string? outcomeType = null,
+        int? count = null,
+        bool noCache = false,
+        CancellationToken cancellationToken = default)
+    {
+        // Defensive clamping: if count is null or non-positive, default to 20; cap at 100
+        var limit = count is > 0 ? count.Value : 20;
+        if (limit > 100)
+            limit = 100;
+
+        var key = $"sub-outcomes:{subscriptionId}:{buildId}:{after?.ToString("O", System.Globalization.CultureInfo.InvariantCulture)}:{before?.ToString("O", System.Globalization.CultureInfo.InvariantCulture)}:{outcomeType}:{limit}";
+        if (noCache) _cache.Invalidate(key);
+        return await _cache.GetOrAddAsync(key,
+            async () =>
+            {
+                try
+                {
+                    return await _client.ListSubscriptionOutcomesAsync(
+                        limit: limit,
+                        after: after,
+                        before: before,
+                        buildId: buildId,
+                        subscriptionId: subscriptionId?.ToString(),
+                        subscriptionOutcomeType: outcomeType,
+                        cancellationToken: cancellationToken);
+                }
+                catch (Microsoft.DotNet.ProductConstructionService.Client.RestApiException ex) when (ex.Response.Status == 404)
+                {
+                    // Subscriptions with zero trigger outcomes return 404 - this is expected
+                    return new List<SubscriptionTriggerOutcome>();
+                }
+            },
             ShortTtl);
     }
 
@@ -897,7 +959,9 @@ public record SubscriptionHealthResult(
     OscillationResult? Oscillation = null,
     TrackedPrDiagnosis? TrackedPr = null,
     string? VmrConsumedCommit = null,
-    DateTimeOffset? VmrConsumedDate = null
+    DateTimeOffset? VmrConsumedDate = null,
+    string? LatestOutcomeType = null,
+    string? LatestOutcomeMessage = null
 );
 
 public record OscillationResult(

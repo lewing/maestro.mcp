@@ -277,3 +277,106 @@
 **Incident:** Shared repository environment caused git branch contention during concurrent execution with alex-1 and amos. Mitigation: ran entire workflow (checkout → edits → build → test → commit) atomically within single bash session.
 
 **Team recommendation:** Future parallel fan-outs use SQUAD_WORKTREES=1 to isolate agent worktrees.
+
+## 2026-06-24: PR feat/subscription-outcomes — SubscriptionTriggerOutcomes API integration
+
+**Branch:** `feat/subscription-outcomes`  
+**Commits:** `3095e72`, `be26c7a`, `b3fe77b`  
+**Date:** 2026-06-24
+
+**Shipped:**
+- **Step A:** Bumped PCS client `1.1.0-beta.26271.2` → `1.1.0-beta.26324.1` (adds `ISubscriptionTriggerOutcomes` API)
+  - Also bumped `Microsoft.Extensions.DependencyInjection` `10.0.8` → `10.0.9` (transitive dependency from PCS)
+  - Build: 0 warnings, 0 errors; Tests: 208/208 passed ✅
+- **Step B:** Added `maestro_subscription_outcomes` MCP tool
+  - Exposed PCS `ISubscriptionTriggerOutcomes.ListSubscriptionOutcomesAsync` via `IMaestroApiClient`
+  - Added `MaestroService.GetSubscriptionOutcomesAsync` with ShortTtl caching
+  - MCP tool filters: `subscriptionId`, `buildId`, `outcomeType`, `after`/`before` dates, `count` (default 20, max 100)
+  - Markdown output with emoji indicators: ✅ Updated, ❌ Failure, 🔀 HasConflict, ⚠️ UserError, etc.
+  - Added unit test; Tests: 209/209 passed ✅
+- **Step C:** Integrated latest outcome into `maestro_subscription_health`
+  - Added `LatestOutcomeType` and `LatestOutcomeMessage` fields to `SubscriptionHealthResult`
+  - For stale subscriptions, fetch latest outcome (limit: 1) from PCS outcomes API
+  - Surface in formatted output with emoji + type + message
+  - Gracefully handle 404 for subs with zero outcomes (non-error stderr log)
+  - Added TODO comment near oscillation detection for future replacement consideration
+  - Existing heuristics (oscillation, trackedPr, validation) preserved
+
+**PCS API gotchas discovered:**
+- `limit` parameter is **required and positional** (first parameter), not optional
+- `subscriptionId` is **`string`**, not `Guid` — must call `.ToString()` on Guid
+- `subscriptionOutcomeType` is **`string`**, not `OutcomeType` enum — pass enum name as string
+- Parameter order is alphabetical-ish after `limit`; use named arguments for safety
+- `LatestOutcome` property is **NOT on `Subscription`** — it's on `CodeflowSubscriptionStatus` / `CodeflowStatus` (not used in this PR)
+- Property accessor: `_api.SubscriptionTriggerOutcomes.ListSubscriptionOutcomesAsync(...)` (confirmed via `strings | grep get_SubscriptionTriggerOutcomes`)
+
+**Patterns:**
+- **Enum-to-emoji surfacing in MCP markdown:** Used pattern matching on enum `.ToString()` to map outcome types to emoji indicators, making categorized statuses scannable in agent output. Reusable for other status/outcome enumerations.
+- **Graceful API 404 handling:** Wrapped outcome fetch in try/catch with stderr log; 404 is expected for subscriptions with no trigger history. Avoids polluting health results with non-critical errors.
+
+**Verification:**
+- Build: 0 warnings, 0 errors (all 3 commits)
+- Tests: 209/209 passed (1 new test for GetSubscriptionOutcomesAsync)
+- Branch pushed to origin: `feat/subscription-outcomes`
+
+
+## PR #31 Review Fixes (2026-06-15)
+
+**Context**: Copilot pull-request-reviewer flagged 4 valid issues after initial implementation.
+
+**Fixed Issues**:
+
+1. **Count validation missing**: Tool description advertised 1–100 range but accepted any int. Added explicit validation in `GetSubscriptionOutcomes` MCP tool:
+   ```csharp
+   if (count < 1 || count > 100)
+       return $"Invalid count '{count}'. Expected a value between 1 and 100.";
+   ```
+
+2. **Service bounds + 404 handling**: `GetSubscriptionOutcomesAsync` needed defensive clamping and graceful 404 handling for subs with zero outcomes:
+   - Clamp `count` to 20 if null/<=0 (don't enforce tool bounds in service layer, just default sanely)
+   - Wrap PCS call in `try/catch` for `RestApiException` with 404 status → return empty list instead of throwing
+
+3. **Duplicated API wiring**: `CheckSubscriptionHealthAsync` was calling `_api.SubscriptionTriggerOutcomes.ListSubscriptionOutcomesAsync(...)` directly. Replaced with `GetSubscriptionOutcomesAsync(subscriptionId: sub.Id, count: 1, noCache, cancellationToken)` to benefit from centralized caching and 404 handling.
+
+4. **🔴 Real bug — outcome data never rendered**: `LatestOutcomeType`/`LatestOutcomeMessage` were gathered in `SubscriptionHealthResult` but the formatters in `MaestroMcpTools.Subscriptions.cs` never referenced them.
+   - Extracted `GetOutcomeEmoji(string outcomeType)` static helper to share emoji mapping between `maestro_subscription_outcomes` tool and health formatters
+   - Updated **detailed formatter**: renders `Latest outcome: {emoji} {type} — {message}` inline with staleness message for stale subs with outcome data
+   - Updated **compact formatter**: includes outcome emoji+type in the status line after last applied date
+
+**Test Impact**: Added global mock for `ListSubscriptionOutcomesAsync` in test constructor (returns empty list) to handle new service layer call path. All 209 tests passed after fixes.
+
+**Pattern Learned**: Always validate MCP tool formatters actually render new data fields by checking formatted output, not just that the service layer gathers them. This was a silent no-op until the reviewer caught it.
+
+## Second PR Review Fixes (2026-06-24)
+
+**Context**: Second review pass identified 5 refinement issues with the initial PR review fixes.
+
+**Fixed Issues**:
+
+1. **Service count upper bound + culture-stable cache keys**:
+   - Added `if (limit > 100) limit = 100;` to cap count at 100 (tool validates 1-100, but service should be defensively robust)
+   - Replaced `after` and `before` in cache key from `.ToString()` (culture-dependent) to `.ToString("O", CultureInfo.InvariantCulture)` for round-trip ISO 8601 format
+   - Cache keys now stable across cultures and unambiguous for date parsing
+
+2. **🔴 Brittle 404 detection** (real bug):
+   - Replaced `catch (Exception ex) when (ex.GetType().Name == "RestApiException" && ex.Message.Contains("404"))` with typed catch:
+     ```csharp
+     catch (Microsoft.DotNet.ProductConstructionService.Client.RestApiException ex) when (ex.Response.Status == 404)
+     ```
+   - Direct property access is immune to typos, localization, and message format changes
+
+3. **Named arguments in tool service call**:
+   - Replaced `GetSubscriptionOutcomesAsync(parsedSubId, buildId, parsedAfter, parsedBefore, outcomeType, maxCount, noCache, cancellationToken)` with named arguments for clarity and maintainability
+
+4. **Test comment misleading**:
+   - Rephrased from "Mock handles 404 gracefully" (implied the mock was doing error handling) to "Default outcomes mock returns empty so tests not focused on outcomes don't need per-test setup" (accurate: it's just a default to reduce boilerplate)
+
+5. **Duplicate mock setup in test helper**:
+   - Removed redundant `ListSubscriptionOutcomesAsync` mock from `SetupStaleGitHubSubscription` helper — the constructor default applies globally, no need to repeat
+
+**Verification**:
+- Build: 0 warnings, 0 errors
+- Tests: 209/209 passed ✅
+- `git diff origin/master...HEAD -- global.json`: empty (confirmed no SDK workaround leaked)
+
+**Pattern Learned**: Always check `git diff origin/master...HEAD -- <workaround-files>` before pushing to catch accidental commits of transient changes.

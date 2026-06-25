@@ -76,4 +76,18 @@ public interface IMaestroApiClient
     /// Get codeflow statuses for a repository and branch.
     /// </summary>
     Task<List<CodeflowStatus>> GetCodeflowStatusesAsync(string repositoryUrl, string branch, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// List subscription trigger outcomes.
+    /// </summary>
+    Task<List<SubscriptionTriggerOutcome>> ListSubscriptionOutcomesAsync(
+        int limit,
+        DateTimeOffset? after = null,
+        DateTimeOffset? before = null,
+        int? buildId = null,
+        string? operationId = null,
+        string? search = null,
+        string? subscriptionId = null,
+        string? subscriptionOutcomeType = null,
+        CancellationToken cancellationToken = default);
 }

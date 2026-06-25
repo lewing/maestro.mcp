@@ -174,6 +174,15 @@ public partial class MaestroMcpTools
                     status = $"⚠️ STALE ({r.CommitsBehind.Value} commits behind)";
                 else
                     status = $"⚠️ STALE (~{r.BuildsBehind} builds behind)";
+
+                // Surface latest outcome if available
+                if (!string.IsNullOrEmpty(r.LatestOutcomeType))
+                {
+                    var emoji = GetOutcomeEmoji(r.LatestOutcomeType);
+                    var msg = NormalizeOutcomeMessage(r.LatestOutcomeMessage);
+                    var msgSuffix = !string.IsNullOrWhiteSpace(msg) ? $" — {msg}" : "";
+                    status += $"\n  Latest outcome: {emoji} {r.LatestOutcomeType}{msgSuffix}";
+                }
             }
             else
             {
@@ -279,8 +288,11 @@ public partial class MaestroMcpTools
         var pr = CompactPrReference(result.TrackedPr?.PrUrl);
         var prefix = result.Error != null ? "❌" : result.IsStale ? "⚠️" : "✅";
         var error = result.Error != null ? $"; error: {result.Error}" : "";
+        var outcome = result.IsStale && !string.IsNullOrEmpty(result.LatestOutcomeType)
+            ? $"; outcome: {GetOutcomeEmoji(result.LatestOutcomeType)} {result.LatestOutcomeType}"
+            : "";
 
-        return $"{prefix} {source} → {result.TargetBranch}: {status} (PR: {pr}{error})";
+        return $"{prefix} {source} → {result.TargetBranch}: {status} (PR: {pr}{error}{outcome})";
     }
 
     private static string CompactPrReference(string? prUrl)
@@ -426,4 +438,131 @@ public partial class MaestroMcpTools
 
         return Timestamp(noCache) + sb.ToString();
     }
+
+    [McpServerTool(Name = "maestro_subscription_outcomes", Title = "Subscription Outcomes", ReadOnly = true, Idempotent = true)]
+    [Description("List recent subscription trigger outcomes (Updated/Failure/HasConflict/UserError/...). For per-subscription history, pass subscriptionId.")]
+    public async Task<string> GetSubscriptionOutcomes(
+        [Description("Filter by subscription GUID")] string? subscriptionId = null,
+        [Description("Filter by build ID")] int? buildId = null,
+        [Description("Filter by outcome type (Updated, NoUpdate, NotUpdatable, Failure, UserError, HasConflict, Rescheduled)")] string? outcomeType = null,
+        [Description("Show outcomes after this date (ISO 8601 format, e.g. '2026-06-01T00:00:00Z')")] string? after = null,
+        [Description("Show outcomes before this date (ISO 8601 format, e.g. '2026-06-24T00:00:00Z')")] string? before = null,
+        [Description("Maximum number of outcomes to return (default 20, max 100)")] int? count = null,
+        [Description("Bypass cache and fetch fresh data")] bool noCache = false,
+        CancellationToken cancellationToken = default)
+    {
+        Guid? parsedSubId = null;
+        if (!string.IsNullOrEmpty(subscriptionId))
+        {
+            if (!Guid.TryParse(subscriptionId, out var id))
+                return "Invalid subscription ID format. Expected a GUID.";
+            parsedSubId = id;
+        }
+
+        DateTimeOffset? parsedAfter = null;
+        if (!string.IsNullOrEmpty(after))
+        {
+            if (!DateTimeOffset.TryParse(
+                    after,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
+                    out var date))
+            {
+                return $"Invalid `after` value '{after}'. Expected ISO 8601 (e.g. '2026-06-20T14:30:00Z').";
+            }
+            parsedAfter = date;
+        }
+
+        DateTimeOffset? parsedBefore = null;
+        if (!string.IsNullOrEmpty(before))
+        {
+            if (!DateTimeOffset.TryParse(
+                    before,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
+                    out var date))
+            {
+                return $"Invalid `before` value '{before}'. Expected ISO 8601 (e.g. '2026-06-20T14:30:00Z').";
+            }
+            parsedBefore = date;
+        }
+
+        if (!string.IsNullOrEmpty(outcomeType))
+        {
+            var normalized = NormalizeOutcomeType(outcomeType);
+            if (normalized == null)
+            {
+                return $"Invalid outcome type '{outcomeType}'. Valid types: {string.Join(", ", CanonicalOutcomeTypes)}.";
+            }
+            outcomeType = normalized;
+        }
+
+        if (count.HasValue && (count.Value < 1 || count.Value > 100))
+            return $"Invalid count '{count.Value}'. Expected a value between 1 and 100.";
+
+        var maxCount = count ?? 20;
+
+        var outcomes = await _service.GetSubscriptionOutcomesAsync(
+            subscriptionId: parsedSubId,
+            buildId: buildId,
+            after: parsedAfter,
+            before: parsedBefore,
+            outcomeType: outcomeType,
+            count: maxCount,
+            noCache: noCache,
+            cancellationToken: cancellationToken);
+
+        if (outcomes.Count == 0)
+            return "No subscription outcomes found matching the criteria.";
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"**Subscription Outcomes** ({outcomes.Count} result{(outcomes.Count == 1 ? "" : "s")})");
+        sb.AppendLine();
+
+        foreach (var outcome in outcomes)
+        {
+            var emoji = GetOutcomeEmoji(outcome.Type.ToString());
+            var message = NormalizeOutcomeMessage(outcome.Message);
+            var prUrl = !string.IsNullOrWhiteSpace(outcome.PrUrl) ? outcome.PrUrl : "—";
+            var subIdShort = outcome.SubscriptionId.ToString()[..8];
+            var dateUtc = outcome.Date.ToUniversalTime();
+            
+            sb.AppendLine($"{dateUtc:yyyy-MM-dd HH:mm}Z {emoji}{outcome.Type,-14} #{outcome.BuildId,-6} sub:{subIdShort} {prUrl,-45} {message}");
+        }
+
+        return Timestamp(noCache) + sb.ToString();
+    }
+
+    private static readonly string[] CanonicalOutcomeTypes =
+        { "Updated", "NoUpdate", "NotUpdatable", "Failure", "UserError", "HasConflict", "Rescheduled" };
+
+    private static string? NormalizeOutcomeType(string? input)
+    {
+        if (string.IsNullOrWhiteSpace(input)) return null;
+        var trimmed = input.Trim();
+        return CanonicalOutcomeTypes.FirstOrDefault(
+            c => string.Equals(c, trimmed, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string NormalizeOutcomeMessage(string? message)
+    {
+        if (string.IsNullOrWhiteSpace(message)) return "";
+        // Collapse newlines and truncate to 80 chars
+        var normalized = message.Replace("\r\n", " ").Replace("\n", " ").Replace("\r", " ").Trim();
+        if (normalized.Length > 80)
+            normalized = normalized.Substring(0, 77) + "…";
+        return normalized;
+    }
+
+    private static string GetOutcomeEmoji(string outcomeType) => outcomeType switch
+    {
+        "Updated" => "✅",
+        "NoUpdate" => "⏭️",
+        "Failure" => "❌",
+        "UserError" => "⚠️",
+        "HasConflict" => "🔀",
+        "Rescheduled" => "🕒",
+        "NotUpdatable" => "🚫",
+        _ => "•"
+    };
 }

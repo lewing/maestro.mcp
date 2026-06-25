@@ -223,4 +223,28 @@ public class MaestroApiClient : IMaestroApiClient
         var result = await _api.Codeflow.GetCodeflowStatusesAsync(branch, repositoryUrl, cancellationToken);
         return result.ToList();
     }
+
+    public async Task<List<SubscriptionTriggerOutcome>> ListSubscriptionOutcomesAsync(
+        int limit,
+        DateTimeOffset? after = null,
+        DateTimeOffset? before = null,
+        int? buildId = null,
+        string? operationId = null,
+        string? search = null,
+        string? subscriptionId = null,
+        string? subscriptionOutcomeType = null,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await _api.SubscriptionTriggerOutcomes.ListSubscriptionOutcomesAsync(
+            limit: limit,
+            after: after,
+            before: before,
+            buildId: buildId,
+            operationId: operationId,
+            search: search,
+            subscriptionId: subscriptionId,
+            subscriptionOutcomeType: subscriptionOutcomeType,
+            cancellationToken: cancellationToken);
+        return result.ToList();
+    }
 }
