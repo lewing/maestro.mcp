@@ -1,5 +1,6 @@
 using System.Reflection;
 using MaestroTool.Core;
+using ModelContextProtocol.AspNetCore;
 using ModelContextProtocol.Server;
 
 MaestroToolUserAgent.Initialize(Assembly.GetExecutingAssembly());
@@ -35,7 +36,10 @@ builder.Services
         options.AddBindingErrorFilter()
                .AddUnknownParameterFilter(typeof(MaestroMcpTools).Assembly);
     })
-    .WithHttpTransport()
+    .WithHttpTransport(options =>
+    {
+        options.SessionMode = HttpServerSessionMode.StatefulForInitializeClients;
+    })
     .WithToolsFromAssembly(typeof(MaestroMcpTools).Assembly, new System.Text.Json.JsonSerializerOptions
     {
         // Reject unknown parameters at binding time so callers get a structured error
